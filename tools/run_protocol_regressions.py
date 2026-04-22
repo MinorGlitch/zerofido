@@ -1,0 +1,69 @@
+from __future__ import annotations
+
+import shutil
+import subprocess
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+NATIVE_SOURCE = ROOT / "tests" / "native_protocol_regressions.c"
+NATIVE_TRANSPORT_SOURCE = ROOT / "tests" / "native_transport_u2f_regressions.c"
+NATIVE_INCLUDE = ROOT / "tests" / "native" / "include"
+NATIVE_BINARY = ROOT / ".tmp" / "native_protocol_regressions"
+NATIVE_TRANSPORT_BINARY = ROOT / ".tmp" / "native_transport_u2f_regressions"
+POLICY_SOURCE = ROOT / "src" / "ctap" / "policy.c"
+
+
+def run(cmd: list[str]) -> None:
+    print("+", " ".join(cmd))
+    subprocess.run(cmd, cwd=ROOT, check=True)
+
+
+def main() -> None:
+    compiler = shutil.which("cc") or shutil.which("clang") or shutil.which("gcc")
+    if not compiler:
+        raise SystemExit("missing host C compiler")
+
+    policy = POLICY_SOURCE.read_text()
+    if "zf_ctap_request_uses_allow_list" not in policy:
+        raise SystemExit("policy is missing allowList semantics helper")
+
+    NATIVE_BINARY.parent.mkdir(parents=True, exist_ok=True)
+    run(
+        [
+            compiler,
+            "-std=c11",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-I",
+            str(NATIVE_INCLUDE),
+            "-I",
+            str(ROOT / "src"),
+            str(NATIVE_SOURCE),
+            "-o",
+            str(NATIVE_BINARY),
+        ]
+    )
+    run([str(NATIVE_BINARY)])
+    run(
+        [
+            compiler,
+            "-std=c11",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-I",
+            str(NATIVE_INCLUDE),
+            "-I",
+            str(ROOT / "src"),
+            str(NATIVE_TRANSPORT_SOURCE),
+            "-o",
+            str(NATIVE_TRANSPORT_BINARY),
+        ]
+    )
+    run([str(NATIVE_TRANSPORT_BINARY)])
+
+
+if __name__ == "__main__":
+    main()

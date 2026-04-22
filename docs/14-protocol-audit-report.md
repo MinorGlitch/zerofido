@@ -1,0 +1,308 @@
+# ZeroFIDO Protocol Audit Report
+
+Date: 2026-04-22
+
+Status: historical pre-remediation audit snapshot. The issues below were the basis for the subsequent remediation pass and do not describe the current worktree. Current implementation progress is tracked in `docs/15-milestone-10-protocol-remediation.md`.
+
+## Scope
+
+This audit checks the shipped ZeroFIDO surface against the contract the repo claims today:
+
+- `FIDO_2_0`
+- `U2F_V2`
+- the documented non-goals in `docs/13-fido-audit-matrix.md`
+
+This is not a full latest-CTAP feature audit. Newer CTAP2.x behavior is only used where it clarifies the meaning of the currently shipped surface.
+
+## Method
+
+- Local contract reviewed from `README.md`, `docs/13-fido-audit-matrix.md`, milestone docs, and attestation/metadata docs.
+- Primary protocol references used:
+  - CTAP 2.0 and CTAP 2.2
+  - FIDO U2F HID Protocol v1.1
+  - FIDO U2F Raw Message Formats v1.1
+- Baseline checks run in this turn:
+  - `uv run python host_tools/check_symbol_gate.py <flipper-firmware-checkout>` -> passed
+  - `uv run python tools/check_c.py tidy`
+  - `uv run python tools/check_c.py cppcheck`
+
+Note: no live device was attached in this turn, so the high-severity findings below are source-proven code-path issues rather than hardware repros.
+
+## Findings
+
+### High
+
+#### 1. `authenticatorMakeCredential` accepts missing `clientDataHash`
+
+- Evidence:
+  - `src/ctap/parse_make_credential.c:101-108`
+  - `src/ctap/parse_make_credential.c:164-174`
+  - `src/zerofido_ctap_dispatch.c:33-41`
+  - `src/zerofido_ctap_dispatch.c:69-70`
+- Violated local claim:
+  - `docs/13-fido-audit-matrix.md:34-35` says `MakeCredential` is aligned.
+- Violated protocol expectation:
+  - CTAP 2.0 defines `clientDataHash` as required for `authenticatorMakeCredential`.
+  - Source: CTAP 2.0 `authenticatorMakeCredential` input table (`clientDataHash Byte Array Required`).
+- Runtime impact:
+  - The parser validates field `1` only if present.
+  - If the field is omitted, the request struct remains zero-initialized and the attestation is signed over 32 zero bytes instead of rejecting the request with `CTAP2_ERR_MISSING_PARAMETER`.
+
+#### 2. `authenticatorGetAssertion` accepts missing `clientDataHash`
+
+- Evidence:
+  - `src/ctap/parse_get_assertion.c:32-39`
+  - `src/ctap/parse_get_assertion.c:77-81`
+  - `src/zerofido_ctap_dispatch.c:129-136`
+  - `src/ctap/response.c:208-211`
+- Violated local claim:
+  - `docs/13-fido-audit-matrix.md:37-39` says `GetAssertion` and multi-assertion behavior are aligned/valid.
+- Violated protocol expectation:
+  - CTAP 2.0 defines `clientDataHash` as required for `authenticatorGetAssertion`.
+  - Source: CTAP 2.0 `authenticatorGetAssertion` input table (`clientDataHash Byte Array Required`).
+- Runtime impact:
+  - A malformed request missing `clientDataHash` is accepted and the assertion is signed against 32 zero bytes.
+  - That produces a valid-looking assertion for an invalid request.
+
+#### 3. `GetNextAssertion` queue state is global, not caller-bound
+
+- Evidence:
+  - `src/zerofido_ctap_dispatch.c:100-120`
+  - `src/zerofido_ctap_dispatch.c:175-205`
+  - `src/zerofido_ctap_dispatch.c:233-235`
+  - `src/zerofido_types.h:95-104`
+- Violated local claim:
+  - `docs/06-milestone-5-getassertion.md:53-55` says `GetNextAssertion` should not work without valid queued state.
+  - `docs/13-fido-audit-matrix.md:39` says remaining assertions are served through `GetNextAssertion`.
+- Violated protocol expectation:
+  - CTAP stateful follow-up commands depend on retained assertion state, and that state is supposed to remain valid only for the same logical assertion sequence.
+  - Source: CTAP 2.2 `authenticatorGetNextAssertion` state rules and timeout behavior.
+- Runtime impact:
+  - The queue stores `cid`, but `zf_handle_get_next_assertion()` does not take a CID and never compares against the queued one.
+  - Any later `GetNextAssertion` on the device can drain another request's queued assertions.
+  - This is both a privacy leak and a correctness bug.
+
+#### 4. CTAPHID channel allocation is not actually enforced
+
+- Evidence:
+  - `src/transport/usb_hid_session.c:115-127`
+  - `src/transport/usb_hid_session.c:219-239`
+  - `src/transport/usb_hid_session.c:242-267`
+  - `src/transport/usb_hid_session.c:319-337`
+- Violated local claim:
+  - `docs/13-fido-audit-matrix.md:19` says `CTAPHID_INIT` channel allocation is supported and aligned.
+- Violated protocol expectation:
+  - U2F HID requires allocated, unique channel IDs; channel `0` is reserved and `0xffffffff` is broadcast-only for allocation.
+  - CTAPHID concurrency/channels expects allocator-owned channels and transaction isolation.
+  - Sources:
+    - U2F HID v1.1 `U2FHID_INIT`
+    - U2F HID v1.1 reserved CID rules
+    - CTAP 2.2 USB HID concurrency/channels
+- Runtime impact:
+  - While idle, non-`INIT` commands are accepted on arbitrary CIDs.
+  - `CTAPHID_INIT` is accepted on any CID when not processing.
+  - New CIDs are generated by unchecked `furi_hal_random_get()` with no reserved-CID filtering or allocation table.
+  - The implementation therefore does not enforce the channel model it claims to support.
+
+#### 5. Same-CID `INIT` re-synchronization is broken during message assembly
+
+- Evidence:
+  - `src/transport/usb_hid_session.c:225-237`
+- Violated local claim:
+  - `docs/13-fido-audit-matrix.md:19` claims transport behavior matches the serialized transport model.
+- Violated protocol expectation:
+  - CTAPHID transport allows an application to abort and re-synchronize by sending `INIT` on the same active channel.
+  - Source: CTAP 2.2 transaction abort and re-synchronization.
+- Runtime impact:
+  - The unconditional `if (transport->active)` branch returns `ERR_CHANNEL_BUSY` before the same-CID `INIT` path is considered.
+  - A client that gets out of sync during assembly cannot use the normal same-channel recovery path.
+
+### Medium
+
+#### 6. Silent `up=false` multi-assertion flow advertises additional assertions without queuing them
+
+- Evidence:
+  - `src/zerofido_ctap_dispatch.c:88-98`
+  - `src/zerofido_ctap_dispatch.c:146-148`
+  - `src/zerofido_ctap_dispatch.c:170`
+  - `src/ctap/response.c:223-239`
+- Violated local claim:
+  - `docs/13-fido-audit-matrix.md:39` says multi-assertions are served via `GetNextAssertion`.
+- Violated protocol expectation:
+  - If the first assertion response advertises `numberOfCredentials`, the stateful follow-up flow has to exist for the remaining assertions.
+- Runtime impact:
+  - `zf_build_silent_assertion()` can include `numberOfCredentials`.
+  - The early return in the `up=false` path skips `zf_seed_assertion_queue()`.
+  - The caller can therefore receive a first response that claims more assertions exist, then get `CTAP2_ERR_NOT_ALLOWED` on `GetNextAssertion`.
+
+#### 7. U2F approval keepalives are emitted on reserved CID `0`
+
+- Evidence:
+  - `src/u2f/adapter.c:37-56`
+  - `src/zerofido_ui_approval.c:57-64`
+  - `src/transport/usb_hid_session.c:432-433`
+- Violated local claim:
+  - `docs/13-fido-audit-matrix.md:22` says `CTAPHID_MSG` routing is aligned.
+- Violated protocol expectation:
+  - Keepalives belong to the active channel, not a reserved CID.
+  - Source: CTAP 2.2 USB HID channel/packet rules.
+- Runtime impact:
+  - `zerofido_handle_u2f()` never threads the request CID into the approval wait.
+  - `zerofido_ui_request_approval()` is called with `current_cid = 0`.
+  - Waiting U2F operations therefore emit `CTAPHID_KEEPALIVE` on CID `0`, which is reserved.
+
+#### 8. U2F authentication counter advances in memory even if persistence fails
+
+- Evidence:
+  - `src/u2f/session.c:378-416`
+  - `src/u2f/session.c:484-492`
+- Violated local claim:
+  - The storage/counter milestone requires durable counter correctness.
+  - `docs/07-milestone-6-storage-and-counters.md:17-23`
+- Violated protocol expectation:
+  - The U2F authentication counter is expected to increase every successful authentication operation.
+  - Source: U2F Raw Message Formats v1.1 counter definition.
+- Runtime impact:
+  - The response is built with `counter + 1`.
+  - `U2F->counter++` happens unconditionally after signing.
+  - `u2f_data_cnt_write(U2F->counter)` is called but its return value is ignored.
+  - After a write failure or reboot, the device can repeat an older counter value.
+
+#### 9. `getKeyAgreement` rotates the `pin_token`
+
+- Evidence:
+  - `src/zerofido_pin.c:51-54`
+  - `src/zerofido_pin.c:544-549`
+  - `src/zerofido_pin.c:610-614`
+  - `src/zerofido_pin.c:645-648`
+- Violated local claim:
+  - `docs/13-fido-audit-matrix.md:47`, `:50`, `:51` call `getKeyAgreement`, `getPinToken`, and `pinUvAuthParam` verification aligned.
+- Violated protocol expectation:
+  - Re-establishing key agreement should not silently invalidate previously issued `pin_token`-based auth material for unrelated operations.
+- Runtime impact:
+  - `zf_pin_regenerate_ephemeral()` refreshes both the ECDH key-agreement key and `pin_token`.
+  - `getKeyAgreement` calls that helper directly.
+  - Any later `getKeyAgreement` invalidates previously issued `pinUvAuthParam` values for `MakeCredential` / `GetAssertion`.
+
+#### 10. Attestation consistency checking is too shallow to catch key/certificate drift
+
+- Evidence:
+  - `src/zerofido_attestation.c:61-73`
+  - `src/zerofido_attestation.c:111-123`
+  - `src/ctap/response.c:156-167`
+- Violated local claim:
+  - `docs/13-fido-audit-matrix.md:59-61` treats attestation and AAGUID consistency as aligned.
+- Violated protocol expectation:
+  - A `packed` attestation statement has to be verifiable against the certificate material it returns.
+- Runtime impact:
+  - The runtime check only scans the DER blob for the AAGUID extension bytes and raw AAGUID bytes.
+  - It does not verify that the embedded private key matches the leaf certificate or that the leaf chains to the documented root.
+  - If those assets drift independently, `MakeCredential` still emits apparently valid attestation data that relying parties will reject.
+
+### Low
+
+#### 11. Milestone 8 claims a permissions-capable ClientPIN token flow that the runtime does not implement
+
+- Evidence:
+  - `docs/09-milestone-8-clientpin.md:15-18`
+  - `docs/09-milestone-8-clientpin.md:41-46`
+  - `src/zerofido_pin.c:17-22`
+  - `src/zerofido_pin.c:607-622`
+- Violated local claim:
+  - Milestone 8 says the supported subcommands include `getPinUvAuthTokenUsingPinWithPermissions`.
+- Violated protocol expectation:
+  - If the project claims that newer token retrieval path as implemented, the command surface needs to actually expose it.
+- Runtime impact:
+  - The runtime only implements subcommands `0x01` through legacy `0x05` (`getPinToken`).
+  - Any newer permissions-capable retrieval subcommand returns `CTAP2_ERR_INVALID_SUBCOMMAND`.
+
+#### 12. Resolved: ClientPIN retry handling now persists across restarts
+
+- Current evidence:
+  - `docs/09-milestone-8-clientpin.md:17-18`
+  - `src/zerofido_pin.c:58-131`
+  - `src/zerofido_pin.c:389-458`
+  - `src/zerofido_pin.c:579-610`
+- Current state:
+  - Failed PIN checks persist the decremented retry counter.
+  - Successful PIN verification restores the retry budget and persists it.
+  - Restart restores the blocked/decremented state from durable storage instead of resetting it to max.
+
+#### 13. `setPin` / `changePin` accept malformed zero padding in `newPinEnc`
+
+- Evidence:
+  - `src/zerofido_pin.c:345-350`
+  - `src/zerofido_pin.c:421-423`
+  - `src/zerofido_pin.c:495-497`
+- Violated local claim:
+  - `docs/13-fido-audit-matrix.md:48-49` calls `setPin` and `changePin` correct.
+- Violated protocol expectation:
+  - The encrypted PIN payload should be validated as a properly padded UTF-8 PIN block, not accepted with arbitrary trailing garbage after the first zero.
+- Runtime impact:
+  - The code stops at the first zero byte and never verifies the rest of the decrypted block is zero padding.
+  - A payload shaped like `PIN || 0x00 || garbage...` is silently accepted.
+
+#### 14. Metadata docs say the wire response contains an `x5c` chain anchored in the root, but runtime returns leaf only
+
+- Evidence:
+  - `docs/12-metadata.md:28-31`
+  - `src/zerofido_attestation.c:89-97`
+  - `src/ctap/response.c:165-184`
+- Violated local claim:
+  - Metadata guidance says relying parties should expect an `x5c` chain anchored in the ZeroFIDO root.
+- Violated protocol expectation:
+  - None directly; this is documentation drift, not a wire-format violation by itself.
+- Runtime impact:
+  - The returned `x5c` array contains only the leaf certificate.
+  - That can still work with an out-of-band trusted root, but it is not the on-the-wire chain the docs describe.
+
+#### 15. Metadata version identity drifts from the shipped app version surface
+
+- Evidence:
+  - `docs/12-metadata-statement.json:11`
+  - `docs/12-metadata-statement.json:90`
+  - `application.fam:17`
+  - `pyproject.toml:3`
+  - `src/ctap/response.c:105-136`
+- Violated local claim:
+  - The repo positions metadata as aligned with the shipped runtime contract.
+- Violated protocol expectation:
+  - None directly; this is identity/documentation drift.
+- Runtime impact:
+  - Metadata hard-codes `authenticatorVersion: 1` and `firmwareVersion: 1`.
+  - The shipped app surface is `0.1` / `0.1.0`, and runtime `GetInfo` does not emit a firmware version field.
+  - That makes metadata-based policy decisions harder to map to a concrete shipped build.
+
+## Baseline verdict
+
+ZeroFIDO is not protocol-correct against its own claimed shipped surface today.
+
+The highest-risk defects are:
+
+1. missing mandatory-parameter enforcement for `clientDataHash`,
+2. broken state isolation for `GetNextAssertion`,
+3. CTAPHID channel-model violations,
+4. ClientPIN token lifecycle drift,
+5. counter durability and attestation/doc consistency gaps.
+
+## What Was Not Proven Live
+
+These areas were reviewed statically in this turn, but not exercised against attached hardware:
+
+- malformed CTAP2 requests over a live HID transport,
+- multi-channel `GetNextAssertion` leakage on-device,
+- reserved-CID keepalive behavior as observed by a host stack,
+- attestation verification against a live registration capture.
+
+Those are good follow-up repro targets, but they are not necessary to establish the code-path bugs above.
+
+## Primary References
+
+- CTAP 2.2 Review Draft:
+  - https://fidoalliance.org/specs/fido-v2.2-rd-20241003/fido-client-to-authenticator-protocol-v2.2-rd-20241003.html
+- CTAP 2.0 Review Draft:
+  - https://fidoalliance.org/specs/fido-v2.0-rd-20170927/fido-client-to-authenticator-protocol-v2.0-rd-20170927.html
+- FIDO U2F HID Protocol v1.1:
+  - https://fidoalliance.org/specs/fido-u2f-v1.1-id-20160915/fido-u2f-hid-protocol-v1.1-id-20160915.html
+- FIDO U2F Raw Message Formats v1.1:
+  - https://fidoalliance.org/specs/fido-u2f-v1.1-id-20160915/fido-u2f-raw-message-formats-v1.1-id-20160915.html
