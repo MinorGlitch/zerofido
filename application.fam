@@ -1,0 +1,19 @@
+App(
+    appid="zerofido",
+    name="ZeroFIDO",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="zerofido_main",
+    stack_size=8 * 1024,
+    sources=["src/*.c", "src/**/*.c"],
+    requires=[
+        "gui",
+        "storage",
+        "notification",
+    ],
+    fap_libs=["mbedtls"],
+    fap_icon="icon.png",
+    fap_category="USB",
+    fap_description="USB CTAP2 authenticator",
+    fap_author="Alex Stoyanov",
+    fap_version=(1, 0),
+)
