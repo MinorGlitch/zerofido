@@ -1,0 +1,155 @@
+#include "session.h"
+
+#include "apdu.h"
+#include "response_encode.h"
+#include "session_internal.h"
+#include "persistence.h"
+
+#include <furi.h>
+
+#include <string.h>
+
+#define TAG "U2f"
+
+static const uint8_t ver_str[] = {"U2F_V2"};
+
+U2fData *u2f_alloc(void) {
+    U2fData *U2F = calloc(1, sizeof(U2fData));
+    if (!U2F) {
+        return NULL;
+    }
+
+    mbedtls_ecp_group_init(&U2F->group);
+    return U2F;
+}
+
+void u2f_free(U2fData *U2F) {
+    furi_assert(U2F);
+    mbedtls_ecp_group_free(&U2F->group);
+    memset(U2F, 0, sizeof(*U2F));
+    free(U2F);
+}
+
+bool u2f_init(U2fData *U2F) {
+    furi_assert(U2F);
+
+    if (u2f_data_cert_check() == false) {
+        FURI_LOG_E(TAG, "Certificate load error");
+        return false;
+    }
+    if (u2f_data_cert_key_load(U2F->cert_key) == false) {
+        FURI_LOG_E(TAG, "Certificate key load error");
+        return false;
+    }
+    if (!u2f_data_cert_key_matches(U2F->cert_key)) {
+        FURI_LOG_E(TAG, "Certificate/key consistency check failed");
+        return false;
+    }
+    uint32_t cert_len = u2f_data_cert_load(U2F->cert, sizeof(U2F->cert));
+    if (cert_len == 0 || cert_len > sizeof(U2F->cert)) {
+        FURI_LOG_E(TAG, "Certificate body load error");
+        return false;
+    }
+    U2F->cert_len = (uint16_t)cert_len;
+    if (u2f_data_key_load(U2F->device_key) == false) {
+        if (u2f_data_key_exists()) {
+            FURI_LOG_E(TAG, "Device key load error");
+            return false;
+        }
+        FURI_LOG_W(TAG, "Device key missing, generating new");
+        if (!u2f_data_key_generate(U2F->device_key)) {
+            FURI_LOG_E(TAG, "Key write failed");
+            return false;
+        }
+    }
+    if (u2f_data_cnt_read(&U2F->counter) == false) {
+        if (u2f_data_cnt_exists()) {
+            FURI_LOG_E(TAG, "Counter load error");
+            return false;
+        }
+        FURI_LOG_W(TAG, "Counter missing, initializing to zero");
+        U2F->counter = 0;
+        if (!u2f_data_cnt_write(0)) {
+            FURI_LOG_E(TAG, "Counter write failed");
+            return false;
+        }
+    }
+
+    if (mbedtls_ecp_group_load(&U2F->group, MBEDTLS_ECP_DP_SECP256R1) != 0) {
+        FURI_LOG_E(TAG, "Unable to load P-256 group");
+        return false;
+    }
+
+    U2F->ready = true;
+    return true;
+}
+
+void u2f_set_event_callback(U2fData *U2F, U2fEvtCallback callback, void *context) {
+    furi_assert(U2F);
+    furi_assert(callback);
+    U2F->callback = callback;
+    U2F->context = context;
+}
+
+void u2f_confirm_user_present(U2fData *U2F) {
+    U2F->user_present = true;
+}
+
+bool u2f_consume_user_present(U2fData *U2F) {
+    bool user_present = U2F->user_present;
+    U2F->user_present = false;
+    return user_present;
+}
+
+void u2f_clear_user_present(U2fData *U2F) {
+    U2F->user_present = false;
+}
+
+uint16_t u2f_msg_parse(U2fData *U2F, uint8_t *buf, uint16_t request_len,
+                       uint16_t response_capacity) {
+    furi_assert(U2F);
+    if (!U2F->ready)
+        return 0;
+    if (response_capacity < 2) {
+        return zf_u2f_reply_status(buf, zf_u2f_state_wrong_length);
+    }
+
+    uint16_t validation_status = u2f_validate_request(buf, request_len);
+    if (validation_status != 0) {
+        return validation_status;
+    }
+
+    if (buf[1] == U2F_CMD_REGISTER) { // Register request
+        return zf_u2f_encode_register_response(U2F, buf, response_capacity);
+
+    } else if (buf[1] == U2F_CMD_AUTHENTICATE) { // Authenticate request
+        return zf_u2f_encode_authenticate_response(U2F, buf, request_len, response_capacity);
+
+    } else if (buf[1] == U2F_CMD_VERSION) { // Get U2F version string
+        if (response_capacity < 6 + sizeof(zf_u2f_state_no_error)) {
+            return zf_u2f_reply_status(buf, zf_u2f_state_wrong_length);
+        }
+        memcpy(&buf[0], ver_str, 6);
+        memcpy(&buf[6], zf_u2f_state_no_error, sizeof(zf_u2f_state_no_error));
+        return 8;
+    } else {
+        return zf_u2f_reply_status(buf, zf_u2f_state_not_supported);
+    }
+    return 0;
+}
+
+void u2f_wink(U2fData *U2F) {
+    if (U2F->callback != NULL)
+        U2F->callback(U2fNotifyWink, U2F->context);
+}
+
+void u2f_set_state(U2fData *U2F, uint8_t state) {
+    if (state == 0) {
+        if (U2F->callback != NULL)
+            U2F->callback(U2fNotifyDisconnect, U2F->context);
+    } else {
+        if (U2F->callback != NULL)
+            U2F->callback(U2fNotifyConnect, U2F->context);
+    }
+    U2F->user_present = false;
+}
