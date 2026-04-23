@@ -1,0 +1,22 @@
+#pragma once
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include "../zerofido_cbor.h"
+#include "../zerofido_types.h"
+
+bool zf_ctap_text_equals(const uint8_t *ptr, size_t size, const char *text);
+bool zf_ctap_mark_seen_key(uint16_t *seen_keys, uint64_t key);
+bool zf_ctap_cbor_read_text_copy(ZfCborCursor *cursor, char *out, size_t out_size);
+bool zf_ctap_cbor_read_text_discard(ZfCborCursor *cursor);
+bool zf_ctap_cbor_read_bytes_copy(ZfCborCursor *cursor, uint8_t *out, size_t out_capacity,
+                                  size_t *out_size);
+bool zf_ctap_parse_options_map(ZfCborCursor *cursor, bool *up, bool *has_up, bool *uv, bool *has_uv,
+                               bool *rk, bool *has_rk);
+uint8_t zf_ctap_parse_extensions_map(ZfCborCursor *cursor, bool *has_cred_protect,
+                                     uint8_t *cred_protect);
+uint8_t zf_ctap_parse_pubkey_cred_params(ZfCborCursor *cursor, bool *es256_supported);
+uint8_t zf_ctap_parse_descriptor_array(ZfCborCursor *cursor, uint8_t ids[][ZF_CREDENTIAL_ID_LEN],
+                                       size_t *id_lens, size_t *count);
