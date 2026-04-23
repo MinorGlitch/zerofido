@@ -31,5 +31,5 @@ vendor/
 coverage/
 .cache/
 tmp/
+.tmp/
 host_tools/fixture_config.local.json
-.tmp/conformance_suite/
