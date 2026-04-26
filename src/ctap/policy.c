@@ -1,11 +1,12 @@
 #include "policy.h"
 
+#include "parse.h"
 #include "../zerofido_app_i.h"
 #include "../zerofido_pin.h"
 #include "../zerofido_store.h"
 
 bool zf_ctap_request_uses_allow_list(const ZfGetAssertionRequest *request) {
-    return request->has_allow_list && request->allow_list_count > 0;
+    return request->allow_list.count > 0;
 }
 
 uint8_t zf_ctap_validate_pin_auth_protocol(bool has_pin_auth, bool has_pin_protocol,
@@ -48,6 +49,14 @@ bool zf_ctap_pin_is_set(ZerofidoApp *app) {
     return pin_is_set;
 }
 
+bool zf_ctap_store_entry_matches_descriptor_list(const ZfCredentialIndexEntry *entry,
+                                                 const void *context) {
+    const ZfCredentialDescriptorList *list = context;
+
+    return entry && zf_ctap_descriptor_list_contains_id(list, entry->credential_id,
+                                                        entry->credential_id_len);
+}
+
 static bool zf_ctap_credential_is_allowed_by_cred_protect(const ZfGetAssertionRequest *request,
                                                           const ZfCredentialIndexEntry *record,
                                                           bool uv_verified) {
@@ -68,7 +77,7 @@ static bool zf_ctap_credential_is_allowed_by_cred_protect(const ZfGetAssertionRe
     }
 }
 
-size_t zf_ctap_resolve_assertion_matches(ZfCredentialStore *store,
+size_t zf_ctap_resolve_assertion_matches(Storage *storage, ZfCredentialStore *store,
                                          const ZfGetAssertionRequest *request, bool uv_verified,
                                          uint16_t *match_indices) {
     uint16_t resolved[ZF_MAX_CREDENTIALS];
@@ -76,11 +85,12 @@ size_t zf_ctap_resolve_assertion_matches(ZfCredentialStore *store,
     size_t filtered_count = 0;
 
     if (zf_ctap_request_uses_allow_list(request)) {
-        resolved_count = zf_store_find_by_rp_and_allow_list(
-            store, request->rp_id, request->allow_list, request->allow_list_lens,
-            request->allow_list_count, resolved, ZF_MAX_CREDENTIALS);
+        resolved_count = zf_store_find_by_rp_filtered(
+            storage, store, request->rp_id, zf_ctap_store_entry_matches_descriptor_list,
+            &request->allow_list, resolved, ZF_MAX_CREDENTIALS);
     } else {
-        resolved_count = zf_store_find_by_rp(store, request->rp_id, resolved, ZF_MAX_CREDENTIALS);
+        resolved_count =
+            zf_store_find_by_rp(storage, store, request->rp_id, resolved, ZF_MAX_CREDENTIALS);
     }
 
     for (size_t i = 0; i < resolved_count; ++i) {

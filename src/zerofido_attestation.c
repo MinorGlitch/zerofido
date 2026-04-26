@@ -159,11 +159,11 @@ static bool zf_attestation_parse_der_length(const uint8_t *input, size_t input_l
     if ((input[1] & 0x80U) == 0) {
         *header_len = 2;
         *value_len = input[1];
-        return *header_len + *value_len <= input_len;
+        return *value_len <= input_len - *header_len;
     }
 
     size_t length_octets = input[1] & 0x7FU;
-    if (length_octets == 0 || length_octets > sizeof(size_t) || 2 + length_octets > input_len) {
+    if (length_octets == 0 || length_octets > sizeof(size_t) || length_octets > input_len - 2U) {
         return false;
     }
 
@@ -174,7 +174,7 @@ static bool zf_attestation_parse_der_length(const uint8_t *input, size_t input_l
 
     *header_len = 2 + length_octets;
     *value_len = length;
-    return *header_len + *value_len <= input_len;
+    return *value_len <= input_len - *header_len;
 }
 
 static bool zf_attestation_extract_leaf_signature(const uint8_t **out_tbs, size_t *out_tbs_len,
@@ -197,7 +197,7 @@ static bool zf_attestation_extract_leaf_signature(const uint8_t **out_tbs, size_
                                          &outer_header_len, &outer_value_len)) {
         return false;
     }
-    if (outer_header_len + outer_value_len != sizeof(zf_attestation_cert)) {
+    if (outer_value_len != sizeof(zf_attestation_cert) - outer_header_len) {
         return false;
     }
 
@@ -208,6 +208,10 @@ static bool zf_attestation_extract_leaf_signature(const uint8_t **out_tbs, size_
     if (!zf_attestation_parse_der_length(&zf_attestation_cert[offset],
                                          sizeof(zf_attestation_cert) - offset, &tbs_header_len,
                                          &tbs_value_len)) {
+        return false;
+    }
+    if (tbs_header_len > sizeof(zf_attestation_cert) - offset ||
+        tbs_value_len > sizeof(zf_attestation_cert) - offset - tbs_header_len) {
         return false;
     }
     *out_tbs = &zf_attestation_cert[offset];
@@ -223,6 +227,10 @@ static bool zf_attestation_extract_leaf_signature(const uint8_t **out_tbs, size_
         return false;
     }
 
+    if (algorithm_header_len > sizeof(zf_attestation_cert) - offset ||
+        algorithm_value_len > sizeof(zf_attestation_cert) - offset - algorithm_header_len) {
+        return false;
+    }
     offset += algorithm_header_len + algorithm_value_len;
     if (offset >= sizeof(zf_attestation_cert) || zf_attestation_cert[offset] != 0x03) {
         return false;
@@ -232,7 +240,9 @@ static bool zf_attestation_extract_leaf_signature(const uint8_t **out_tbs, size_
                                          &signature_header_len, &signature_value_len)) {
         return false;
     }
-    if (signature_value_len < 1 || zf_attestation_cert[offset + signature_header_len] != 0x00) {
+    if (signature_header_len > sizeof(zf_attestation_cert) - offset ||
+        signature_value_len > sizeof(zf_attestation_cert) - offset - signature_header_len ||
+        signature_value_len < 1 || zf_attestation_cert[offset + signature_header_len] != 0x00) {
         return false;
     }
 

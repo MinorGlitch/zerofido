@@ -6,6 +6,7 @@
 #include "zerofido_runtime_config.h"
 #include "zerofido_ui.h"
 
+#if ZF_RELEASE_DIAGNOSTICS
 static const char *zf_ctap_command_name(ZerofidoApp *app, uint8_t cmd) {
     switch (cmd) {
     case ZfCtapeCmdGetInfo:
@@ -109,26 +110,36 @@ static void zf_ctap_note_result(ZerofidoApp *app, uint8_t cmd, uint8_t status) {
     app->last_ctap_command_tag[0] = '\0';
     zerofido_ui_set_status(app, text);
 }
+#else
+static void zf_ctap_note_result(ZerofidoApp *app, uint8_t cmd, uint8_t status) {
+    (void)app;
+    (void)cmd;
+    (void)status;
+}
+#endif
 
-size_t zerofido_handle_ctap2(ZerofidoApp *app, uint32_t cid, const uint8_t *request,
-                             size_t request_len, uint8_t *response, size_t response_capacity) {
+size_t zerofido_handle_ctap2(ZerofidoApp *app, ZfTransportSessionId session_id,
+                             const uint8_t *request, size_t request_len, uint8_t *response,
+                             size_t response_capacity) {
     uint8_t status = ZF_CTAP_ERR_INVALID_COMMAND;
     size_t body_len = 0;
     size_t body_capacity = response_capacity - 1;
     ZfResolvedCapabilities capabilities;
+    uint8_t cmd = 0U;
 
     if (request_len == 0 || response_capacity <= 1) {
         return 0;
     }
 
+    cmd = request[0];
     zf_runtime_get_effective_capabilities(app, &capabilities);
-    if (!zf_runtime_ctap_command_enabled(app, request[0])) {
+    if (!zf_runtime_ctap_command_enabled(app, cmd)) {
         response[0] = ZF_CTAP_ERR_INVALID_COMMAND;
-        zf_ctap_note_result(app, request[0], ZF_CTAP_ERR_INVALID_COMMAND);
+        zf_ctap_note_result(app, cmd, ZF_CTAP_ERR_INVALID_COMMAND);
         return 1;
     }
 
-    status = zf_ctap_dispatch_command(app, &capabilities, cid, request[0], request + 1,
+    status = zf_ctap_dispatch_command(app, &capabilities, session_id, cmd, request + 1,
                                       request_len - 1, response + 1, body_capacity, &body_len);
 
     if (status != ZF_CTAP_SUCCESS) {
@@ -136,6 +147,6 @@ size_t zerofido_handle_ctap2(ZerofidoApp *app, uint32_t cid, const uint8_t *requ
     }
 
     response[0] = status;
-    zf_ctap_note_result(app, request[0], status);
+    zf_ctap_note_result(app, cmd, status);
     return body_len + 1;
 }

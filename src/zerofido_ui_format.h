@@ -19,9 +19,9 @@ void zf_ui_format_approval_header(char *out, size_t out_size, ZfUiProtocol proto
                                   const char *operation);
 void zf_ui_format_approval_body(char *out, size_t out_size, ZfUiProtocol protocol,
                                 const char *target_id, const char *user_text);
-void zf_ui_format_assertion_selection_label(const ZfCredentialIndexEntry *record, char *out,
+void zf_ui_format_assertion_selection_label(const ZfCredentialRecord *record, char *out,
                                             size_t out_size);
-void zf_ui_format_fido2_credential_label(const ZfCredentialIndexEntry *record, char *out,
+void zf_ui_format_fido2_credential_label(const ZfCredentialRecord *record, char *out,
                                          size_t out_size);
-void zf_ui_format_fido2_credential_detail(const ZfCredentialIndexEntry *record, char *out,
+void zf_ui_format_fido2_credential_detail(const ZfCredentialRecord *record, char *out,
                                           size_t out_size);

@@ -40,21 +40,6 @@ static bool zf_encode_cose_key(const ZfCredentialRecord *record, uint8_t *out, s
     return true;
 }
 
-static bool zf_encode_cert_chain(ZfCborEncoder *enc, const uint8_t **certs, const size_t *cert_lens,
-                                 size_t cert_count) {
-    if (!zf_cbor_encode_array(enc, cert_count)) {
-        return false;
-    }
-
-    for (size_t i = 0; i < cert_count; ++i) {
-        if (!zf_cbor_encode_bytes(enc, certs[i], cert_lens[i])) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
 static bool zf_encode_cred_protect_extension(uint8_t cred_protect, uint8_t *out,
                                              size_t out_capacity, size_t *out_len) {
     ZfCborEncoder enc;
@@ -77,7 +62,8 @@ static size_t zf_build_auth_data(const char *rp_id, bool user_present, bool user
                                  bool include_attested_data, bool include_extension_data,
                                  const ZfCredentialRecord *record, uint32_t sign_count,
                                  const uint8_t *extension_data, size_t extension_data_len,
-                                 uint8_t *out, size_t out_capacity) {
+                                 uint8_t *cose, size_t cose_capacity, uint8_t *out,
+                                 size_t out_capacity) {
     uint8_t flags = user_present ? 0x01 : 0x00;
     uint8_t rp_hash[32];
     size_t offset = 0;
@@ -104,9 +90,8 @@ static size_t zf_build_auth_data(const char *rp_id, bool user_present, bool user
     offset += 4;
 
     if (include_attested_data) {
-        uint8_t cose[128];
         size_t cose_len = 0;
-        if (!record || !zf_encode_cose_key(record, cose, sizeof(cose), &cose_len)) {
+        if (!record || !cose || !zf_encode_cose_key(record, cose, cose_capacity, &cose_len)) {
             return 0;
         }
         if (offset + ZF_AAGUID_LEN + 2 + record->credential_id_len + cose_len > out_capacity) {
@@ -162,6 +147,9 @@ uint8_t zf_ctap_build_get_info_response(const ZfResolvedCapabilities *capabiliti
     if (capabilities->advertise_usb_transport) {
         transports_count++;
     }
+    if (capabilities->advertise_nfc_transport) {
+        transports_count++;
+    }
 
     bool ok = zf_cbor_encode_map(&enc, 10) && zf_cbor_encode_uint(&enc, 1) &&
               zf_cbor_encode_array(&enc, versions_count) &&
@@ -182,6 +170,7 @@ uint8_t zf_ctap_build_get_info_response(const ZfResolvedCapabilities *capabiliti
               zf_cbor_encode_uint(&enc, 1) && zf_cbor_encode_uint(&enc, 9) &&
               zf_cbor_encode_array(&enc, transports_count) &&
               (!capabilities->advertise_usb_transport || zf_cbor_encode_text(&enc, "usb")) &&
+              (!capabilities->advertise_nfc_transport || zf_cbor_encode_text(&enc, "nfc")) &&
               zf_cbor_encode_uint(&enc, 10) && zf_cbor_encode_array(&enc, 1) &&
               zf_cbor_encode_map(&enc, 2) && zf_cbor_encode_text(&enc, "alg") &&
               zf_cbor_encode_int(&enc, -7) && zf_cbor_encode_text(&enc, "type") &&
@@ -198,100 +187,88 @@ uint8_t zf_ctap_build_get_info_response(const ZfResolvedCapabilities *capabiliti
 }
 
 uint8_t
-zf_ctap_build_make_credential_response(const char *rp_id, const ZfCredentialRecord *record,
-                                       const uint8_t client_data_hash[ZF_CLIENT_DATA_HASH_LEN],
-                                       bool user_verified, bool include_cred_protect, uint8_t *out,
-                                       size_t out_capacity, size_t *out_len) {
-    uint8_t auth_data[288];
-    uint8_t attestation_input[320];
-    uint8_t signature[80];
-    uint8_t extension_data[32];
-    const uint8_t *attestation_certs[2] = {0};
-    size_t attestation_cert_lens[2] = {0};
-    size_t signature_len = 0;
-    size_t cert_count = 0;
+zf_ctap_build_make_credential_response_with_scratch(
+    ZfMakeCredentialResponseScratch *scratch, const char *rp_id, const ZfCredentialRecord *record,
+    const uint8_t client_data_hash[ZF_CLIENT_DATA_HASH_LEN], bool user_verified,
+    bool include_cred_protect, uint8_t *out, size_t out_capacity, size_t *out_len) {
+    uint8_t status = ZF_CTAP_ERR_OTHER;
     size_t extension_data_len = 0;
 
+    if (!scratch) {
+        return ZF_CTAP_ERR_OTHER;
+    }
+    memset(scratch, 0, sizeof(*scratch));
+
     if (include_cred_protect &&
-        !zf_encode_cred_protect_extension(record->cred_protect, extension_data,
-                                          sizeof(extension_data), &extension_data_len)) {
-        return ZF_CTAP_ERR_OTHER;
+        !zf_encode_cred_protect_extension(record->cred_protect, scratch->extension_data,
+                                          sizeof(scratch->extension_data), &extension_data_len)) {
+        goto cleanup;
     }
 
-    size_t auth_data_len = zf_build_auth_data(
-        rp_id, true, user_verified, true, include_cred_protect, record, record->sign_count,
-        extension_data, extension_data_len, auth_data, sizeof(auth_data));
+    size_t auth_data_len =
+        zf_build_auth_data(rp_id, true, user_verified, true, include_cred_protect, record,
+                           record->sign_count, scratch->extension_data, extension_data_len,
+                           scratch->cose, sizeof(scratch->cose), scratch->auth_data,
+                           sizeof(scratch->auth_data));
     if (auth_data_len == 0) {
-        return ZF_CTAP_ERR_OTHER;
+        goto cleanup;
     }
 
-    if (!zf_attestation_validate_consistency()) {
-        return ZF_CTAP_ERR_OTHER;
-    }
-    memcpy(attestation_input, auth_data, auth_data_len);
-    memcpy(attestation_input + auth_data_len, client_data_hash, ZF_CLIENT_DATA_HASH_LEN);
-    if (!zf_attestation_sign_input(attestation_input, auth_data_len + ZF_CLIENT_DATA_HASH_LEN,
-                                   signature, sizeof(signature), &signature_len)) {
-        return ZF_CTAP_ERR_OTHER;
-    }
-    cert_count =
-        zf_attestation_get_cert_chain(attestation_certs, attestation_cert_lens,
-                                      sizeof(attestation_certs) / sizeof(attestation_certs[0]));
-    if (cert_count == 0) {
-        return ZF_CTAP_ERR_OTHER;
-    }
+    (void)client_data_hash;
 
     ZfCborEncoder enc;
     if (!zf_cbor_encoder_init(&enc, out, out_capacity)) {
-        return ZF_CTAP_ERR_OTHER;
+        goto cleanup;
     }
 
-    bool ok =
-        zf_cbor_encode_map(&enc, 3) && zf_cbor_encode_uint(&enc, 1) &&
-        zf_cbor_encode_text(&enc, "packed") && zf_cbor_encode_uint(&enc, 2) &&
-        zf_cbor_encode_bytes(&enc, auth_data, auth_data_len) && zf_cbor_encode_uint(&enc, 3) &&
-        zf_cbor_encode_map(&enc, 3) && zf_cbor_encode_text(&enc, "alg") &&
-        zf_cbor_encode_int(&enc, -7) && zf_cbor_encode_text(&enc, "sig") &&
-        zf_cbor_encode_bytes(&enc, signature, signature_len) && zf_cbor_encode_text(&enc, "x5c") &&
-        zf_encode_cert_chain(&enc, attestation_certs, attestation_cert_lens, cert_count);
+    bool ok = zf_cbor_encode_map(&enc, 3) && zf_cbor_encode_uint(&enc, 1) &&
+              zf_cbor_encode_text(&enc, "none") && zf_cbor_encode_uint(&enc, 2) &&
+              zf_cbor_encode_bytes(&enc, scratch->auth_data, auth_data_len) &&
+              zf_cbor_encode_uint(&enc, 3) && zf_cbor_encode_map(&enc, 0);
     if (!ok) {
-        return ZF_CTAP_ERR_OTHER;
+        goto cleanup;
     }
 
     *out_len = zf_cbor_encoder_size(&enc);
-    return ZF_CTAP_SUCCESS;
+    status = ZF_CTAP_SUCCESS;
+
+cleanup:
+    zf_crypto_secure_zero(scratch, sizeof(*scratch));
+    return status;
 }
 
-uint8_t zf_ctap_build_assertion_response(const ZfGetAssertionRequest *request,
-                                         const ZfCredentialRecord *record, bool user_present,
-                                         bool user_verified, uint32_t sign_count,
-                                         bool include_user_details, bool include_count,
-                                         size_t match_count, uint8_t *out, size_t out_capacity,
-                                         size_t *out_len) {
-    uint8_t auth_data[128];
-    uint8_t sign_input[160];
-    uint8_t sign_hash[32];
-    uint8_t signature[80];
-    size_t auth_data_len =
-        zf_build_auth_data(request->rp_id, user_present, user_verified, false, false, NULL,
-                           sign_count, NULL, 0, auth_data, sizeof(auth_data));
-    if (auth_data_len == 0) {
+uint8_t zf_ctap_build_assertion_response_with_scratch(
+    ZfAssertionResponseScratch *scratch, const ZfGetAssertionRequest *request,
+    const ZfCredentialRecord *record, bool user_present, bool user_verified, uint32_t sign_count,
+    bool include_user_details, bool include_count, size_t match_count, uint8_t *out,
+    size_t out_capacity, size_t *out_len) {
+    uint8_t status = ZF_CTAP_ERR_OTHER;
+    size_t signature_len = 0;
+
+    if (!scratch) {
         return ZF_CTAP_ERR_OTHER;
     }
+    memset(scratch, 0, sizeof(*scratch));
 
-    memcpy(sign_input, auth_data, auth_data_len);
-    memcpy(sign_input + auth_data_len, request->client_data_hash,
-           sizeof(request->client_data_hash));
-    zf_crypto_sha256(sign_input, auth_data_len + sizeof(request->client_data_hash), sign_hash);
+    size_t auth_data_len =
+        zf_build_auth_data(request->rp_id, user_present, user_verified, false, false, NULL,
+                           sign_count, NULL, 0, NULL, 0, scratch->auth_data,
+                           sizeof(scratch->auth_data));
+    if (auth_data_len == 0) {
+        goto cleanup;
+    }
 
-    size_t signature_len = 0;
-    if (!zf_crypto_sign_hash(record, sign_hash, signature, sizeof(signature), &signature_len)) {
-        return ZF_CTAP_ERR_OTHER;
+    zf_crypto_sha256_concat(scratch->auth_data, auth_data_len, request->client_data_hash,
+                            sizeof(request->client_data_hash), scratch->sign_hash);
+
+    if (!zf_crypto_sign_hash(record, scratch->sign_hash, scratch->signature,
+                             sizeof(scratch->signature), &signature_len)) {
+        goto cleanup;
     }
 
     ZfCborEncoder enc;
     if (!zf_cbor_encoder_init(&enc, out, out_capacity)) {
-        return ZF_CTAP_ERR_OTHER;
+        goto cleanup;
     }
 
     bool include_user_name = include_user_details && record->user_name[0] != '\0';
@@ -305,18 +282,19 @@ uint8_t zf_ctap_build_assertion_response(const ZfGetAssertionRequest *request,
     }
 
     size_t pairs = include_count ? 5 : 4;
-    bool ok =
-        zf_cbor_encode_map(&enc, pairs) && zf_cbor_encode_uint(&enc, 1) &&
-        zf_cbor_encode_map(&enc, 2) && zf_cbor_encode_text(&enc, "id") &&
-        zf_cbor_encode_bytes(&enc, record->credential_id, record->credential_id_len) &&
-        zf_cbor_encode_text(&enc, "type") && zf_cbor_encode_text(&enc, "public-key") &&
-        zf_cbor_encode_uint(&enc, 2) && zf_cbor_encode_bytes(&enc, auth_data, auth_data_len) &&
-        zf_cbor_encode_uint(&enc, 3) && zf_cbor_encode_bytes(&enc, signature, signature_len) &&
-        zf_cbor_encode_uint(&enc, 4) && zf_cbor_encode_map(&enc, user_pairs) &&
-        zf_cbor_encode_text(&enc, "id") &&
-        zf_cbor_encode_bytes(&enc, record->user_id, record->user_id_len);
+    bool ok = zf_cbor_encode_map(&enc, pairs) && zf_cbor_encode_uint(&enc, 1) &&
+              zf_cbor_encode_map(&enc, 2) && zf_cbor_encode_text(&enc, "id") &&
+              zf_cbor_encode_bytes(&enc, record->credential_id, record->credential_id_len) &&
+              zf_cbor_encode_text(&enc, "type") && zf_cbor_encode_text(&enc, "public-key") &&
+              zf_cbor_encode_uint(&enc, 2) &&
+              zf_cbor_encode_bytes(&enc, scratch->auth_data, auth_data_len) &&
+              zf_cbor_encode_uint(&enc, 3) &&
+              zf_cbor_encode_bytes(&enc, scratch->signature, signature_len) &&
+              zf_cbor_encode_uint(&enc, 4) && zf_cbor_encode_map(&enc, user_pairs) &&
+              zf_cbor_encode_text(&enc, "id") &&
+              zf_cbor_encode_bytes(&enc, record->user_id, record->user_id_len);
     if (!ok) {
-        return ZF_CTAP_ERR_OTHER;
+        goto cleanup;
     }
     if (include_user_name) {
         ok = zf_cbor_encode_text(&enc, "name") && zf_cbor_encode_text(&enc, record->user_name);
@@ -329,9 +307,13 @@ uint8_t zf_ctap_build_assertion_response(const ZfGetAssertionRequest *request,
         ok = zf_cbor_encode_uint(&enc, 5) && zf_cbor_encode_uint(&enc, match_count);
     }
     if (!ok) {
-        return ZF_CTAP_ERR_OTHER;
+        goto cleanup;
     }
 
     *out_len = zf_cbor_encoder_size(&enc);
-    return ZF_CTAP_SUCCESS;
+    status = ZF_CTAP_SUCCESS;
+
+cleanup:
+    zf_crypto_secure_zero(scratch, sizeof(*scratch));
+    return status;
 }

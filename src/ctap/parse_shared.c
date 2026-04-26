@@ -340,12 +340,71 @@ uint8_t zf_ctap_parse_pubkey_cred_params(ZfCborCursor *cursor, bool *es256_suppo
     return ZF_CTAP_SUCCESS;
 }
 
-uint8_t zf_ctap_parse_descriptor_array(ZfCborCursor *cursor, uint8_t ids[][ZF_CREDENTIAL_ID_LEN],
-                                       size_t *id_lens, size_t *count) {
+static bool zf_ctap_descriptor_list_has_duplicate_ids(const ZfCredentialDescriptorList *list) {
+    ZfCborCursor cursor;
     size_t items = 0;
+
+    if (!list || !list->data || list->count <= 1) {
+        return false;
+    }
+
+    zf_cbor_cursor_init(&cursor, list->data, list->size);
+    if (!zf_cbor_read_array_start(&cursor, &items)) {
+        return false;
+    }
+
+    for (size_t i = 0; i < items; ++i) {
+        uint8_t credential_id[ZF_CREDENTIAL_ID_LEN] = {0};
+        size_t credential_id_len = 0;
+        bool include_entry = false;
+
+        if (!zf_ctap_parse_credential_descriptor(&cursor, credential_id, &credential_id_len,
+                                                 &include_entry)) {
+            return false;
+        }
+        if (!include_entry || credential_id_len > ZF_CREDENTIAL_ID_LEN) {
+            continue;
+        }
+
+        ZfCborCursor scan;
+        size_t scan_items = 0;
+        size_t matches = 0;
+
+        zf_cbor_cursor_init(&scan, list->data, list->size);
+        if (!zf_cbor_read_array_start(&scan, &scan_items)) {
+            return false;
+        }
+
+        for (size_t j = 0; j < scan_items; ++j) {
+            uint8_t other_id[ZF_CREDENTIAL_ID_LEN] = {0};
+            size_t other_id_len = 0;
+            bool other_include = false;
+
+            if (!zf_ctap_parse_credential_descriptor(&scan, other_id, &other_id_len,
+                                                     &other_include)) {
+                return false;
+            }
+            if (other_include && other_id_len == credential_id_len &&
+                memcmp(other_id, credential_id, credential_id_len) == 0 && ++matches > 1) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+uint8_t zf_ctap_parse_descriptor_array(ZfCborCursor *cursor, ZfCredentialDescriptorList *list) {
+    const uint8_t *start = cursor ? cursor->ptr : NULL;
+    size_t items = 0;
+
     if (!zf_cbor_read_array_start(cursor, &items)) {
         return ZF_CTAP_ERR_INVALID_CBOR;
     }
+
+    list->data = start;
+    list->size = 0;
+    list->count = 0;
 
     for (size_t j = 0; j < items; ++j) {
         uint8_t parsed_id[ZF_CREDENTIAL_ID_LEN] = {0};
@@ -360,20 +419,48 @@ uint8_t zf_ctap_parse_descriptor_array(ZfCborCursor *cursor, uint8_t ids[][ZF_CR
         if (!include_entry) {
             continue;
         }
-        if (*count >= ZF_MAX_ALLOW_LIST) {
+        if (list->count >= ZF_MAX_ALLOW_LIST) {
             return ZF_CTAP_ERR_INVALID_PARAMETER;
         }
-        for (size_t i = 0; i < *count; ++i) {
-            if (parsed_len <= ZF_CREDENTIAL_ID_LEN && id_lens[i] <= ZF_CREDENTIAL_ID_LEN &&
-                id_lens[i] == parsed_len && memcmp(ids[i], parsed_id, parsed_len) == 0) {
-                return ZF_CTAP_ERR_INVALID_PARAMETER;
-            }
-        }
+        list->count++;
+    }
 
-        memcpy(ids[*count], parsed_id, ZF_CREDENTIAL_ID_LEN);
-        id_lens[*count] = parsed_len;
-        (*count)++;
+    list->size = (size_t)(cursor->ptr - start);
+    if (zf_ctap_descriptor_list_has_duplicate_ids(list)) {
+        return ZF_CTAP_ERR_INVALID_PARAMETER;
     }
 
     return ZF_CTAP_SUCCESS;
+}
+
+bool zf_ctap_descriptor_list_contains_id(const ZfCredentialDescriptorList *list,
+                                         const uint8_t *credential_id, size_t credential_id_len) {
+    ZfCborCursor cursor;
+    size_t items = 0;
+
+    if (!list || !list->data || !credential_id || list->count == 0 || credential_id_len == 0 ||
+        credential_id_len > ZF_CREDENTIAL_ID_LEN) {
+        return false;
+    }
+
+    zf_cbor_cursor_init(&cursor, list->data, list->size);
+    if (!zf_cbor_read_array_start(&cursor, &items)) {
+        return false;
+    }
+
+    for (size_t i = 0; i < items; ++i) {
+        uint8_t parsed_id[ZF_CREDENTIAL_ID_LEN] = {0};
+        size_t parsed_len = 0;
+        bool include_entry = false;
+
+        if (!zf_ctap_parse_credential_descriptor(&cursor, parsed_id, &parsed_len, &include_entry)) {
+            return false;
+        }
+        if (include_entry && parsed_len == credential_id_len &&
+            memcmp(parsed_id, credential_id, credential_id_len) == 0) {
+            return true;
+        }
+    }
+
+    return false;
 }

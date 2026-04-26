@@ -88,7 +88,8 @@ static bool zf_cbor_utf8_is_valid(const uint8_t *ptr, size_t size) {
 }
 
 static bool zf_cbor_append(ZfCborEncoder *enc, const void *data, size_t size) {
-    if (enc->offset + size > enc->capacity) {
+    if (!enc || enc->offset > enc->capacity || size > enc->capacity - enc->offset ||
+        (size > 0 && !data)) {
         return false;
     }
     memcpy(enc->buf + enc->offset, data, size);

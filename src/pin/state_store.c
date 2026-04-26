@@ -82,15 +82,15 @@ static bool zf_pin_seal_retry_state(const uint8_t pin_hash[ZF_PIN_HASH_LEN], uin
     memcpy(plain.digest, digest, sizeof(plain.digest));
     furi_hal_random_fill_buf(iv, ZF_WRAP_IV_LEN);
     if (!furi_hal_crypto_enclave_load_key(FURI_HAL_CRYPTO_ENCLAVE_UNIQUE_KEY_SLOT, iv)) {
-        memset(&plain, 0, sizeof(plain));
-        memset(digest, 0, sizeof(digest));
+        zf_crypto_secure_zero(&plain, sizeof(plain));
+        zf_crypto_secure_zero(digest, sizeof(digest));
         return false;
     }
 
     bool ok = furi_hal_crypto_encrypt((const uint8_t *)&plain, sealed, sizeof(plain));
     furi_hal_crypto_enclave_unload_key(FURI_HAL_CRYPTO_ENCLAVE_UNIQUE_KEY_SLOT);
-    memset(&plain, 0, sizeof(plain));
-    memset(digest, 0, sizeof(digest));
+    zf_crypto_secure_zero(&plain, sizeof(plain));
+    zf_crypto_secure_zero(digest, sizeof(digest));
     return ok;
 }
 
@@ -110,15 +110,15 @@ static bool zf_pin_verify_retry_state(const uint8_t pin_hash[ZF_PIN_HASH_LEN], u
     if (!ok || plain.magic != ZF_PIN_RETRY_SEAL_MAGIC || plain.pin_retries != pin_retries ||
         plain.pin_consecutive_mismatches != pin_consecutive_mismatches || plain.flags != flags ||
         plain.reserved != 0U) {
-        memset(&plain, 0, sizeof(plain));
+        zf_crypto_secure_zero(&plain, sizeof(plain));
         return false;
     }
 
     zf_pin_compute_retry_state_digest(pin_hash, pin_retries, pin_consecutive_mismatches, flags,
                                       digest);
     ok = zf_crypto_constant_time_equal(plain.digest, digest, sizeof(plain.digest));
-    memset(&plain, 0, sizeof(plain));
-    memset(digest, 0, sizeof(digest));
+    zf_crypto_secure_zero(&plain, sizeof(plain));
+    zf_crypto_secure_zero(digest, sizeof(digest));
     return ok;
 }
 

@@ -7,10 +7,7 @@
 #define ZF_PIN_FILE_PATH ZF_APP_DATA_DIR "/client_pin.bin"
 #define ZF_PIN_FILE_TEMP_PATH ZF_APP_DATA_DIR "/client_pin.tmp"
 #define ZF_PIN_FILE_MAGIC 0x50494E31UL
-#define ZF_PIN_FILE_VERSION_LEGACY 1U
-#define ZF_PIN_FILE_VERSION_RETRIES_ONLY 2U
-#define ZF_PIN_FILE_VERSION_UNSEALED 3U
-#define ZF_PIN_FILE_VERSION 4U
+#define ZF_PIN_FILE_VERSION 1U
 #define ZF_PIN_FILE_FLAG_AUTH_BLOCKED 0x01U
 #define ZF_PIN_RETRY_SEAL_MAGIC 0x504E5231UL
 #define ZF_PIN_RETRY_SEAL_SIZE 32U
@@ -23,7 +20,7 @@ typedef struct {
     uint8_t flags;
     uint8_t iv[ZF_WRAP_IV_LEN];
     uint8_t encrypted_pin_hash[ZF_PIN_HASH_LEN];
-} ZfPinFileRecordV3;
+} ZfPinFileRecordBase;
 
 typedef struct {
     uint32_t magic;
@@ -35,7 +32,7 @@ typedef struct {
 } ZfPinRetrySeal;
 
 typedef struct {
-    ZfPinFileRecordV3 base;
+    ZfPinFileRecordBase base;
     uint8_t retry_seal_iv[ZF_WRAP_IV_LEN];
     uint8_t encrypted_retry_seal[ZF_PIN_RETRY_SEAL_SIZE];
 } ZfPinFileRecord;

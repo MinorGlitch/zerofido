@@ -44,12 +44,10 @@ uint8_t zf_ctap_parse_get_assertion(const uint8_t *data, size_t size,
             break;
         }
         case 3: {
-            uint8_t status = zf_ctap_parse_descriptor_array(
-                &cursor, request->allow_list, request->allow_list_lens, &request->allow_list_count);
+            uint8_t status = zf_ctap_parse_descriptor_array(&cursor, &request->allow_list);
             if (status != ZF_CTAP_SUCCESS) {
                 return status;
             }
-            request->has_allow_list = request->allow_list_count > 0;
             break;
         }
         case 5:

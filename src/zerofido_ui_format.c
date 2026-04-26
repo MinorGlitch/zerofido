@@ -51,7 +51,7 @@ void zf_ui_format_approval_body(char *out, size_t out_size, ZfUiProtocol protoco
              (user_text && user_text[0]) ? user_text : "User: (not provided)");
 }
 
-void zf_ui_format_assertion_selection_label(const ZfCredentialIndexEntry *record, char *out,
+void zf_ui_format_assertion_selection_label(const ZfCredentialRecord *record, char *out,
                                             size_t out_size) {
     char credential_id[17];
     const char *base = NULL;
@@ -68,7 +68,7 @@ void zf_ui_format_assertion_selection_label(const ZfCredentialIndexEntry *record
     snprintf(out, out_size, "%s | %s", base, credential_id);
 }
 
-void zf_ui_format_fido2_credential_label(const ZfCredentialIndexEntry *record, char *out,
+void zf_ui_format_fido2_credential_label(const ZfCredentialRecord *record, char *out,
                                          size_t out_size) {
     const char *user_text = NULL;
 
@@ -83,7 +83,7 @@ void zf_ui_format_fido2_credential_label(const ZfCredentialIndexEntry *record, c
              record->rp_id, user_text);
 }
 
-void zf_ui_format_fido2_credential_detail(const ZfCredentialIndexEntry *record, char *out,
+void zf_ui_format_fido2_credential_detail(const ZfCredentialRecord *record, char *out,
                                           size_t out_size) {
     char credential_id[17];
     const char *user_name = NULL;

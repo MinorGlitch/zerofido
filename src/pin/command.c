@@ -1,6 +1,5 @@
 #include "../zerofido_pin.h"
 
-#include <stdlib.h>
 #include <string.h>
 
 #include "../ctap/parse_internal.h"
@@ -189,6 +188,73 @@ const char *zerofido_pin_subcommand_tag(uint64_t subcommand) {
     }
 }
 
+typedef struct {
+    ZfClientPinRequest request;
+    ZfClientPinState state;
+    uint8_t shared_secret[32];
+    uint8_t current_pin_hash[ZF_PIN_HASH_LEN];
+    uint8_t pin_hash_plain[32];
+    uint8_t next_pin_token[ZF_PIN_TOKEN_LEN];
+    uint8_t encrypted_token[ZF_PIN_TOKEN_LEN];
+    uint8_t new_pin_plain[256];
+    ZfHmacSha256Scratch hmac_scratch;
+} ZfClientPinCommandScratch;
+
+_Static_assert(sizeof(ZfClientPinCommandScratch) <= ZF_COMMAND_SCRATCH_SIZE,
+               "Client PIN scratch exceeds command arena");
+
+static ZfClientPinCommandScratch *zf_pin_command_scratch(ZerofidoApp *app) {
+    if (!app || sizeof(ZfClientPinCommandScratch) > sizeof(app->command_scratch.bytes)) {
+        return NULL;
+    }
+
+    memset(app->command_scratch.bytes, 0, sizeof(ZfClientPinCommandScratch));
+    return (ZfClientPinCommandScratch *)app->command_scratch.bytes;
+}
+
+static void zf_pin_lock_if_present(ZerofidoApp *app, bool *locked) {
+    *locked = false;
+    if (app && app->ui_mutex) {
+        furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
+        *locked = true;
+    }
+}
+
+static void zf_pin_unlock_if_present(ZerofidoApp *app, bool locked) {
+    if (locked) {
+        furi_mutex_release(app->ui_mutex);
+    }
+}
+
+static void zf_pin_set_last_command_tag(ZerofidoApp *app, const char *tag) {
+    bool locked = false;
+
+    if (!app || !tag) {
+        return;
+    }
+
+    zf_pin_lock_if_present(app, &locked);
+    strncpy(app->last_ctap_command_tag, tag, sizeof(app->last_ctap_command_tag) - 1);
+    app->last_ctap_command_tag[sizeof(app->last_ctap_command_tag) - 1] = '\0';
+    zf_pin_unlock_if_present(app, locked);
+}
+
+static void zf_pin_snapshot_state(ZerofidoApp *app, ZfClientPinState *state) {
+    bool locked = false;
+
+    zf_pin_lock_if_present(app, &locked);
+    *state = app->pin_state;
+    zf_pin_unlock_if_present(app, locked);
+}
+
+static void zf_pin_publish_state(ZerofidoApp *app, const ZfClientPinState *state) {
+    bool locked = false;
+
+    zf_pin_lock_if_present(app, &locked);
+    app->pin_state = *state;
+    zf_pin_unlock_if_present(app, locked);
+}
+
 static uint8_t zf_pin_response_retries(const ZfClientPinState *state, uint8_t *out,
                                        size_t out_capacity, size_t *out_len) {
     ZfCborEncoder enc;
@@ -246,43 +312,32 @@ static uint8_t zf_pin_response_token(const uint8_t token[ZF_PIN_TOKEN_LEN], uint
     return ZF_CTAP_SUCCESS;
 }
 
-static bool zf_pin_hmac_matches(const uint8_t key[32], const uint8_t *data, size_t data_len,
-                                const uint8_t *expected, size_t expected_len) {
+static bool zf_pin_hmac_matches(ZfHmacSha256Scratch *scratch, const uint8_t key[32],
+                                const uint8_t *first, size_t first_len, const uint8_t *second,
+                                size_t second_len, const uint8_t *expected, size_t expected_len) {
     uint8_t hmac[32];
-
-    if (!zf_crypto_hmac_sha256(key, 32, data, data_len, hmac)) {
-        return false;
-    }
-    return expected_len == ZF_PIN_AUTH_LEN &&
-           zf_crypto_constant_time_equal(hmac, expected, ZF_PIN_AUTH_LEN);
-}
-
-static bool zf_pin_hmac_matches_joined(const uint8_t key[32], const uint8_t *first,
-                                       size_t first_len, const uint8_t *second, size_t second_len,
-                                       const uint8_t *expected, size_t expected_len) {
-    uint8_t combined[288];
     bool matches = false;
-    size_t combined_len = first_len + second_len;
 
-    if (combined_len > 288U) {
+    if (!zf_crypto_hmac_sha256_parts_with_scratch(scratch, key, 32, first, first_len, second,
+                                                  second_len, hmac)) {
         return false;
     }
-
-    memcpy(combined, first, first_len);
-    memcpy(combined + first_len, second, second_len);
-    matches = zf_pin_hmac_matches(key, combined, combined_len, expected, expected_len);
-    memset(combined, 0, combined_len);
+    matches = expected_len == ZF_PIN_AUTH_LEN &&
+              zf_crypto_constant_time_equal(hmac, expected, ZF_PIN_AUTH_LEN);
+    zf_crypto_secure_zero(hmac, sizeof(hmac));
     return matches;
 }
 
-static uint8_t zf_pin_handle_set_pin(ZerofidoApp *app, ZfClientPinRequest *request,
+static uint8_t zf_pin_handle_set_pin(Storage *storage, ZfClientPinState *state,
+                                     const ZfClientPinRequest *request,
+                                     ZfClientPinCommandScratch *scratch,
                                      size_t *out_len) {
-    uint8_t shared_secret[32] = {0};
-    uint8_t new_pin_plain[sizeof(request->new_pin_enc)] = {0};
+    uint8_t *shared_secret = scratch->shared_secret;
+    uint8_t *new_pin_plain = scratch->new_pin_plain;
     size_t pin_len = 0;
     uint8_t status = ZF_CTAP_SUCCESS;
 
-    if (app->pin_state.pin_set) {
+    if (state->pin_set) {
         status = ZF_CTAP_ERR_PIN_AUTH_INVALID;
         goto cleanup;
     }
@@ -294,13 +349,14 @@ static uint8_t zf_pin_handle_set_pin(ZerofidoApp *app, ZfClientPinRequest *reque
         status = ZF_CTAP_ERR_INVALID_PARAMETER;
         goto cleanup;
     }
-    if (!zf_crypto_ecdh_shared_secret(&app->pin_state.key_agreement, request->platform_x,
+    if (!zf_crypto_ecdh_shared_secret(&state->key_agreement, request->platform_x,
                                       request->platform_y, shared_secret)) {
         status = ZF_CTAP_ERR_INVALID_PARAMETER;
         goto cleanup;
     }
-    if (!zf_pin_hmac_matches(shared_secret, request->new_pin_enc, request->new_pin_enc_len,
-                             request->pin_auth, request->pin_auth_len)) {
+    if (!zf_pin_hmac_matches(&scratch->hmac_scratch, shared_secret, request->new_pin_enc,
+                             request->new_pin_enc_len, NULL, 0, request->pin_auth,
+                             request->pin_auth_len)) {
         status = ZF_CTAP_ERR_PIN_AUTH_INVALID;
         goto cleanup;
     }
@@ -314,7 +370,7 @@ static uint8_t zf_pin_handle_set_pin(ZerofidoApp *app, ZfClientPinRequest *reque
         status = ZF_CTAP_ERR_PIN_POLICY_VIOLATION;
         goto cleanup;
     }
-    status = zf_pin_apply_plaintext(app->storage, &app->pin_state, new_pin_plain, pin_len, true);
+    status = zf_pin_apply_plaintext(storage, state, new_pin_plain, pin_len, true);
     if (status != ZF_CTAP_SUCCESS) {
         goto cleanup;
     }
@@ -323,24 +379,26 @@ static uint8_t zf_pin_handle_set_pin(ZerofidoApp *app, ZfClientPinRequest *reque
     status = ZF_CTAP_SUCCESS;
 
 cleanup:
-    memset(shared_secret, 0, sizeof(shared_secret));
-    memset(new_pin_plain, 0, request->new_pin_enc_len > 0 ? request->new_pin_enc_len : 1U);
+    zf_crypto_secure_zero(shared_secret, sizeof(scratch->shared_secret));
+    zf_crypto_secure_zero(new_pin_plain, sizeof(scratch->new_pin_plain));
     return status;
 }
 
-static uint8_t zf_pin_handle_change_pin(ZerofidoApp *app, const ZfClientPinRequest *request,
+static uint8_t zf_pin_handle_change_pin(Storage *storage, ZfClientPinState *state,
+                                        const ZfClientPinRequest *request,
+                                        ZfClientPinCommandScratch *scratch,
                                         size_t *out_len) {
-    uint8_t shared_secret[32] = {0};
-    uint8_t current_pin_hash[ZF_PIN_HASH_LEN] = {0};
-    uint8_t new_pin_plain[sizeof(request->new_pin_enc)] = {0};
+    uint8_t *shared_secret = scratch->shared_secret;
+    uint8_t *current_pin_hash = scratch->current_pin_hash;
+    uint8_t *new_pin_plain = scratch->new_pin_plain;
     size_t pin_len = 0;
     uint8_t status = ZF_CTAP_SUCCESS;
 
-    if (!app->pin_state.pin_set) {
+    if (!state->pin_set) {
         status = ZF_CTAP_ERR_PIN_NOT_SET;
         goto cleanup;
     }
-    if (app->pin_state.pin_auth_blocked) {
+    if (state->pin_auth_blocked) {
         status = ZF_CTAP_ERR_PIN_AUTH_BLOCKED;
         goto cleanup;
     }
@@ -354,23 +412,23 @@ static uint8_t zf_pin_handle_change_pin(ZerofidoApp *app, const ZfClientPinReque
         status = ZF_CTAP_ERR_INVALID_PARAMETER;
         goto cleanup;
     }
-    if (!zf_crypto_ecdh_shared_secret(&app->pin_state.key_agreement, request->platform_x,
+    if (!zf_crypto_ecdh_shared_secret(&state->key_agreement, request->platform_x,
                                       request->platform_y, shared_secret)) {
         status = ZF_CTAP_ERR_INVALID_PARAMETER;
         goto cleanup;
     }
-    if (!zf_pin_hmac_matches_joined(shared_secret, request->new_pin_enc, request->new_pin_enc_len,
-                                    request->pin_hash_enc, request->pin_hash_enc_len,
-                                    request->pin_auth, request->pin_auth_len)) {
+    if (!zf_pin_hmac_matches(&scratch->hmac_scratch, shared_secret, request->new_pin_enc,
+                             request->new_pin_enc_len, request->pin_hash_enc,
+                             request->pin_hash_enc_len, request->pin_auth, request->pin_auth_len)) {
         status = ZF_CTAP_ERR_PIN_AUTH_INVALID;
         goto cleanup;
     }
     if (!zf_crypto_aes256_cbc_zero_iv_decrypt(shared_secret, request->pin_hash_enc,
                                               current_pin_hash, request->pin_hash_enc_len)) {
-        status = zf_pin_auth_failure(app->storage, &app->pin_state);
+        status = zf_pin_auth_failure(storage, state);
         goto cleanup;
     }
-    status = zf_pin_verify_hash(app->storage, &app->pin_state, current_pin_hash);
+    status = zf_pin_verify_hash(storage, state, current_pin_hash);
     if (status != ZF_CTAP_SUCCESS) {
         goto cleanup;
     }
@@ -385,7 +443,7 @@ static uint8_t zf_pin_handle_change_pin(ZerofidoApp *app, const ZfClientPinReque
         status = ZF_CTAP_ERR_PIN_POLICY_VIOLATION;
         goto cleanup;
     }
-    status = zf_pin_apply_plaintext(app->storage, &app->pin_state, new_pin_plain, pin_len, false);
+    status = zf_pin_apply_plaintext(storage, state, new_pin_plain, pin_len, false);
     if (status != ZF_CTAP_SUCCESS) {
         goto cleanup;
     }
@@ -394,28 +452,30 @@ static uint8_t zf_pin_handle_change_pin(ZerofidoApp *app, const ZfClientPinReque
     status = ZF_CTAP_SUCCESS;
 
 cleanup:
-    memset(shared_secret, 0, sizeof(shared_secret));
-    memset(current_pin_hash, 0, sizeof(current_pin_hash));
-    memset(new_pin_plain, 0, request->new_pin_enc_len > 0 ? request->new_pin_enc_len : 1U);
+    zf_crypto_secure_zero(shared_secret, sizeof(scratch->shared_secret));
+    zf_crypto_secure_zero(current_pin_hash, sizeof(scratch->current_pin_hash));
+    zf_crypto_secure_zero(new_pin_plain, sizeof(scratch->new_pin_plain));
     return status;
 }
 
-static uint8_t zf_pin_handle_get_pin_token(ZerofidoApp *app, const ZfClientPinRequest *request,
+static uint8_t zf_pin_handle_get_pin_token(Storage *storage, ZfClientPinState *state,
+                                           const ZfClientPinRequest *request,
+                                           ZfClientPinCommandScratch *scratch,
                                            bool permissions_mode, uint8_t *out, size_t out_capacity,
                                            size_t *out_len) {
-    uint8_t shared_secret[32] = {0};
-    uint8_t pin_hash_plain[32] = {0};
-    uint8_t next_pin_token[ZF_PIN_TOKEN_LEN] = {0};
-    uint8_t encrypted_token[ZF_PIN_TOKEN_LEN] = {0};
+    uint8_t *shared_secret = scratch->shared_secret;
+    uint8_t *pin_hash_plain = scratch->pin_hash_plain;
+    uint8_t *next_pin_token = scratch->next_pin_token;
+    uint8_t *encrypted_token = scratch->encrypted_token;
     uint8_t status = ZF_CTAP_SUCCESS;
 
-    if (!app->pin_state.pin_set) {
+    if (!state->pin_set) {
         return ZF_CTAP_ERR_PIN_NOT_SET;
     }
-    if (app->pin_state.pin_auth_blocked) {
+    if (state->pin_auth_blocked) {
         return ZF_CTAP_ERR_PIN_AUTH_BLOCKED;
     }
-    if (app->pin_state.pin_retries == 0) {
+    if (state->pin_retries == 0) {
         return ZF_CTAP_ERR_PIN_BLOCKED;
     }
     if (!request->has_key_agreement || !request->has_pin_hash_enc) {
@@ -443,87 +503,97 @@ static uint8_t zf_pin_handle_get_pin_token(ZerofidoApp *app, const ZfClientPinRe
     if (request->pin_hash_enc_len != ZF_PIN_HASH_LEN) {
         return ZF_CTAP_ERR_INVALID_PARAMETER;
     }
-    if (!zf_crypto_ecdh_shared_secret(&app->pin_state.key_agreement, request->platform_x,
+    if (!zf_crypto_ecdh_shared_secret(&state->key_agreement, request->platform_x,
                                       request->platform_y, shared_secret)) {
         status = ZF_CTAP_ERR_INVALID_PARAMETER;
         goto cleanup;
     }
     if (!zf_crypto_aes256_cbc_zero_iv_decrypt(shared_secret, request->pin_hash_enc, pin_hash_plain,
                                               request->pin_hash_enc_len)) {
-        status = zf_pin_auth_failure(app->storage, &app->pin_state);
+        status = zf_pin_auth_failure(storage, state);
         goto cleanup;
     }
-    if (!zf_crypto_constant_time_equal(pin_hash_plain, app->pin_state.pin_hash, ZF_PIN_HASH_LEN)) {
-        status = zf_pin_auth_failure(app->storage, &app->pin_state);
+    if (!zf_crypto_constant_time_equal(pin_hash_plain, state->pin_hash, ZF_PIN_HASH_LEN)) {
+        status = zf_pin_auth_failure(storage, state);
         goto cleanup;
     }
 
-    if (zf_pin_auth_success(app->storage, &app->pin_state) != ZF_CTAP_SUCCESS) {
+    if (zf_pin_auth_success(storage, state) != ZF_CTAP_SUCCESS) {
         status = ZF_CTAP_ERR_OTHER;
         goto cleanup;
     }
     zf_pin_refresh_pin_token(next_pin_token);
     if (!zf_crypto_aes256_cbc_zero_iv_encrypt(shared_secret, next_pin_token, encrypted_token,
-                                              sizeof(encrypted_token))) {
+                                              sizeof(scratch->encrypted_token))) {
         status = ZF_CTAP_ERR_OTHER;
         goto cleanup;
     }
     status = zf_pin_response_token(encrypted_token, out, out_capacity, out_len);
     if (status == ZF_CTAP_SUCCESS) {
-        memcpy(app->pin_state.pin_token, next_pin_token, sizeof(app->pin_state.pin_token));
+        memcpy(state->pin_token, next_pin_token, sizeof(state->pin_token));
         zf_pin_set_token_permissions(
-            &app->pin_state,
+            state,
             permissions_mode ? request->permissions : (ZF_PIN_PERMISSION_MC | ZF_PIN_PERMISSION_GA),
             permissions_mode, permissions_mode ? request->rp_id : NULL);
-        zf_pin_note_pin_token_issued(&app->pin_state);
+        zf_pin_note_pin_token_issued(state);
     }
 
 cleanup:
-    memset(shared_secret, 0, sizeof(shared_secret));
-    memset(pin_hash_plain, 0, sizeof(pin_hash_plain));
-    memset(next_pin_token, 0, sizeof(next_pin_token));
-    memset(encrypted_token, 0, sizeof(encrypted_token));
+    zf_crypto_secure_zero(shared_secret, sizeof(scratch->shared_secret));
+    zf_crypto_secure_zero(pin_hash_plain, sizeof(scratch->pin_hash_plain));
+    zf_crypto_secure_zero(next_pin_token, sizeof(scratch->next_pin_token));
+    zf_crypto_secure_zero(encrypted_token, sizeof(scratch->encrypted_token));
     return status;
 }
 
 uint8_t zerofido_pin_handle_command(ZerofidoApp *app, const uint8_t *request, size_t request_len,
                                     uint8_t *out, size_t out_capacity, size_t *out_len) {
-    ZfClientPinRequest parsed = {0};
+    ZfClientPinCommandScratch *scratch = zf_pin_command_scratch(app);
+    ZfClientPinRequest *parsed = NULL;
+    ZfClientPinState *state = NULL;
     uint8_t status = ZF_CTAP_ERR_OTHER;
 
-    status = zf_pin_parse_request(request, request_len, &parsed);
-    if (status != ZF_CTAP_SUCCESS) {
-        strncpy(app->last_ctap_command_tag, "CP-PARSE", sizeof(app->last_ctap_command_tag) - 1);
-        app->last_ctap_command_tag[sizeof(app->last_ctap_command_tag) - 1] = '\0';
-        return status;
+    if (!scratch) {
+        return ZF_CTAP_ERR_OTHER;
     }
-    strncpy(app->last_ctap_command_tag, zerofido_pin_subcommand_tag(parsed.subcommand),
-            sizeof(app->last_ctap_command_tag) - 1);
-    app->last_ctap_command_tag[sizeof(app->last_ctap_command_tag) - 1] = '\0';
+    parsed = &scratch->request;
+    state = &scratch->state;
 
-    switch (parsed.subcommand) {
+    status = zf_pin_parse_request(request, request_len, parsed);
+    if (status != ZF_CTAP_SUCCESS) {
+        zf_pin_set_last_command_tag(app, "CP-PARSE");
+        goto cleanup;
+    }
+    zf_pin_set_last_command_tag(app, zerofido_pin_subcommand_tag(parsed->subcommand));
+    zf_pin_snapshot_state(app, state);
+
+    switch (parsed->subcommand) {
     case ZF_CLIENT_PIN_SUBCMD_GET_RETRIES:
-        status = zf_pin_response_retries(&app->pin_state, out, out_capacity, out_len);
+        status = zf_pin_response_retries(state, out, out_capacity, out_len);
         break;
     case ZF_CLIENT_PIN_SUBCMD_GET_KEY_AGREEMENT:
-        status = zf_pin_response_key_agreement(&app->pin_state, out, out_capacity, out_len);
+        status = zf_pin_response_key_agreement(state, out, out_capacity, out_len);
         break;
     case ZF_CLIENT_PIN_SUBCMD_SET_PIN:
-        status = zf_pin_handle_set_pin(app, &parsed, out_len);
+        status = zf_pin_handle_set_pin(app->storage, state, parsed, scratch, out_len);
         break;
     case ZF_CLIENT_PIN_SUBCMD_GET_PIN_TOKEN:
-        status = zf_pin_handle_get_pin_token(app, &parsed, false, out, out_capacity, out_len);
+        status = zf_pin_handle_get_pin_token(app->storage, state, parsed, scratch, false, out,
+                                             out_capacity, out_len);
         break;
     case ZF_CLIENT_PIN_SUBCMD_GET_PIN_UV_AUTH_TOKEN_USING_PIN_WITH_PERMISSIONS:
-        status = zf_pin_handle_get_pin_token(app, &parsed, true, out, out_capacity, out_len);
+        status = zf_pin_handle_get_pin_token(app->storage, state, parsed, scratch, true, out,
+                                             out_capacity, out_len);
         break;
     case ZF_CLIENT_PIN_SUBCMD_CHANGE_PIN:
-        status = zf_pin_handle_change_pin(app, &parsed, out_len);
+        status = zf_pin_handle_change_pin(app->storage, state, parsed, scratch, out_len);
         break;
     default:
         status = ZF_CTAP_ERR_INVALID_SUBCOMMAND;
         break;
     }
-    memset(&parsed, 0, sizeof(parsed));
+    zf_pin_publish_state(app, state);
+cleanup:
+    zf_crypto_secure_zero(scratch, sizeof(*scratch));
     return status;
 }

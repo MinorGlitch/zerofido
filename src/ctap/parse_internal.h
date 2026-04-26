@@ -18,5 +18,4 @@ bool zf_ctap_parse_options_map(ZfCborCursor *cursor, bool *up, bool *has_up, boo
 uint8_t zf_ctap_parse_extensions_map(ZfCborCursor *cursor, bool *has_cred_protect,
                                      uint8_t *cred_protect);
 uint8_t zf_ctap_parse_pubkey_cred_params(ZfCborCursor *cursor, bool *es256_supported);
-uint8_t zf_ctap_parse_descriptor_array(ZfCborCursor *cursor, uint8_t ids[][ZF_CREDENTIAL_ID_LEN],
-                                       size_t *id_lens, size_t *count);
+uint8_t zf_ctap_parse_descriptor_array(ZfCborCursor *cursor, ZfCredentialDescriptorList *list);

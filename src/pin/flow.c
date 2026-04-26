@@ -26,13 +26,19 @@ void zf_pin_refresh_pin_token(uint8_t pin_token[ZF_PIN_TOKEN_LEN]) {
     furi_hal_random_fill_buf(pin_token, ZF_PIN_TOKEN_LEN);
 }
 
-void zf_pin_invalidate_token_state(ZfClientPinState *state) {
+static void zf_pin_reset_token_metadata(ZfClientPinState *state) {
     state->pin_token_active = false;
     state->pin_token_issued_at = 0;
     state->pin_token_permissions = 0;
     state->pin_token_permissions_scoped = false;
     state->pin_token_permissions_rp_id_set = false;
-    state->pin_token_permissions_rp_id[0] = '\0';
+    zf_crypto_secure_zero(state->pin_token_permissions_rp_id,
+                          sizeof(state->pin_token_permissions_rp_id));
+}
+
+void zf_pin_invalidate_token_state(ZfClientPinState *state) {
+    zf_crypto_secure_zero(state->pin_token, sizeof(state->pin_token));
+    zf_pin_reset_token_metadata(state);
 }
 
 void zf_pin_note_pin_token_issued(ZfClientPinState *state) {
@@ -260,17 +266,17 @@ uint8_t zf_pin_apply_plaintext(Storage *storage, ZfClientPinState *state, const 
         state->pin_retries = previous_pin_retries;
         state->pin_consecutive_mismatches = previous_pin_consecutive_mismatches;
         state->pin_auth_blocked = previous_pin_auth_blocked;
-        memset(previous_hash, 0, sizeof(previous_hash));
-        memset(pin_hash, 0, sizeof(pin_hash));
-        memset(next_pin_token, 0, sizeof(next_pin_token));
+        zf_crypto_secure_zero(previous_hash, sizeof(previous_hash));
+        zf_crypto_secure_zero(pin_hash, sizeof(pin_hash));
+        zf_crypto_secure_zero(next_pin_token, sizeof(next_pin_token));
         return ZF_CTAP_ERR_OTHER;
     }
 
-    memcpy(state->pin_token, next_pin_token, sizeof(state->pin_token));
     zf_pin_invalidate_token_state(state);
-    memset(previous_hash, 0, sizeof(previous_hash));
-    memset(pin_hash, 0, sizeof(pin_hash));
-    memset(next_pin_token, 0, sizeof(next_pin_token));
+    memcpy(state->pin_token, next_pin_token, sizeof(state->pin_token));
+    zf_crypto_secure_zero(previous_hash, sizeof(previous_hash));
+    zf_crypto_secure_zero(pin_hash, sizeof(pin_hash));
+    zf_crypto_secure_zero(next_pin_token, sizeof(next_pin_token));
     return ZF_CTAP_SUCCESS;
 }
 
@@ -284,7 +290,7 @@ uint8_t zf_pin_auth_failure(Storage *storage, ZfClientPinState *state) {
         return ZF_CTAP_ERR_OTHER;
     }
     state->key_agreement = next_key_agreement;
-    memset(&next_key_agreement, 0, sizeof(next_key_agreement));
+    zf_crypto_secure_zero(&next_key_agreement, sizeof(next_key_agreement));
     if (state->pin_retries > 0) {
         state->pin_retries--;
     }
@@ -354,7 +360,7 @@ ZfPinInitResult zerofido_pin_init_with_result(Storage *storage, ZfClientPinState
         zf_pin_state_store_load(storage, state->pin_hash, &state->pin_retries,
                                 &state->pin_consecutive_mismatches, &state->pin_auth_blocked);
     if (load_status == ZfPinLoadInvalid) {
-        memset(state->pin_hash, 0, sizeof(state->pin_hash));
+        zf_crypto_secure_zero(state->pin_hash, sizeof(state->pin_hash));
         return ZfPinInitInvalidPersistedState;
     }
     if (load_status == ZfPinLoadOk) {
@@ -368,7 +374,7 @@ ZfPinInitResult zerofido_pin_init_with_result(Storage *storage, ZfClientPinState
     if (!zf_pin_refresh_runtime_secrets(state->pin_token, &state->key_agreement)) {
         return ZfPinInitStorageError;
     }
-    zf_pin_invalidate_token_state(state);
+    zf_pin_reset_token_metadata(state);
     return ZfPinInitOk;
 }
 
@@ -398,7 +404,7 @@ uint8_t zerofido_pin_verify_plaintext(Storage *storage, ZfClientPinState *state,
 
     zf_crypto_sha256((const uint8_t *)pin, pin_len, pin_hash);
     status = zf_pin_verify_hash(storage, state, pin_hash);
-    memset(pin_hash, 0, sizeof(pin_hash));
+    zf_crypto_secure_zero(pin_hash, sizeof(pin_hash));
     return status;
 }
 
@@ -446,20 +452,20 @@ bool zerofido_pin_clear(Storage *storage, ZfClientPinState *state) {
         return false;
     }
     if (!zf_pin_state_store_clear(storage)) {
-        memset(next_pin_token, 0, sizeof(next_pin_token));
-        memset(&next_key_agreement, 0, sizeof(next_key_agreement));
+        zf_crypto_secure_zero(next_pin_token, sizeof(next_pin_token));
+        zf_crypto_secure_zero(&next_key_agreement, sizeof(next_key_agreement));
         return false;
     }
 
-    memset(state->pin_hash, 0, sizeof(state->pin_hash));
+    zf_crypto_secure_zero(state->pin_hash, sizeof(state->pin_hash));
     state->pin_set = false;
     state->pin_retries = ZF_PIN_RETRIES_MAX;
     zf_pin_clear_auth_block_state(state);
-    memcpy(state->pin_token, next_pin_token, sizeof(state->pin_token));
     zf_pin_invalidate_token_state(state);
+    memcpy(state->pin_token, next_pin_token, sizeof(state->pin_token));
     state->key_agreement = next_key_agreement;
-    memset(next_pin_token, 0, sizeof(next_pin_token));
-    memset(&next_key_agreement, 0, sizeof(next_key_agreement));
+    zf_crypto_secure_zero(next_pin_token, sizeof(next_pin_token));
+    zf_crypto_secure_zero(&next_key_agreement, sizeof(next_key_agreement));
     return true;
 }
 
@@ -501,18 +507,22 @@ uint8_t zerofido_pin_require_auth(Storage *storage, ZfClientPinState *state, boo
             return ZF_CTAP_ERR_OTHER;
         }
         if (!zf_crypto_constant_time_equal(expected, pin_auth, ZF_PIN_AUTH_LEN)) {
+            zf_crypto_secure_zero(expected, sizeof(expected));
             return zf_pin_note_pin_auth_mismatch(storage, state);
         }
         if ((state->pin_token_permissions & required_permissions) != required_permissions) {
+            zf_crypto_secure_zero(expected, sizeof(expected));
             return ZF_CTAP_ERR_PIN_AUTH_INVALID;
         }
         if (state->pin_token_permissions_scoped &&
             (required_permissions & (ZF_PIN_PERMISSION_MC | ZF_PIN_PERMISSION_GA)) != 0U) {
             if (!rp_id || rp_id[0] == '\0') {
+                zf_crypto_secure_zero(expected, sizeof(expected));
                 return ZF_CTAP_ERR_PIN_AUTH_INVALID;
             }
             if (state->pin_token_permissions_rp_id_set) {
                 if (strcmp(state->pin_token_permissions_rp_id, rp_id) != 0) {
+                    zf_crypto_secure_zero(expected, sizeof(expected));
                     return ZF_CTAP_ERR_PIN_AUTH_INVALID;
                 }
             } else {
@@ -527,9 +537,11 @@ uint8_t zerofido_pin_require_auth(Storage *storage, ZfClientPinState *state, boo
         if (!zf_pin_persist_state(storage, state)) {
             state->pin_consecutive_mismatches = previous_pin_consecutive_mismatches;
             state->pin_auth_blocked = previous_pin_auth_blocked;
+            zf_crypto_secure_zero(expected, sizeof(expected));
             return ZF_CTAP_ERR_OTHER;
         }
         *uv_verified = true;
+        zf_crypto_secure_zero(expected, sizeof(expected));
         return ZF_CTAP_SUCCESS;
     }
     if (!state->pin_set) {

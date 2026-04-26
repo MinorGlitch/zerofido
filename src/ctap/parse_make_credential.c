@@ -151,8 +151,7 @@ static uint8_t zf_parse_make_credential_pubkey_cred_params(ZfCborCursor *cursor,
 
 static uint8_t zf_parse_make_credential_exclude_list(ZfCborCursor *cursor,
                                                      ZfMakeCredentialRequest *request) {
-    uint8_t status = zf_ctap_parse_descriptor_array(cursor, request->exclude_ids,
-                                                    request->exclude_lens, &request->exclude_count);
+    uint8_t status = zf_ctap_parse_descriptor_array(cursor, &request->exclude_list);
     if (status != ZF_CTAP_SUCCESS) {
         return status;
     }
