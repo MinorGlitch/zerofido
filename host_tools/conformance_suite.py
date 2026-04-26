@@ -87,6 +87,7 @@ class ConformanceSuiteService:
         self._watcher_stop = threading.Event()
         self._watcher_thread: threading.Thread | None = None
         self._run_thread: threading.Thread | None = None
+        self._run_stop = threading.Event()
         self._checkpoint_event: threading.Event | None = None
         self._browser_request_event: threading.Event | None = None
         self._browser_request_result: dict[str, Any] | None = None
@@ -347,8 +348,19 @@ class ConformanceSuiteService:
 
     def stop(self) -> None:
         self._watcher_stop.set()
+        self._run_stop.set()
+        with self._lock:
+            checkpoint_event = self._checkpoint_event
+            browser_event = self._browser_request_event
+        if checkpoint_event is not None:
+            checkpoint_event.set()
+        if browser_event is not None:
+            browser_event.set()
+        self._close_run_device()
         if self._watcher_thread:
             self._watcher_thread.join(timeout=2)
+        if self._run_thread and self._run_thread.is_alive():
+            self._run_thread.join(timeout=2)
 
     def subscribe(self) -> queue.Queue[dict[str, Any]]:
         q: queue.Queue[dict[str, Any]] = queue.Queue()
@@ -454,6 +466,7 @@ class ConformanceSuiteService:
             if matched is None:
                 return {"accepted": False, "reason": "no matched device"}
             run_id = uuid.uuid4().hex
+            self._run_stop.clear()
             self._state["run"] = {
                 "status": "running",
                 "run_id": run_id,
@@ -561,6 +574,8 @@ class ConformanceSuiteService:
             }
         self._emit("manual_checkpoint", self.get_status())
         event.wait()
+        if self._run_stop.is_set():
+            raise RuntimeError("run stopped")
         with self._lock:
             self._checkpoint_event = None
             self._state["run"]["manual_checkpoint"] = None
@@ -836,6 +851,8 @@ class ConformanceSuiteService:
 
             for phase_name, phase_scenarios in phases:
                 for scenario_id, fn, options in phase_scenarios:
+                    if self._run_stop.is_set():
+                        raise RuntimeError("run stopped")
                     result = self._run_one_scenario(phase_name, scenario_id, fn, options)
                     results.append(result)
 
@@ -991,11 +1008,15 @@ class ConformanceSuiteService:
         self._run_cids = {}
         if self._run_device is None:
             return
-        self._run_device.close()
-        self._run_device = None
-        self._run_device_open_ms = None
+        try:
+            self._run_device.close()
+        finally:
+            self._run_device = None
+            self._run_device_open_ms = None
 
     def _get_run_device(self, matched: MatchedDevice) -> hid.device:
+        if self._run_stop.is_set():
+            raise RuntimeError("run stopped")
         if self._run_device is None:
             start = time.perf_counter()
             self._run_device = probe.open_device_for_info(matched.info)
@@ -1035,6 +1056,8 @@ class ConformanceSuiteService:
         trace: list[dict[str, str]],
     ) -> tuple[int, int, bytes]:
         for _ in range(2):
+            if self._run_stop.is_set():
+                raise RuntimeError("run stopped")
             cid = self._get_run_cid(device, transport_kind, trace)
             timing: dict[str, Any] = {}
             response_cid, response_cmd, response_payload = probe.transact(
@@ -1059,6 +1082,8 @@ class ConformanceSuiteService:
         raise RuntimeError("run-scoped CTAPHID channel was rejected as invalid after retry")
 
     def _with_device(self, matched: MatchedDevice, fn: Callable[[hid.device], dict[str, Any]]) -> dict[str, Any]:
+        if self._run_stop.is_set():
+            raise RuntimeError("run stopped")
         return fn(self._get_run_device(matched))
 
     def _scenario_static_attestation_assets(self) -> dict[str, Any]:
@@ -1533,6 +1558,7 @@ class ConformanceSuiteService:
 
         def run(device: hid.device) -> dict[str, Any]:
             trace: list[dict[str, str]] = []
+            credential_ids = [resident["credential_id"]]
             for _ in range(2):
                 _, response_payload, parsed = self._send_make_credential(
                     device,
@@ -1543,22 +1569,26 @@ class ConformanceSuiteService:
                 )
                 if parsed["ctap_status"] != 0x00:
                     raise RuntimeError("failed to seed additional resident credentials for GetNextAssertion")
+                auth_data = parsed.get("auth_data", {})
+                if "credential_id" not in auth_data:
+                    raise RuntimeError("seeded resident credential did not include a credential ID")
+                credential_ids.append(bytes.fromhex(auth_data["credential_id"]))
                 runtime["credentials"].setdefault("resident_multi", []).append(response_payload.hex())
             cid, first_payload, first_parsed = self._send_get_assertion(
                 device,
                 resident["rp_id"],
-                credential_ids=[],
+                credential_ids=credential_ids,
                 silent=False,
                 include_rk_option=False,
                 trace=trace,
             )
             if first_parsed["ctap_status"] != 0x00:
-                raise RuntimeError("initial multi-match GetAssertion failed")
+                raise RuntimeError("initial allow-list multi-match GetAssertion failed")
             first_decoded = first_parsed.get("decoded") or {}
             first_auth_data = first_parsed.get("auth_data") or {}
             number_of_credentials = first_decoded.get(5)
             if not isinstance(number_of_credentials, int) or number_of_credentials < 2:
-                raise RuntimeError("initial multi-match GetAssertion did not advertise multiple credentials")
+                raise RuntimeError("initial allow-list multi-match GetAssertion did not advertise multiple credentials")
 
             other_cid = probe.allocate_cid(device, 3000, False)
             wrong_cid_response_cid, wrong_cid_response_cmd, wrong_cid_response_payload = probe.transact(
@@ -2152,6 +2182,13 @@ class ConformanceSuiteService:
             }
         self._emit("browser_request", self.get_status())
         event.wait()
+        if self._run_stop.is_set():
+            return {
+                "status": "blocked",
+                "summary": f"browser scenario {scenario_id} was stopped",
+                "details": {},
+                "evidence": {},
+            }
         with self._lock:
             result = copy.deepcopy(self._browser_request_result)
             self._browser_request_event = None

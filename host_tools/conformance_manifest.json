@@ -140,7 +140,7 @@
       "section": "CTAP2 commands",
       "surface": "Multiple assertions",
       "required": true,
-      "classification": "intentional product choice",
+      "classification": "aligned",
       "scenario_ids": ["ctap_get_next_assertion"]
     },
     {
@@ -148,7 +148,7 @@
       "section": "CTAP2 commands",
       "surface": "On-device account chooser",
       "required": false,
-      "classification": "intentional product choice",
+      "classification": "aligned",
       "scenario_ids": []
     },
     {
