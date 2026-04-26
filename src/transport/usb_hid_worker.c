@@ -1,14 +1,24 @@
 #include "usb_hid_worker.h"
 
+#ifndef ZF_HOST_TEST
+#include <furi_hal_usb.h>
+#endif
 #include <furi_hal_usb_hid_u2f.h>
 #include <string.h>
 
 #include "usb_hid_session.h"
 #include "../u2f/adapter.h"
 #include "../zerofido_app_i.h"
+#include "../zerofido_crypto.h"
 #include "../zerofido_notify.h"
 #include "../zerofido_ui.h"
 #include "../zerofido_ui_i.h"
+
+#ifdef ZF_HOST_TEST
+#define ZF_USB_RESTORE_DEFAULT NULL
+#else
+#define ZF_USB_RESTORE_DEFAULT (&usb_cdc_single)
+#endif
 
 #define ZF_WORKER_EVT_STOP (1 << 0)
 #define ZF_WORKER_EVT_CONNECT (1 << 1)
@@ -70,8 +80,12 @@ static void zf_transport_event_callback(HidU2fEvent ev, void *context) {
 }
 
 static bool zf_transport_enable_usb(ZerofidoApp *app) {
-    app->previous_usb = furi_hal_usb_get_config();
-    if (furi_hal_usb_set_config(&usb_hid_u2f, NULL)) {
+    FuriHalUsbInterface *current_usb = NULL;
+
+    furi_hal_hid_u2f_set_callback(NULL, NULL);
+    current_usb = furi_hal_usb_get_config();
+    app->previous_usb = current_usb == &usb_hid_u2f ? ZF_USB_RESTORE_DEFAULT : current_usb;
+    if (current_usb == &usb_hid_u2f || furi_hal_usb_set_config(&usb_hid_u2f, NULL)) {
         return true;
     }
 
@@ -80,10 +94,24 @@ static bool zf_transport_enable_usb(ZerofidoApp *app) {
 }
 
 static void zf_transport_restore_usb(ZerofidoApp *app) {
+    FuriHalUsbInterface *restore_usb = app->previous_usb;
+
     furi_hal_hid_u2f_set_callback(NULL, NULL);
-    if (app->previous_usb) {
-        furi_hal_usb_set_config(app->previous_usb, NULL);
+    if (!restore_usb && furi_hal_usb_get_config() == &usb_hid_u2f) {
+        restore_usb = ZF_USB_RESTORE_DEFAULT;
     }
+    if (restore_usb) {
+        if (furi_hal_usb_set_config(restore_usb, NULL)) {
+            app->previous_usb = NULL;
+        } else {
+            zerofido_ui_set_status(app, "USB restore failed");
+        }
+    }
+}
+
+static bool zf_transport_stop_requested(const ZfTransportState *transport) {
+    return (transport && transport->stopping) ||
+           ((furi_thread_flags_get() & ZF_WORKER_EVT_STOP) != 0U);
 }
 
 static void zf_transport_worker_hide_interaction_if_needed(ZerofidoApp *app, bool canceled) {
@@ -156,7 +184,11 @@ static void zf_transport_tick(ZfTransportState *transport) {
     zf_transport_session_tick(transport, furi_get_tick());
 }
 
-static void zf_transport_drain_processing_control_requests(ZerofidoApp *app,
+static uint32_t zf_transport_worker_next_timeout(const ZfTransportState *transport) {
+    return transport && transport->active ? ZF_WORKER_POLL_MS : FuriWaitForever;
+}
+
+static bool zf_transport_drain_processing_control_requests(ZerofidoApp *app,
                                                            ZfTransportState *transport) {
     uint8_t packet[ZF_CTAPHID_PACKET_SIZE];
 
@@ -164,15 +196,19 @@ static void zf_transport_drain_processing_control_requests(ZerofidoApp *app,
         uint32_t actions = 0;
         size_t packet_len = 0;
 
+        if (zf_transport_stop_requested(transport)) {
+            transport->processing_cancel_requested = true;
+            return false;
+        }
         if (!zf_transport_read_request(packet, &packet_len)) {
-            return;
+            return true;
         }
 
-        uint8_t status = zf_transport_session_handle_processing_control(
-            app, transport, packet, packet_len, &actions);
+        uint8_t status = zf_transport_session_handle_processing_control(app, transport, packet,
+                                                                        packet_len, &actions);
         zf_transport_worker_apply_actions(app, actions);
         if (status != ZF_CTAP_SUCCESS) {
-            return;
+            return false;
         }
     }
 }
@@ -182,11 +218,19 @@ static void zf_transport_handle_request(ZerofidoApp *app, ZfTransportState *tran
     uint32_t actions = 0;
     size_t packet_len = 0;
 
+    if (zf_transport_stop_requested(transport)) {
+        transport->processing_cancel_requested = true;
+        return;
+    }
     if ((flags & ZF_WORKER_EVT_REQUEST) == 0 && !zf_transport_read_request(packet, &packet_len)) {
         return;
     }
 
     while (true) {
+        if (zf_transport_stop_requested(transport)) {
+            transport->processing_cancel_requested = true;
+            return;
+        }
         if (packet_len == 0 && !zf_transport_read_request(packet, &packet_len)) {
             return;
         }
@@ -198,26 +242,86 @@ static void zf_transport_handle_request(ZerofidoApp *app, ZfTransportState *tran
     }
 }
 
-uint8_t zf_transport_usb_hid_poll_cbor_control(ZerofidoApp *app, uint32_t current_cid) {
+void zf_transport_usb_hid_send_dispatch_result(ZerofidoApp *app,
+                                               const ZfProtocolDispatchRequest *request,
+                                               const ZfProtocolDispatchResult *result) {
+    uint8_t response_command = ZF_CTAPHID_ERROR;
+
+    if (!request || !result) {
+        return;
+    }
+
+    if (result->send_transport_error) {
+        zf_transport_session_send_error(request->session_id, result->transport_error);
+        if (app) {
+            zf_crypto_secure_zero(app->transport_arena, sizeof(app->transport_arena));
+        }
+        return;
+    }
+
+    switch (request->protocol) {
+    case ZfTransportProtocolKindPing:
+        response_command = ZF_CTAPHID_PING;
+        break;
+    case ZfTransportProtocolKindU2f:
+        response_command = ZF_CTAPHID_MSG;
+        break;
+    case ZfTransportProtocolKindCtap2:
+        response_command = ZF_CTAPHID_CBOR;
+        break;
+    case ZfTransportProtocolKindWink:
+        response_command = ZF_CTAPHID_WINK;
+        break;
+    default:
+        zf_transport_session_send_error(request->session_id, ZF_HID_ERR_INVALID_CMD);
+        if (app) {
+            zf_crypto_secure_zero(app->transport_arena, sizeof(app->transport_arena));
+        }
+        return;
+    }
+
+    if (result->response_len == 0 && request->protocol != ZfTransportProtocolKindWink) {
+        zf_transport_session_send_error(request->session_id, ZF_HID_ERR_OTHER);
+        if (app) {
+            zf_crypto_secure_zero(app->transport_arena, sizeof(app->transport_arena));
+        }
+        return;
+    }
+
+    zf_transport_session_send_frames(request->session_id, response_command, result->response,
+                                     result->response_len);
+    if (app) {
+        zf_crypto_secure_zero(app->transport_arena, sizeof(app->transport_arena));
+    }
+}
+
+uint8_t zf_transport_usb_hid_poll_cbor_control(ZerofidoApp *app,
+                                               ZfTransportSessionId current_session_id) {
     ZfTransportState *transport = app ? app->transport_state : NULL;
 
     if (!transport || !transport->processing || transport->cmd != ZF_CTAPHID_CBOR ||
-        transport->cid != current_cid) {
+        transport->cid != current_session_id) {
         return ZF_CTAP_SUCCESS;
     }
-    if (transport->processing_cancel_requested) {
+    if (zf_transport_stop_requested(transport) || transport->processing_cancel_requested) {
+        transport->processing_cancel_requested = true;
         return ZF_CTAP_ERR_KEEPALIVE_CANCEL;
     }
 
     if ((furi_thread_flags_get() & ZF_WORKER_EVT_REQUEST) != 0) {
         furi_thread_flags_clear(ZF_WORKER_EVT_REQUEST);
     }
-    zf_transport_drain_processing_control_requests(app, transport);
+    if (!zf_transport_drain_processing_control_requests(app, transport) ||
+        zf_transport_stop_requested(transport) || transport->processing_cancel_requested) {
+        transport->processing_cancel_requested = true;
+        return ZF_CTAP_ERR_KEEPALIVE_CANCEL;
+    }
     zf_transport_tick(transport);
     return ZF_CTAP_SUCCESS;
 }
 
-bool zf_transport_usb_hid_wait_for_interaction(ZerofidoApp *app, uint32_t current_cid,
+bool zf_transport_usb_hid_wait_for_interaction(ZerofidoApp *app,
+                                               ZfTransportSessionId current_session_id,
                                                bool *approved) {
     ZfTransportState *transport = app ? app->transport_state : NULL;
     uint8_t packet[ZF_CTAPHID_PACKET_SIZE];
@@ -233,22 +337,25 @@ bool zf_transport_usb_hid_wait_for_interaction(ZerofidoApp *app, uint32_t curren
         }
 
         if (!sent_keepalive) {
-            zf_transport_usb_hid_send_keepalive(current_cid, ZF_KEEPALIVE_UPNEEDED);
+            zf_transport_session_send_frames(current_session_id, ZF_CTAPHID_KEEPALIVE,
+                                             (const uint8_t[]){ZF_KEEPALIVE_UPNEEDED}, 1);
             sent_keepalive = true;
         }
 
         uint32_t flags = zf_transport_worker_wait(ZF_KEEPALIVE_INTERVAL_MS);
-        if ((flags & FuriFlagErrorTimeout) != 0) {
-            zf_transport_handle_request(app, transport, 0, packet);
-            if (transport->processing_cancel_requested) {
+        if ((flags & FuriFlagError) != 0) {
+            if (flags != FuriFlagErrorTimeout) {
                 return false;
             }
-            zf_transport_usb_hid_send_keepalive(current_cid, ZF_KEEPALIVE_UPNEEDED);
+            zf_transport_handle_request(app, transport, 0, packet);
+            if (zf_transport_stop_requested(transport) || transport->processing_cancel_requested) {
+                transport->processing_cancel_requested = true;
+                return false;
+            }
+            zf_transport_session_send_frames(current_session_id, ZF_CTAPHID_KEEPALIVE,
+                                             (const uint8_t[]){ZF_KEEPALIVE_UPNEEDED}, 1);
             zf_transport_tick(transport);
             continue;
-        }
-        if ((flags & FuriFlagError) != 0) {
-            return false;
         }
         if (flags & ZF_WORKER_EVT_STOP) {
             return false;
@@ -256,6 +363,10 @@ bool zf_transport_usb_hid_wait_for_interaction(ZerofidoApp *app, uint32_t curren
 
         zf_transport_handle_worker_flags(app, transport, flags);
         zf_transport_handle_request(app, transport, flags, packet);
+        if (zf_transport_stop_requested(transport) || transport->processing_cancel_requested) {
+            transport->processing_cancel_requested = true;
+            return false;
+        }
         zf_transport_tick(transport);
     }
 
@@ -273,23 +384,28 @@ int32_t zf_transport_usb_hid_worker(void *context) {
     uint8_t packet[ZF_CTAPHID_PACKET_SIZE];
 
     memset(transport, 0, sizeof(*transport));
+    zf_transport_session_attach_arena(transport, app->transport_arena, ZF_MAX_MSG_SIZE);
     if (!zf_transport_enable_usb(app)) {
         return 0;
     }
 
     furi_hal_hid_u2f_set_callback(zf_transport_event_callback, app);
+    furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
     app->transport_state = transport;
+    furi_mutex_release(app->ui_mutex);
     if (furi_hal_hid_u2f_is_connected()) {
         zf_transport_worker_on_connect(app, transport);
     }
 
     while (true) {
-        uint32_t flags = zf_transport_worker_wait(ZF_WORKER_POLL_MS);
+        uint32_t flags = zf_transport_worker_wait(zf_transport_worker_next_timeout(transport));
 
-        if ((flags & FuriFlagErrorTimeout) != 0) {
-            flags = 0;
-        } else if ((flags & FuriFlagError) != 0) {
-            break;
+        if ((flags & FuriFlagError) != 0) {
+            if (flags == FuriFlagErrorTimeout) {
+                flags = 0;
+            } else {
+                break;
+            }
         }
         if (flags & ZF_WORKER_EVT_STOP) {
             break;
@@ -300,18 +416,37 @@ int32_t zf_transport_usb_hid_worker(void *context) {
         zf_transport_tick(transport);
     }
 
+    furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
     app->transport_state = NULL;
+    furi_mutex_release(app->ui_mutex);
+    zf_transport_session_reset(transport);
+    zf_crypto_secure_zero(packet, sizeof(packet));
+    zf_crypto_secure_zero(app->transport_arena, sizeof(app->transport_arena));
     zf_transport_restore_usb(app);
     zerofido_notify_reset(app);
     return 0;
 }
 
 void zf_transport_usb_hid_stop(ZerofidoApp *app) {
-    zf_transport_signal_worker(app, ZF_WORKER_EVT_STOP);
-}
+    ZfTransportState *transport = NULL;
+    FuriSemaphore *approval_done = NULL;
 
-void zf_transport_usb_hid_send_keepalive(uint32_t cid, uint8_t status) {
-    zf_transport_session_send_frames(cid, ZF_CTAPHID_KEEPALIVE, &status, 1);
+    if (!app) {
+        return;
+    }
+
+    furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
+    transport = app->transport_state;
+    approval_done = app->approval.done;
+    if (transport) {
+        transport->stopping = true;
+        transport->processing_cancel_requested = true;
+    }
+    furi_mutex_release(app->ui_mutex);
+    if (approval_done) {
+        furi_semaphore_release(approval_done);
+    }
+    zf_transport_signal_worker(app, ZF_WORKER_EVT_STOP);
 }
 
 void zf_transport_usb_hid_notify_interaction_changed(ZerofidoApp *app) {

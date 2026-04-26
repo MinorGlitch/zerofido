@@ -13,6 +13,7 @@
 
 #include "u2f/session.h"
 #include "transport/adapter.h"
+#include "transport/nfc_worker.h"
 #include "transport/usb_hid_session.h"
 #include "zerofido_pin.h"
 #include "zerofido_runtime_config.h"
@@ -28,6 +29,7 @@ typedef enum {
     ZfViewPinMenu = 5,
     ZfViewPinInput = 6,
     ZfViewPinConfirm = 7,
+    ZfViewCount,
 } ZfViewId;
 
 typedef enum {
@@ -37,6 +39,7 @@ typedef enum {
     ZfEventDisconnected,
     ZfEventActivity,
     ZfEventApprovalTimeout,
+    ZfEventNotificationTimeout,
 } ZfCustomEvent;
 
 typedef enum {
@@ -113,12 +116,16 @@ typedef struct ZerofidoApp {
     Storage *storage;
     NotificationApp *notifications;
     FuriTimer *notify_timer;
+    FuriThread *startup_thread;
     FuriThread *worker_thread;
     FuriMutex *ui_mutex;
     const ZfTransportAdapterOps *transport_adapter;
     FuriHalUsbInterface *previous_usb;
     void *transport_state;
-    ZfTransportState transport_state_storage;
+    union {
+        ZfTransportState usb_hid;
+        ZfNfcTransportState nfc;
+    } transport_state_storage_union;
     U2fData *u2f;
     ZfClientPinState pin_state;
     ZfRuntimeConfig runtime_config;
@@ -128,10 +135,18 @@ typedef struct ZerofidoApp {
     bool ui_events_enabled;
     bool transport_connected;
     bool maintenance_busy;
+    bool transport_auto_accept_transaction;
+    bool startup_complete;
+    bool startup_ok;
+    uint32_t ui_registered_views;
+    ZfViewId active_view;
     FuriThreadId ui_thread_id;
     char last_ctap_command_tag[16];
     char last_ctap_step[24];
-    uint8_t transport_response_buffer[ZF_MAX_MSG_SIZE];
+    char status_text[64];
+    uint8_t transport_arena[ZF_TRANSPORT_ARENA_SIZE];
+    ZfCommandScratchArena command_scratch;
+    ZfUiScratchArena ui_scratch;
     char pin_input_buffer[64];
     char pin_new_buffer[64];
     char pin_current_buffer[64];
@@ -143,6 +158,10 @@ typedef struct ZerofidoApp {
     ZfViewId pin_confirm_return_view;
     bool startup_reset_available;
     ZfApprovalRequest approval;
+    ZfCredentialIndexEntry store_records[ZF_MAX_CREDENTIALS];
     ZfCredentialStore store;
     ZfAssertionQueue assertion_queue;
 } ZerofidoApp;
+
+#define transport_state_storage transport_state_storage_union.usb_hid
+#define transport_nfc_state_storage transport_state_storage_union.nfc

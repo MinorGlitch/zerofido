@@ -4,19 +4,26 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "usb_hid_session.h"
+#include "../zerofido_types.h"
 
 typedef struct ZerofidoApp ZerofidoApp;
+typedef struct ZfTransportState ZfTransportState;
+
+typedef enum {
+    ZfTransportProtocolKindPing = 0,
+    ZfTransportProtocolKindU2f = 1,
+    ZfTransportProtocolKindCtap2 = 2,
+    ZfTransportProtocolKindWink = 3,
+} ZfTransportProtocolKind;
 
 typedef struct {
-    uint32_t cid;
-    uint8_t transport_command;
+    ZfTransportSessionId session_id;
+    ZfTransportProtocolKind protocol;
     const uint8_t *payload;
     size_t payload_len;
 } ZfProtocolDispatchRequest;
 
 typedef struct {
-    uint8_t transport_response_command;
     uint8_t *response;
     size_t response_capacity;
     size_t response_len;
@@ -25,5 +32,6 @@ typedef struct {
 } ZfProtocolDispatchResult;
 
 void zf_transport_dispatch_complete_message(ZerofidoApp *app, ZfTransportState *transport,
-                                            uint32_t cid, uint8_t transport_command,
+                                            ZfTransportSessionId session_id,
+                                            ZfTransportProtocolKind protocol,
                                             const uint8_t *payload, size_t payload_len);

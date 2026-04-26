@@ -7,6 +7,11 @@
 typedef struct ZerofidoApp ZerofidoApp;
 
 typedef enum {
+    ZfTransportModeUsbHid = 0,
+    ZfTransportModeNfc = 1,
+} ZfTransportMode;
+
+typedef enum {
     ZfFido2ProfileCurrent = 0,
 } ZfFido2Profile;
 
@@ -15,7 +20,7 @@ typedef enum {
 } ZfU2fProfile;
 
 typedef struct {
-    bool usb_hid_enabled;
+    ZfTransportMode transport_mode;
     bool fido2_enabled;
     ZfFido2Profile fido2_profile;
     bool u2f_enabled;
@@ -25,6 +30,7 @@ typedef struct {
 
 typedef struct {
     bool usb_hid_enabled;
+    bool nfc_enabled;
     bool fido2_enabled;
     bool u2f_enabled;
     bool client_pin_enabled;
@@ -36,6 +42,7 @@ typedef struct {
     bool advertise_fido_2_0;
     bool advertise_u2f_v2;
     bool advertise_usb_transport;
+    bool advertise_nfc_transport;
     bool auto_accept_requests;
 } ZfResolvedCapabilities;
 
@@ -45,8 +52,10 @@ bool zf_runtime_config_persist(Storage *storage, const ZfRuntimeConfig *config);
 void zf_runtime_config_apply(ZerofidoApp *app, const ZfRuntimeConfig *config);
 bool zf_runtime_config_set_auto_accept_requests(ZerofidoApp *app, Storage *storage, bool enabled);
 bool zf_runtime_config_set_fido2_enabled(ZerofidoApp *app, Storage *storage, bool enabled);
+bool zf_runtime_config_set_transport_mode(ZerofidoApp *app, Storage *storage, ZfTransportMode mode);
 void zf_runtime_config_resolve_capabilities(const ZfRuntimeConfig *config,
                                             ZfResolvedCapabilities *capabilities);
 void zf_runtime_get_effective_capabilities(const ZerofidoApp *app,
                                            ZfResolvedCapabilities *capabilities);
 bool zf_runtime_ctap_command_enabled(const ZerofidoApp *app, uint8_t cmd);
+const char *zf_transport_mode_name(ZfTransportMode mode);

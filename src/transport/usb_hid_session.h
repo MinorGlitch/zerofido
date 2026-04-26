@@ -44,11 +44,12 @@ typedef struct {
     uint32_t last_used;
 } ZfAllocatedCid;
 
-typedef struct {
+struct ZfTransportState {
     bool active;
     bool processing;
     bool processing_resync;
     bool processing_cancel_requested;
+    bool stopping;
     uint32_t processing_generation;
     uint32_t cid;
     uint8_t cmd;
@@ -58,15 +59,20 @@ typedef struct {
     uint32_t last_activity;
     uint32_t lock_cid;
     uint32_t lock_expires_at;
-    uint8_t payload[ZF_MAX_MSG_SIZE];
+    uint8_t *payload;
+    size_t payload_capacity;
     ZfAllocatedCid allocated_cids[ZF_MAX_ALLOCATED_CIDS];
     size_t allocated_count;
-} ZfTransportState;
+};
 
+typedef struct ZfTransportState ZfTransportState;
+
+void zf_transport_session_attach_arena(ZfTransportState *transport, uint8_t *payload,
+                                       size_t payload_capacity);
 void zf_transport_session_reset(ZfTransportState *transport);
 void zf_transport_session_send_frames(uint32_t cid, uint8_t cmd, const uint8_t *data, size_t size);
 void zf_transport_session_send_error(uint32_t cid, uint8_t hid_error);
-uint8_t zf_transport_session_handle_processing_control(ZerofidoApp *app,
+uint8_t zf_transport_session_handle_processing_control(const ZerofidoApp *app,
                                                        ZfTransportState *transport,
                                                        const uint8_t *packet, size_t packet_len,
                                                        uint32_t *actions);

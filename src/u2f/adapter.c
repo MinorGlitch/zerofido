@@ -8,6 +8,7 @@
 #include "persistence.h"
 #include "../zerofido_app_i.h"
 #include "../zerofido_attestation.h"
+#include "../zerofido_crypto.h"
 #include "../zerofido_notify.h"
 #include "../zerofido_runtime_config.h"
 #include "../zerofido_ui.h"
@@ -37,8 +38,7 @@ static uint16_t zf_u2f_adapter_reply_version(uint8_t *response, size_t response_
 }
 
 static bool zf_u2f_adapter_ensure_attestation_assets(const uint8_t *cert, size_t cert_len,
-                                                     const uint8_t *cert_key,
-                                                     size_t cert_key_len) {
+                                                     const uint8_t *cert_key, size_t cert_key_len) {
     uint8_t loaded_cert_key[ZF_PRIVATE_KEY_LEN];
     bool assets_ready = false;
 
@@ -46,12 +46,12 @@ static bool zf_u2f_adapter_ensure_attestation_assets(const uint8_t *cert, size_t
         return false;
     }
 
-    memset(loaded_cert_key, 0, sizeof(loaded_cert_key));
+    zf_crypto_secure_zero(loaded_cert_key, sizeof(loaded_cert_key));
     if (u2f_data_check(true) && u2f_data_cert_check() && u2f_data_cert_key_load(loaded_cert_key) &&
         u2f_data_cert_key_matches(loaded_cert_key)) {
         assets_ready = true;
     }
-    memset(loaded_cert_key, 0, sizeof(loaded_cert_key));
+    zf_crypto_secure_zero(loaded_cert_key, sizeof(loaded_cert_key));
 
     if (assets_ready) {
         return true;
@@ -75,8 +75,8 @@ static void zf_u2f_format_app_id(const uint8_t *request, size_t request_len, cha
              request[ZF_U2F_APP_ID_OFFSET + 6], request[ZF_U2F_APP_ID_OFFSET + 7]);
 }
 
-static bool zf_u2f_request_approval(ZerofidoApp *app, uint32_t cid, const uint8_t *request,
-                                    uint16_t request_len) {
+static bool zf_u2f_request_approval(ZerofidoApp *app, ZfTransportSessionId session_id,
+                                    const uint8_t *request, uint16_t request_len) {
     const char *operation = NULL;
     if (!zf_u2f_adapter_is_available(app)) {
         return false;
@@ -89,7 +89,7 @@ static bool zf_u2f_request_approval(ZerofidoApp *app, uint32_t cid, const uint8_
     bool approved = false;
     zf_u2f_format_app_id(request, request_len, rp_text, sizeof(rp_text));
     if (!zerofido_ui_request_approval(app, ZfUiProtocolU2f, operation, rp_text, "Touch required",
-                                      cid, &approved)) {
+                                      session_id, &approved)) {
         return false;
     }
 
@@ -160,6 +160,18 @@ bool zf_u2f_adapter_init(ZerofidoApp *app) {
     return true;
 }
 
+bool zf_u2f_adapter_ensure_init(ZerofidoApp *app) {
+    if (!app) {
+        return false;
+    }
+
+    if (app->u2f) {
+        return true;
+    }
+
+    return zf_u2f_adapter_init(app);
+}
+
 void zf_u2f_adapter_deinit(ZerofidoApp *app) {
     if (!app->u2f) {
         return;
@@ -181,8 +193,9 @@ void zf_u2f_adapter_set_connected(ZerofidoApp *app, bool connected) {
     u2f_set_state(app->u2f, connected ? 1 : 0);
 }
 
-size_t zf_u2f_adapter_handle_msg(ZerofidoApp *app, uint32_t cid, const uint8_t *request,
-                                 size_t request_len, uint8_t *response, size_t response_capacity) {
+size_t zf_u2f_adapter_handle_msg(ZerofidoApp *app, ZfTransportSessionId session_id,
+                                 const uint8_t *request, size_t request_len, uint8_t *response,
+                                 size_t response_capacity) {
     ZfResolvedCapabilities capabilities;
     uint16_t validation_status = 0;
 
@@ -194,9 +207,8 @@ size_t zf_u2f_adapter_handle_msg(ZerofidoApp *app, uint32_t cid, const uint8_t *
         return zf_u2f_adapter_reply_status(response, zf_u2f_adapter_state_wrong_length);
     }
 
-    validation_status =
-        u2f_validate_request_into_response(request, (uint16_t)request_len, response,
-                                          (uint16_t)response_capacity);
+    validation_status = u2f_validate_request_into_response(request, (uint16_t)request_len, response,
+                                                           (uint16_t)response_capacity);
     if (validation_status != 0) {
         return validation_status;
     }
@@ -207,24 +219,29 @@ size_t zf_u2f_adapter_handle_msg(ZerofidoApp *app, uint32_t cid, const uint8_t *
         return zf_u2f_adapter_reply_version(response, response_capacity);
     }
 
-    memcpy(response, request, request_len);
-    if (!zf_u2f_adapter_is_available(app)) {
+    if (response != request) {
+        memcpy(response, request, request_len);
+    }
+    if (!zf_u2f_adapter_ensure_init(app)) {
         return zf_u2f_adapter_reply_status(response, zf_u2f_adapter_state_not_supported);
     }
     if (response_capacity < ZF_U2F_VERSION_RESPONSE_LEN) {
         return 0;
     }
-    if (!zf_u2f_request_approval(app, cid, response, (uint16_t)request_len)) {
+    if (!zf_u2f_request_approval(app, session_id, response, (uint16_t)request_len)) {
         memcpy(response, zf_u2f_adapter_state_user_missing,
                sizeof(zf_u2f_adapter_state_user_missing));
         return sizeof(zf_u2f_adapter_state_user_missing);
     }
 
-    return u2f_msg_parse(app->u2f, response, (uint16_t)request_len, (uint16_t)response_capacity);
+    validation_status =
+        u2f_msg_parse(app->u2f, response, (uint16_t)request_len, (uint16_t)response_capacity);
+    u2f_clear_user_present(app->u2f);
+    return validation_status;
 }
 
 void zf_u2f_adapter_wink(ZerofidoApp *app) {
-    if (app->u2f) {
+    if (zf_u2f_adapter_ensure_init(app) && app->u2f) {
         u2f_wink(app->u2f);
     }
 }

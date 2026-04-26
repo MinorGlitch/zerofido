@@ -5,6 +5,7 @@
 
 #include "dispatch.h"
 #include "../zerofido_app_i.h"
+#include "../zerofido_crypto.h"
 
 static void zf_transport_handle_init(uint32_t response_cid, uint32_t assigned_cid,
                                      const uint8_t *payload, size_t payload_len,
@@ -125,7 +126,27 @@ static void zf_transport_add_action(uint32_t *actions, uint32_t action) {
     }
 }
 
-static uint8_t zf_transport_resync_processing(ZerofidoApp *app, ZfTransportState *transport,
+void zf_transport_session_attach_arena(ZfTransportState *transport, uint8_t *payload,
+                                       size_t payload_capacity) {
+    if (!transport) {
+        return;
+    }
+
+    transport->payload = payload;
+    transport->payload_capacity = payload_capacity;
+}
+
+static bool zf_transport_ensure_payload(ZerofidoApp *app, ZfTransportState *transport) {
+    if (!transport) {
+        return false;
+    }
+    if (!transport->payload && app) {
+        zf_transport_session_attach_arena(transport, app->transport_arena, ZF_MAX_MSG_SIZE);
+    }
+    return transport->payload && transport->payload_capacity >= ZF_MAX_MSG_SIZE;
+}
+
+static uint8_t zf_transport_resync_processing(const ZerofidoApp *app, ZfTransportState *transport,
                                               uint32_t cid, const uint8_t *packet,
                                               size_t packet_len, uint16_t msg_len,
                                               uint32_t *actions) {
@@ -249,10 +270,20 @@ static void zf_transport_send_busy_or_invalid_seq(const ZfTransportState *transp
 }
 
 void zf_transport_session_reset(ZfTransportState *transport) {
+    size_t used = transport->total_len > transport->received_len ? transport->total_len
+                                                                 : transport->received_len;
+
+    if (used > transport->payload_capacity) {
+        used = transport->payload_capacity;
+    }
+    if (transport->payload && used > 0U) {
+        zf_crypto_secure_zero(transport->payload, used);
+    }
     transport->active = false;
     transport->processing = false;
     transport->processing_resync = false;
     transport->processing_cancel_requested = false;
+    transport->stopping = false;
     transport->processing_generation = 0;
     transport->cid = 0;
     transport->cmd = 0;
@@ -262,7 +293,7 @@ void zf_transport_session_reset(ZfTransportState *transport) {
     transport->last_activity = 0;
 }
 
-uint8_t zf_transport_session_handle_processing_control(ZerofidoApp *app,
+uint8_t zf_transport_session_handle_processing_control(const ZerofidoApp *app,
                                                        ZfTransportState *transport,
                                                        const uint8_t *packet, size_t packet_len,
                                                        uint32_t *actions) {
@@ -311,12 +342,37 @@ uint8_t zf_transport_session_handle_processing_control(ZerofidoApp *app,
 }
 
 static void zf_transport_complete_if_ready(ZerofidoApp *app, ZfTransportState *transport) {
+    ZfTransportProtocolKind protocol = ZfTransportProtocolKindPing;
+
     if (transport->received_len != transport->total_len) {
         return;
     }
 
     transport->active = false;
-    zf_transport_dispatch_complete_message(app, transport, transport->cid, transport->cmd,
+    switch (transport->cmd) {
+    case ZF_CTAPHID_PING:
+        protocol = ZfTransportProtocolKindPing;
+        break;
+    case ZF_CTAPHID_MSG:
+        protocol = ZfTransportProtocolKindU2f;
+        break;
+    case ZF_CTAPHID_WINK:
+        protocol = ZfTransportProtocolKindWink;
+        break;
+    case ZF_CTAPHID_CBOR:
+        protocol = ZfTransportProtocolKindCtap2;
+        break;
+    default:
+        zf_transport_session_send_error(transport->cid, ZF_HID_ERR_INVALID_CMD);
+        return;
+    }
+
+    if (!zf_transport_ensure_payload(app, transport)) {
+        zf_transport_session_send_error(transport->cid, ZF_HID_ERR_OTHER);
+        return;
+    }
+
+    zf_transport_dispatch_complete_message(app, transport, transport->cid, protocol,
                                            transport->payload, transport->total_len);
 }
 
@@ -347,7 +403,7 @@ static bool zf_transport_validate_command_length(uint32_t cid, uint8_t cmd, uint
 
 static bool zf_transport_begin_message(ZfTransportState *transport, uint32_t cid, uint8_t cmd,
                                        uint16_t msg_len) {
-    if (msg_len > ZF_MAX_MSG_SIZE) {
+    if (!transport->payload || msg_len > transport->payload_capacity || msg_len > ZF_MAX_MSG_SIZE) {
         zf_transport_session_send_error(cid, ZF_HID_ERR_INVALID_LEN);
         zf_transport_session_reset(transport);
         return false;
@@ -382,7 +438,7 @@ static void zf_transport_copy_init_payload(ZfTransportState *transport, const ui
     transport->received_len = chunk;
 }
 
-static bool zf_transport_handle_init_command(ZerofidoApp *app, ZfTransportState *transport,
+static bool zf_transport_handle_init_command(const ZerofidoApp *app, ZfTransportState *transport,
                                              uint32_t cid, uint8_t cmd, uint16_t msg_len,
                                              const uint8_t *packet, size_t packet_len,
                                              uint32_t *actions) {
@@ -505,6 +561,10 @@ static void zf_transport_handle_init_packet(ZerofidoApp *app, ZfTransportState *
         return;
     }
     zf_transport_touch_cid(transport, cid);
+    if (!zf_transport_ensure_payload(app, transport)) {
+        zf_transport_session_send_error(cid, ZF_HID_ERR_OTHER);
+        return;
+    }
     if (!zf_transport_begin_message(transport, cid, cmd, msg_len)) {
         return;
     }
@@ -641,8 +701,7 @@ void zf_transport_session_expire_lock(ZfTransportState *transport) {
 }
 
 void zf_transport_session_tick(ZfTransportState *transport, uint32_t now) {
-    if (transport->active &&
-        (uint32_t)(now - transport->last_activity) >= ZF_ASSEMBLY_TIMEOUT_MS) {
+    if (transport->active && (uint32_t)(now - transport->last_activity) >= ZF_ASSEMBLY_TIMEOUT_MS) {
         zf_transport_session_send_error(transport->cid, ZF_HID_ERR_MSG_TIMEOUT);
         zf_transport_session_reset(transport);
     }
