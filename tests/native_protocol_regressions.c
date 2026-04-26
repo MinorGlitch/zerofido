@@ -64,6 +64,7 @@ static bool g_fail_crypto_encrypt = false;
 static bool g_fail_crypto_decrypt = false;
 static size_t g_fail_crypto_decrypt_after = SIZE_MAX;
 static bool g_fail_crypto_enclave_load_key = false;
+static bool g_crypto_verify_hash_result = true;
 static uint8_t g_pin_file_data[128];
 static size_t g_pin_file_size = 0;
 static bool g_pin_file_exists = false;
@@ -175,6 +176,7 @@ static void test_storage_reset(void) {
     g_fail_crypto_decrypt = false;
     g_fail_crypto_decrypt_after = SIZE_MAX;
     g_fail_crypto_enclave_load_key = false;
+    g_crypto_verify_hash_result = true;
     memset(g_pin_file_data, 0, sizeof(g_pin_file_data));
     g_pin_file_size = 0;
     g_pin_file_exists = false;
@@ -577,9 +579,10 @@ void zf_crypto_sha256_concat(const uint8_t *first, size_t first_size, const uint
     }
 }
 
-bool zf_crypto_hmac_sha256_parts_with_scratch(
-    ZfHmacSha256Scratch *scratch, const uint8_t *key, size_t key_len, const uint8_t *first,
-    size_t first_size, const uint8_t *second, size_t second_size, uint8_t out[32]) {
+bool zf_crypto_hmac_sha256_parts_with_scratch(ZfHmacSha256Scratch *scratch, const uint8_t *key,
+                                              size_t key_len, const uint8_t *first,
+                                              size_t first_size, const uint8_t *second,
+                                              size_t second_size, uint8_t out[32]) {
     UNUSED(scratch);
     if (!key || !out || (first_size > 0U && !first) || (second_size > 0U && !second)) {
         return false;
@@ -686,7 +689,7 @@ bool zf_crypto_verify_hash_with_public_key(const uint8_t public_x[ZF_PUBLIC_KEY_
     UNUSED(hash);
     UNUSED(signature);
     UNUSED(signature_len);
-    return true;
+    return g_crypto_verify_hash_result;
 }
 
 bool zf_crypto_sign_hash(const ZfCredentialRecord *record, const uint8_t hash[32], uint8_t *out,
@@ -1377,6 +1380,45 @@ static bool parse_make_credential_auth_flags(const uint8_t *buffer, size_t size,
     }
 
     return false;
+}
+
+static bool parse_make_credential_none_attestation(const uint8_t *buffer, size_t size) {
+    ZfCborCursor cursor;
+    size_t pairs = 0;
+    bool saw_fmt = false;
+    bool saw_empty_att_stmt = false;
+
+    zf_cbor_cursor_init(&cursor, buffer, size);
+    if (!zf_cbor_read_map_start(&cursor, &pairs)) {
+        return false;
+    }
+
+    for (size_t i = 0; i < pairs; ++i) {
+        uint64_t key = 0;
+
+        if (!zf_cbor_read_uint(&cursor, &key)) {
+            return false;
+        }
+        if (key == 1) {
+            const uint8_t *fmt = NULL;
+            size_t fmt_len = 0;
+            if (!zf_cbor_read_text_ptr(&cursor, &fmt, &fmt_len) ||
+                !zf_ctap_text_equals(fmt, fmt_len, "none")) {
+                return false;
+            }
+            saw_fmt = true;
+        } else if (key == 3) {
+            size_t att_stmt_pairs = 0;
+            if (!zf_cbor_read_map_start(&cursor, &att_stmt_pairs) || att_stmt_pairs != 0) {
+                return false;
+            }
+            saw_empty_att_stmt = true;
+        } else if (!zf_cbor_skip(&cursor)) {
+            return false;
+        }
+    }
+
+    return saw_fmt && saw_empty_att_stmt && cursor.ptr == cursor.end;
 }
 
 static void mark_pin_token_issued(ZfClientPinState *state) {
@@ -2192,9 +2234,9 @@ static void test_assertion_response_user_fields_follow_uv(void) {
     strcpy(record.user_name, "alice");
     strcpy(record.user_display_name, "Alice Example");
 
-    expect(zf_ctap_build_assertion_response_with_scratch(
-               &scratch, &request, &record, true, true, 8, true, true, 2, response,
-               sizeof(response), &response_len) == ZF_CTAP_SUCCESS,
+    expect(zf_ctap_build_assertion_response_with_scratch(&scratch, &request, &record, true, true, 8,
+                                                         true, true, 2, response, sizeof(response),
+                                                         &response_len) == ZF_CTAP_SUCCESS,
            "uv assertion response should build");
     expect(contains_text(response, response_len, "name"), "uv response should include name key");
     expect(contains_text(response, response_len, "displayName"),
@@ -3943,8 +3985,7 @@ static void test_store_resident_records_for_same_user_coexist_after_reload(void)
            "second resident record should load from its own file");
     expect(memcmp(loaded.credential_id, second.credential_id, sizeof(second.credential_id)) == 0,
            "loaded resident record should keep its credential id");
-    expect(test_zf_store_init(&storage, &reloaded),
-           "reloading store should preserve both records");
+    expect(test_zf_store_init(&storage, &reloaded), "reloading store should preserve both records");
     expect(reloaded.count == 2, "store init must not collapse resident credentials for one user");
 }
 
@@ -4620,6 +4661,31 @@ static void test_make_credential_auto_accept_bypasses_approval_prompt(void) {
            "auto-accept makeCredential should bypass the approval prompt");
 }
 
+static void test_make_credential_returns_none_attestation(void) {
+    Storage storage = {0};
+    ZerofidoApp app = {0};
+    ZfCredentialIndexEntry app_store_records[ZF_MAX_CREDENTIALS] = {0};
+    app.store.records = app_store_records;
+    FuriMutex ui_mutex = {0};
+    uint8_t request[256];
+    uint8_t response[512];
+    size_t response_len = 0;
+
+    test_storage_reset();
+    app.storage = &storage;
+    app.ui_mutex = &ui_mutex;
+    test_enable_auto_accept_requests(&app);
+
+    response_len = zerofido_handle_ctap2(
+        &app, 0x01020304, request, encode_make_credential_ctap_request(request, sizeof(request)),
+        response, sizeof(response));
+
+    expect(response_len > 1, "MakeCredential should return a CTAP response body");
+    expect(response[0] == ZF_CTAP_SUCCESS, "MakeCredential should return success");
+    expect(parse_make_credential_none_attestation(response + 1, response_len - 1),
+           "MakeCredential should return fmt none and an empty attestation statement");
+}
+
 static void test_make_credential_nfc_auto_accept_keeps_uv_clear(void) {
     Storage storage = {0};
     ZerofidoApp app = {0};
@@ -4648,6 +4714,8 @@ static void test_make_credential_nfc_auto_accept_keeps_uv_clear(void) {
            "NFC auto-accept makeCredential should not fake user verification");
     expect(g_approval_request_count == 0,
            "NFC auto-accept makeCredential should bypass the approval prompt");
+    expect(g_status_update_count == 0,
+           "NFC auto-accept makeCredential should not update UI status before the APDU response");
 }
 
 static void test_make_credential_nfc_auto_accept_rejects_uv_option_without_pin(void) {
@@ -5809,6 +5877,29 @@ static void test_get_info_reports_firmware_version(void) {
            "GetInfo should report the firmwareVersion field");
 }
 
+static void test_u2f_attestation_cert_check_rejects_invalid_self_signature(void) {
+    uint8_t private_key[ZF_PRIVATE_KEY_LEN] = {0};
+    uint8_t public_key[U2F_ATTESTATION_PUBLIC_KEY_SIZE] = {0x04};
+    uint8_t cert[U2F_CERT_MAX_SIZE];
+    size_t cert_len = 0;
+    TestStorageFile *slot = NULL;
+
+    test_storage_reset();
+    expect(u2f_data_build_self_signed_attestation_cert(private_key, public_key, cert, sizeof(cert),
+                                                       &cert_len),
+           "native fixture should build a local U2F attestation cert");
+    slot = test_storage_file_slot(U2F_CERT_FILE, true);
+    expect(slot && cert_len <= sizeof(slot->data), "native fixture should allocate cert storage");
+    memcpy(slot->data, cert, cert_len);
+    slot->size = cert_len;
+    slot->exists = true;
+
+    expect(u2f_data_cert_check(), "valid local U2F attestation cert should pass validation");
+    g_crypto_verify_hash_result = false;
+    expect(!u2f_data_cert_check(),
+           "local U2F attestation cert with an invalid self-signature should be regenerated");
+}
+
 static void test_ctap_reset_succeeds_and_wipes_runtime_state(void) {
     ZerofidoApp app = {0};
     ZfCredentialIndexEntry app_store_records[ZF_MAX_CREDENTIALS] = {0};
@@ -6251,8 +6342,7 @@ static void test_store_add_record_failure_keeps_original_record(void) {
     strcpy(first.file_name, k_repeated_credential_file_name);
     strcpy(second.file_name, "2020202020202020202020202020202020202020202020202020202020202020");
 
-    expect(test_zf_store_add_record(&storage, &store, &first),
-           "write original resident record");
+    expect(test_zf_store_add_record(&storage, &store, &first), "write original resident record");
 
     g_storage_fail_rename_match = second.file_name;
     expect(!test_zf_store_add_record(&storage, &store, &second),
@@ -6489,6 +6579,7 @@ int main(void) {
     test_make_credential_legacy_pin_token_survives_up();
     test_make_credential_allows_discouraged_uv_when_pin_is_set();
     test_make_credential_auto_accept_bypasses_approval_prompt();
+    test_make_credential_returns_none_attestation();
     test_make_credential_nfc_auto_accept_keeps_uv_clear();
     test_make_credential_nfc_auto_accept_rejects_uv_option_without_pin();
     test_get_assertion_pin_auth_takes_precedence_over_uv();
@@ -6522,6 +6613,7 @@ int main(void) {
     test_get_info_advertises_cred_protect_extension();
     test_get_info_advertises_fido_2_1();
     test_get_info_reports_firmware_version();
+    test_u2f_attestation_cert_check_rejects_invalid_self_signature();
     test_ctap_reset_succeeds_and_wipes_runtime_state();
     test_ctap_reset_auto_accept_bypasses_approval_prompt();
     test_ctap_reset_rejects_trailing_payload();

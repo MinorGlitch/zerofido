@@ -97,6 +97,9 @@ static void zf_ctap_note_result(ZerofidoApp *app, uint8_t cmd, uint8_t status) {
     if (!app) {
         return;
     }
+    if (app->transport_auto_accept_transaction) {
+        return;
+    }
 
     snprintf(step, sizeof(step), "%s %s", zf_ctap_command_name(app, cmd),
              zf_ctap_status_name(status));

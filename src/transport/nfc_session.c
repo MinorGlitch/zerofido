@@ -55,6 +55,7 @@ static void zf_transport_nfc_reset_exchange_internal_locked(ZfNfcTransportState 
     state->response_is_u2f = false;
     state->response_is_error = false;
     state->command_chain_active = false;
+    zf_transport_nfc_clear_tx_chain(state);
     state->request_len = 0;
     state->response_len = 0;
     state->response_offset = 0;
@@ -100,8 +101,16 @@ void zf_transport_nfc_on_disconnect(ZerofidoApp *app) {
     state->iso_cid_present = false;
     state->iso_cid = 0;
     zf_transport_nfc_cancel_current_request_locked(state);
+    if (state->iso4_tx_chain_completed) {
+        state->post_success_cooldown_active = true;
+        state->post_success_cooldown_until_tick =
+            furi_get_tick() + ZF_NFC_POST_SUCCESS_COOLDOWN_MS;
+        state->post_success_probe_sleep_active = true;
+        state->iso4_tx_chain_completed = false;
+    }
     zf_transport_nfc_reset_exchange_locked(state);
     zf_transport_nfc_clear_last_iso_response(state);
+    zf_transport_nfc_clear_tx_chain(state);
     state->iso_pcb = ZF_NFC_PCB_BLOCK;
     furi_mutex_release(app->ui_mutex);
 
@@ -248,6 +257,9 @@ bool zf_transport_nfc_handle_select(ZfNfcTransportState *state, const ZfNfcApdu 
     }
 
     state->applet_selected = true;
+    state->post_success_cooldown_active = false;
+    state->post_success_probe_sleep_active = false;
+    state->post_success_cooldown_until_tick = 0U;
     state->field_active = true;
     state->iso4_active = true;
     state->session_id = zf_transport_nfc_next_session_id(state->session_id);
@@ -255,6 +267,7 @@ bool zf_transport_nfc_handle_select(ZfNfcTransportState *state, const ZfNfcApdu 
     zf_transport_nfc_note_ui_stage_locked(state, ZfNfcUiStageAppletSelected);
     zf_transport_nfc_reset_exchange_locked(state);
     zf_transport_nfc_clear_last_iso_response(state);
+    zf_transport_nfc_clear_tx_chain(state);
     return zf_transport_nfc_send_apdu_payload(state, zf_transport_nfc_select_response,
                                               sizeof(zf_transport_nfc_select_response),
                                               ZF_NFC_SW_SUCCESS);

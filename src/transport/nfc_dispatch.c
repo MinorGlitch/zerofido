@@ -230,10 +230,29 @@ static bool zf_transport_nfc_send_ctap2_sync(ZerofidoApp *app, ZfNfcTransportSta
                                                   ZF_NFC_SW_SUCCESS);
     }
 
-    if (response_len + 2U > ZF_NFC_MAX_FRAME_INF_SIZE) {
-        ZF_NFC_DIAG_STATUS_LOCKED(app, "CTAP2 too large");
-        return zf_transport_nfc_send_apdu_payload(state, (const uint8_t[]){ZF_CTAP_ERR_OTHER}, 1U,
-                                                  ZF_NFC_SW_SUCCESS);
+    if (response_len + 2U > ZF_NFC_TX_CHAIN_THRESHOLD_SIZE) {
+        if (response_len + 2U > ZF_TRANSPORT_ARENA_SIZE) {
+            ZF_NFC_DIAG_STATUS_LOCKED(app, "CTAP2 too large");
+            return zf_transport_nfc_send_apdu_payload(state, (const uint8_t[]){ZF_CTAP_ERR_OTHER},
+                                                      1U, ZF_NFC_SW_SUCCESS);
+        }
+        sent = zf_transport_nfc_begin_chained_apdu_payload(state, arena, response_len,
+                                                           ZF_NFC_SW_SUCCESS);
+        if (!sent) {
+            ZF_NFC_DIAG_STATUS_LOCKED(app, "CTAP2 chain fail");
+            return false;
+        }
+#if ZF_RELEASE_DIAGNOSTICS
+        {
+            char text[sizeof(app->status_text)];
+            const char *cmd = command == ZfCtapeCmdMakeCredential
+                                  ? "MC"
+                                  : (command == ZfCtapeCmdGetAssertion ? "GA" : "CMD");
+            snprintf(text, sizeof(text), "CTAP2 %s chain=%u", cmd, (unsigned)(response_len + 2U));
+            zerofido_ui_set_status_locked(app, text);
+        }
+#endif
+        return true;
     }
 
     sent = zf_transport_nfc_send_apdu_payload(state, arena, response_len, ZF_NFC_SW_SUCCESS);
@@ -391,6 +410,7 @@ bool zf_transport_nfc_handle_apdu(ZerofidoApp *app, ZfNfcTransportState *state,
         zf_transport_nfc_cancel_current_request_locked(state);
         zf_transport_nfc_reset_exchange_locked(state);
         zf_transport_nfc_clear_last_iso_response(state);
+        zf_transport_nfc_clear_tx_chain(state);
         zerofido_ui_cancel_pending_interaction_locked(app);
         ZF_NFC_DIAG_STATUS_LOCKED(app, "CTAP control END");
         return zf_transport_nfc_send_status_word(state, ZF_NFC_SW_SUCCESS);

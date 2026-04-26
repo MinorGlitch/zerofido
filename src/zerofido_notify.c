@@ -136,8 +136,13 @@ void zerofido_notify_success(ZerofidoApp *app) {
     }
 
     zf_notify_stop_timer(app);
-    zf_notify_clear(app);
-    notification_message_block(app->notifications, &sequence_set_green_255);
+    if (app->transport_auto_accept_transaction) {
+        zf_notify_clear_async(app);
+        notification_message(app->notifications, &sequence_set_green_255);
+    } else {
+        zf_notify_clear(app);
+        notification_message_block(app->notifications, &sequence_set_green_255);
+    }
     zf_notify_arm_clear(app, ZF_NOTIFY_SUCCESS_MS);
 }
 
@@ -147,8 +152,13 @@ void zerofido_notify_error(ZerofidoApp *app) {
     }
 
     zf_notify_stop_timer(app);
-    zf_notify_clear(app);
-    notification_message_block(app->notifications, &sequence_set_red_255);
+    if (app->transport_auto_accept_transaction) {
+        zf_notify_clear_async(app);
+        notification_message(app->notifications, &sequence_set_red_255);
+    } else {
+        zf_notify_clear(app);
+        notification_message_block(app->notifications, &sequence_set_red_255);
+    }
     zf_notify_arm_clear(app, ZF_NOTIFY_ERROR_MS);
 }
 

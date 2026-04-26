@@ -56,12 +56,19 @@ typedef struct {
     bool response_is_error;
     bool command_chain_active;
     bool iso4_last_tx_valid;
+    bool iso4_tx_chain_active;
+    bool iso4_tx_chain_completed;
+    bool post_success_cooldown_active;
+    bool post_success_probe_sleep_active;
     bool iso_cid_present;
     uint8_t iso4_last_tx[ZF_NFC_LAST_TX_CAPACITY];
+    uint8_t iso4_tx_chain[ZF_TRANSPORT_ARENA_SIZE];
     uint8_t iso_pcb;
     uint8_t iso_cid;
     uint8_t desfire_probe_frame;
     size_t iso4_last_tx_len;
+    size_t iso4_tx_chain_len;
+    size_t iso4_tx_chain_offset;
     size_t request_len;
     size_t response_len;
     size_t response_offset;
@@ -73,6 +80,7 @@ typedef struct {
     ZfTransportSessionId canceled_session_id;
     ZfNfcRequestKind request_kind;
     uint32_t last_visible_stage_tick;
+    uint32_t post_success_cooldown_until_tick;
     uint8_t *arena;
     size_t arena_capacity;
 } ZfNfcTransportState;

@@ -21,6 +21,10 @@ bool zf_transport_nfc_send_iso_response(ZfNfcTransportState *state, const uint8_
 bool zf_transport_nfc_send_r_ack(ZfNfcTransportState *state, uint8_t pcb);
 void zf_transport_nfc_clear_last_iso_response(ZfNfcTransportState *state);
 bool zf_transport_nfc_replay_last_iso_response(ZfNfcTransportState *state);
+void zf_transport_nfc_clear_tx_chain(ZfNfcTransportState *state);
+bool zf_transport_nfc_begin_chained_apdu_payload(ZfNfcTransportState *state, const uint8_t *data,
+                                                 size_t data_len, uint16_t status_word);
+bool zf_transport_nfc_send_next_tx_chain_block(ZfNfcTransportState *state);
 bool zf_transport_nfc_send_status_word(ZfNfcTransportState *state, uint16_t status_word);
 bool zf_transport_nfc_send_forced_iso_status_word(ZfNfcTransportState *state, uint16_t status_word);
 bool zf_transport_nfc_send_apdu_payload(ZfNfcTransportState *state, const uint8_t *data,
