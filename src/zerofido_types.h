@@ -9,8 +9,15 @@
 #define ZF_APP_DATA_ROOT "/ext/apps_data"
 #define ZF_APP_DATA_DIR ZF_APP_DATA_ROOT "/" ZF_APP_ID
 
+#ifndef ZF_RELEASE_DIAGNOSTICS
+#define ZF_RELEASE_DIAGNOSTICS 0
+#endif
+
 #define ZF_CTAPHID_PACKET_SIZE 64
 #define ZF_MAX_MSG_SIZE 1024
+#define ZF_TRANSPORT_ARENA_SIZE (ZF_MAX_MSG_SIZE + 2U)
+#define ZF_COMMAND_SCRATCH_SIZE 4096U
+#define ZF_UI_SCRATCH_SIZE 2048U
 #define ZF_APPROVAL_TIMEOUT_MS 30000
 #define ZF_ASSERTION_QUEUE_TIMEOUT_MS 30000
 #define ZF_KEEPALIVE_INTERVAL_MS 100
@@ -36,6 +43,7 @@
 #define ZF_PIN_RETRIES_MAX 8
 #define ZF_MIN_PIN_LENGTH 4
 #define ZF_PIN_TOKEN_TIMEOUT_MS 30000
+#define ZF_COUNTER_RESERVATION_WINDOW 32U
 
 #define ZF_PIN_PERMISSION_MC 0x01U
 #define ZF_PIN_PERMISSION_GA 0x02U
@@ -46,6 +54,20 @@
 #define ZF_CRED_PROTECT_UV_OPTIONAL 0x01U
 #define ZF_CRED_PROTECT_UV_OPTIONAL_WITH_CRED_ID 0x02U
 #define ZF_CRED_PROTECT_UV_REQUIRED 0x03U
+
+typedef uint32_t ZfTransportSessionId;
+
+typedef union {
+    void *align_ptr;
+    uint64_t align_u64;
+    uint8_t bytes[ZF_COMMAND_SCRATCH_SIZE];
+} ZfCommandScratchArena;
+
+typedef union {
+    void *align_ptr;
+    uint64_t align_u64;
+    uint8_t bytes[ZF_UI_SCRATCH_SIZE];
+} ZfUiScratchArena;
 
 enum {
     ZfCtapeCmdMakeCredential = 0x01,
@@ -112,15 +134,23 @@ typedef struct {
 typedef struct {
     bool in_use;
     bool resident_key;
+#ifdef ZF_HOST_TEST
     char file_name[80];
+#endif
     uint8_t credential_id[ZF_CREDENTIAL_ID_LEN];
+#ifdef ZF_HOST_TEST
     size_t credential_id_len;
     char rp_id[ZF_MAX_RP_ID_LEN];
     uint8_t user_id[ZF_MAX_USER_ID_LEN];
     size_t user_id_len;
     char user_name[ZF_MAX_USER_NAME_LEN];
     char user_display_name[ZF_MAX_DISPLAY_NAME_LEN];
+#else
+    uint8_t credential_id_len;
+    uint8_t rp_id_hash[32];
+#endif
     uint32_t sign_count;
+    uint32_t counter_high_water;
     uint32_t created_at;
     uint8_t cred_protect;
 } ZfCredentialIndexEntry;
@@ -132,7 +162,7 @@ typedef struct {
 
 typedef struct {
     bool active;
-    uint32_t cid;
+    ZfTransportSessionId session_id;
     bool uv_verified;
     bool user_present;
     uint16_t record_indices[ZF_MAX_CREDENTIALS];
@@ -144,6 +174,12 @@ typedef struct {
 } ZfAssertionQueue;
 
 typedef struct {
+    const uint8_t *data;
+    size_t size;
+    size_t count;
+} ZfCredentialDescriptorList;
+
+typedef struct {
     uint8_t client_data_hash[ZF_CLIENT_DATA_HASH_LEN];
     bool has_client_data_hash;
     char rp_id[ZF_MAX_RP_ID_LEN];
@@ -151,9 +187,7 @@ typedef struct {
     char user_display_name[ZF_MAX_DISPLAY_NAME_LEN];
     uint8_t user_id[ZF_MAX_USER_ID_LEN];
     size_t user_id_len;
-    uint8_t exclude_ids[ZF_MAX_ALLOW_LIST][ZF_CREDENTIAL_ID_LEN];
-    size_t exclude_lens[ZF_MAX_ALLOW_LIST];
-    size_t exclude_count;
+    ZfCredentialDescriptorList exclude_list;
     bool up;
     bool uv;
     bool rk;
@@ -176,10 +210,7 @@ typedef struct {
     uint8_t client_data_hash[ZF_CLIENT_DATA_HASH_LEN];
     bool has_client_data_hash;
     char rp_id[ZF_MAX_RP_ID_LEN];
-    uint8_t allow_list[ZF_MAX_ALLOW_LIST][ZF_CREDENTIAL_ID_LEN];
-    size_t allow_list_lens[ZF_MAX_ALLOW_LIST];
-    size_t allow_list_count;
-    bool has_allow_list;
+    ZfCredentialDescriptorList allow_list;
     bool up;
     bool has_up;
     bool uv;

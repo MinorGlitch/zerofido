@@ -4,12 +4,20 @@
 #include "response_encode.h"
 #include "session_internal.h"
 #include "persistence.h"
+#include "../zerofido_crypto.h"
 
 #include <furi.h>
 
 #include <string.h>
 
 #define TAG "U2f"
+
+#if !ZF_RELEASE_DIAGNOSTICS
+#undef FURI_LOG_E
+#undef FURI_LOG_W
+#define FURI_LOG_E(...) ((void)0)
+#define FURI_LOG_W(...) ((void)0)
+#endif
 
 static const uint8_t ver_str[] = {"U2F_V2"};
 
@@ -26,7 +34,7 @@ U2fData *u2f_alloc(void) {
 void u2f_free(U2fData *U2F) {
     furi_assert(U2F);
     mbedtls_ecp_group_free(&U2F->group);
-    memset(U2F, 0, sizeof(*U2F));
+    zf_crypto_secure_zero(U2F, sizeof(*U2F));
     free(U2F);
 }
 
@@ -45,12 +53,6 @@ bool u2f_init(U2fData *U2F) {
         FURI_LOG_E(TAG, "Certificate/key consistency check failed");
         return false;
     }
-    uint32_t cert_len = u2f_data_cert_load(U2F->cert, sizeof(U2F->cert));
-    if (cert_len == 0 || cert_len > sizeof(U2F->cert)) {
-        FURI_LOG_E(TAG, "Certificate body load error");
-        return false;
-    }
-    U2F->cert_len = (uint16_t)cert_len;
     if (u2f_data_key_load(U2F->device_key) == false) {
         if (u2f_data_key_exists()) {
             FURI_LOG_E(TAG, "Device key load error");
@@ -74,6 +76,7 @@ bool u2f_init(U2fData *U2F) {
             return false;
         }
     }
+    U2F->counter_high_water = U2F->counter;
 
     if (mbedtls_ecp_group_load(&U2F->group, MBEDTLS_ECP_DP_SECP256R1) != 0) {
         FURI_LOG_E(TAG, "Unable to load P-256 group");

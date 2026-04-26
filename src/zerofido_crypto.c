@@ -2,10 +2,8 @@
 
 #include <furi_hal.h>
 #include <furi_hal_random.h>
-#include <mbedtls/aes.h>
 #include <mbedtls/ecdsa.h>
 #include <mbedtls/ecp.h>
-#include <mbedtls/md.h>
 #include <mbedtls/sha256.h>
 #include <string.h>
 
@@ -71,6 +69,18 @@ static bool zf_load_group(mbedtls_ecp_group *grp) {
     return mbedtls_ecp_group_load(grp, MBEDTLS_ECP_DP_SECP256R1) == 0;
 }
 
+void zf_crypto_secure_zero(void *data, size_t size) {
+    volatile uint8_t *ptr = data;
+
+    if (!ptr) {
+        return;
+    }
+
+    while (size-- > 0) {
+        *ptr++ = 0;
+    }
+}
+
 static bool zf_der_decode_length(const uint8_t *input, size_t input_len, size_t *header_len,
                                  size_t *value_len) {
     if (!input || input_len < 2 || !header_len || !value_len) {
@@ -80,11 +90,11 @@ static bool zf_der_decode_length(const uint8_t *input, size_t input_len, size_t 
     if ((input[1] & 0x80U) == 0) {
         *header_len = 2;
         *value_len = input[1];
-        return *header_len + *value_len <= input_len;
+        return *value_len <= input_len - *header_len;
     }
 
     size_t length_octets = input[1] & 0x7FU;
-    if (length_octets == 0 || length_octets > sizeof(size_t) || 2 + length_octets > input_len) {
+    if (length_octets == 0 || length_octets > sizeof(size_t) || length_octets > input_len - 2U) {
         return false;
     }
 
@@ -95,7 +105,7 @@ static bool zf_der_decode_length(const uint8_t *input, size_t input_len, size_t 
 
     *header_len = 2 + length_octets;
     *value_len = length;
-    return *header_len + *value_len <= input_len;
+    return *value_len <= input_len - *header_len;
 }
 
 static bool zf_der_decode_signature(const uint8_t *signature, size_t signature_len, mbedtls_mpi *r,
@@ -125,6 +135,10 @@ static bool zf_der_decode_signature(const uint8_t *signature, size_t signature_l
         return false;
     }
 
+    if (int_header_len > signature_len - offset ||
+        int_len > signature_len - offset - int_header_len) {
+        return false;
+    }
     offset += int_header_len + int_len;
     if (offset >= signature_len || signature[offset] != 0x02) {
         return false;
@@ -137,6 +151,10 @@ static bool zf_der_decode_signature(const uint8_t *signature, size_t signature_l
         return false;
     }
 
+    if (int_header_len > signature_len - offset ||
+        int_len > signature_len - offset - int_header_len) {
+        return false;
+    }
     offset += int_header_len + int_len;
     return offset == seq_header_len + seq_len;
 }
@@ -260,78 +278,100 @@ void zf_crypto_sha256_concat(const uint8_t *first, size_t first_size, const uint
     mbedtls_sha256_free(&sha);
 }
 
-bool zf_crypto_hmac_sha256(const uint8_t *key, size_t key_len, const uint8_t *data, size_t size,
-                           uint8_t out[32]) {
-    mbedtls_md_context_t md;
-    const mbedtls_md_info_t *info = NULL;
-    bool ok = false;
-
-    if (!key || !out || (size > 0 && !data)) {
+bool zf_crypto_hmac_sha256_parts_with_scratch(
+    ZfHmacSha256Scratch *scratch, const uint8_t *key, size_t key_len, const uint8_t *first,
+    size_t first_size, const uint8_t *second, size_t second_size, uint8_t out[32]) {
+    if (!scratch || !key || !out || (first_size > 0U && !first) ||
+        (second_size > 0U && !second)) {
         return false;
     }
 
-    mbedtls_md_init(&md);
-    info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
-    if (!info) {
-        goto cleanup;
-    }
-    if (mbedtls_md_setup(&md, info, 1) != 0) {
-        goto cleanup;
-    }
-    if (mbedtls_md_hmac_starts(&md, key, key_len) != 0) {
-        goto cleanup;
-    }
-    if (size > 0 && mbedtls_md_hmac_update(&md, data, size) != 0) {
-        goto cleanup;
-    }
-    if (mbedtls_md_hmac_finish(&md, out) != 0) {
-        goto cleanup;
-    }
-    ok = true;
+    memset(scratch, 0, sizeof(*scratch));
 
-cleanup:
-    if (!ok) {
-        memset(out, 0, 32);
+    if (key_len > sizeof(scratch->key_block)) {
+        mbedtls_sha256_init(&scratch->sha);
+        mbedtls_sha256_starts(&scratch->sha, 0);
+        mbedtls_sha256_update(&scratch->sha, key, key_len);
+        mbedtls_sha256_finish(&scratch->sha, scratch->key_block);
+        mbedtls_sha256_free(&scratch->sha);
+    } else if (key_len > 0U) {
+        memcpy(scratch->key_block, key, key_len);
     }
-    mbedtls_md_free(&md);
-    return ok;
+
+    for (size_t i = 0; i < sizeof(scratch->pad); ++i) {
+        scratch->pad[i] = scratch->key_block[i] ^ 0x36U;
+    }
+    mbedtls_sha256_init(&scratch->sha);
+    mbedtls_sha256_starts(&scratch->sha, 0);
+    mbedtls_sha256_update(&scratch->sha, scratch->pad, sizeof(scratch->pad));
+    if (first_size > 0U) {
+        mbedtls_sha256_update(&scratch->sha, first, first_size);
+    }
+    if (second_size > 0U) {
+        mbedtls_sha256_update(&scratch->sha, second, second_size);
+    }
+    mbedtls_sha256_finish(&scratch->sha, scratch->inner_hash);
+    mbedtls_sha256_free(&scratch->sha);
+
+    for (size_t i = 0; i < sizeof(scratch->pad); ++i) {
+        scratch->pad[i] = scratch->key_block[i] ^ 0x5CU;
+    }
+    mbedtls_sha256_init(&scratch->sha);
+    mbedtls_sha256_starts(&scratch->sha, 0);
+    mbedtls_sha256_update(&scratch->sha, scratch->pad, sizeof(scratch->pad));
+    mbedtls_sha256_update(&scratch->sha, scratch->inner_hash, sizeof(scratch->inner_hash));
+    mbedtls_sha256_finish(&scratch->sha, out);
+    mbedtls_sha256_free(&scratch->sha);
+
+    zf_crypto_secure_zero(scratch, sizeof(*scratch));
+    return true;
+}
+
+bool zf_crypto_hmac_sha256_parts(const uint8_t *key, size_t key_len, const uint8_t *first,
+                                 size_t first_size, const uint8_t *second, size_t second_size,
+                                 uint8_t out[32]) {
+    ZfHmacSha256Scratch scratch;
+
+    return zf_crypto_hmac_sha256_parts_with_scratch(&scratch, key, key_len, first, first_size,
+                                                    second, second_size, out);
+}
+
+bool zf_crypto_hmac_sha256(const uint8_t *key, size_t key_len, const uint8_t *data, size_t size,
+                           uint8_t out[32]) {
+    return zf_crypto_hmac_sha256_parts(key, key_len, data, size, NULL, 0, out);
 }
 
 bool zf_crypto_aes256_cbc_zero_iv_encrypt(const uint8_t key[32], const uint8_t *input,
                                           uint8_t *output, size_t size) {
+    const uint8_t iv[16] = {0};
+
     if ((size == 0) || (size % 16 != 0)) {
         return false;
     }
 
-    bool ok = false;
-    uint8_t iv[16] = {0};
-    mbedtls_aes_context aes;
-
-    mbedtls_aes_init(&aes);
-    if (mbedtls_aes_setkey_enc(&aes, key, 256) == 0 &&
-        mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_ENCRYPT, size, iv, input, output) == 0) {
-        ok = true;
+    if (!furi_hal_crypto_load_key(key, iv)) {
+        return false;
     }
-    mbedtls_aes_free(&aes);
+
+    bool ok = furi_hal_crypto_encrypt(input, output, size);
+    furi_hal_crypto_unload_key();
     return ok;
 }
 
 bool zf_crypto_aes256_cbc_zero_iv_decrypt(const uint8_t key[32], const uint8_t *input,
                                           uint8_t *output, size_t size) {
+    const uint8_t iv[16] = {0};
+
     if ((size == 0) || (size % 16 != 0)) {
         return false;
     }
 
-    bool ok = false;
-    uint8_t iv[16] = {0};
-    mbedtls_aes_context aes;
-
-    mbedtls_aes_init(&aes);
-    if (mbedtls_aes_setkey_dec(&aes, key, 256) == 0 &&
-        mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_DECRYPT, size, iv, input, output) == 0) {
-        ok = true;
+    if (!furi_hal_crypto_load_key(key, iv)) {
+        return false;
     }
-    mbedtls_aes_free(&aes);
+
+    bool ok = furi_hal_crypto_decrypt(input, output, size);
+    furi_hal_crypto_unload_key();
     return ok;
 }
 
@@ -416,7 +456,7 @@ bool zf_crypto_ecdh_shared_secret(const ZfP256KeyAgreementKey *key,
         ok = true;
     } while (false);
 
-    memset(secret_x, 0, sizeof(secret_x));
+    zf_crypto_secure_zero(secret_x, sizeof(secret_x));
     mbedtls_ecp_point_free(&shared);
     mbedtls_ecp_point_free(&peer);
     mbedtls_mpi_free(&d);
@@ -470,7 +510,7 @@ bool zf_crypto_generate_credential_keypair(ZfCredentialRecord *record) {
         ok = true;
     } while (false);
 
-    memset(private_key, 0, sizeof(private_key));
+    zf_crypto_secure_zero(private_key, sizeof(private_key));
     mbedtls_ecp_point_free(&q);
     mbedtls_mpi_free(&d);
     mbedtls_ecp_group_free(&grp);
@@ -527,7 +567,7 @@ bool zf_crypto_sign_hash(const ZfCredentialRecord *record, const uint8_t hash[32
         ok = zf_crypto_sign_hash_with_private_key(private_key, hash, out, out_capacity, out_len);
     } while (false);
 
-    memset(private_key, 0, sizeof(private_key));
+    zf_crypto_secure_zero(private_key, sizeof(private_key));
     return ok;
 }
 

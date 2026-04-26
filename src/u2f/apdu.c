@@ -54,8 +54,8 @@ static const uint8_t *u2f_validate_request_status(const uint8_t *buf, uint16_t r
         return u2f_apdu_state_wrong_length;
     }
     if (buf[1] == U2F_CMD_REGISTER) {
-        return u2f_validate_apdu_status(
-            buf, request_len, U2F_CMD_REGISTER, U2F_CHALLENGE_SIZE + U2F_APP_ID_SIZE, false);
+        return u2f_validate_apdu_status(buf, request_len, U2F_CMD_REGISTER,
+                                        U2F_CHALLENGE_SIZE + U2F_APP_ID_SIZE, false);
     }
     if (buf[1] == U2F_CMD_AUTHENTICATE) {
         U2fParsedApdu apdu = {0};

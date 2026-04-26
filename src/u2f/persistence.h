@@ -26,6 +26,7 @@ bool u2f_data_key_generate(uint8_t *device_key);
 bool u2f_data_cnt_exists(void);
 bool u2f_data_cnt_read(uint32_t *cnt);
 
+bool u2f_data_cnt_reserve(uint32_t cnt, uint32_t *reserved_cnt);
 bool u2f_data_cnt_write(uint32_t cnt);
 bool u2f_data_wipe(Storage *storage);
 

@@ -7,14 +7,21 @@
 #include <furi_hal_random.h>
 
 #include <mbedtls/ecdsa.h>
-#include <mbedtls/md.h>
 #include <mbedtls/sha256.h>
 
 #include "apdu_internal.h"
 #include "session_internal.h"
 #include "persistence.h"
+#include "../zerofido_crypto.h"
 
 #define TAG "U2f"
+
+#if !ZF_RELEASE_DIAGNOSTICS
+#undef FURI_LOG_D
+#undef FURI_LOG_W
+#define FURI_LOG_D(...) ((void)0)
+#define FURI_LOG_W(...) ((void)0)
+#endif
 
 static int zf_u2f_random_cb(void *context, uint8_t *dest, unsigned size) {
     UNUSED(context);
@@ -98,22 +105,6 @@ static bool zf_u2f_ecc_compute_public_key(mbedtls_ecp_group *grp, const uint8_t 
     return ok && output_len == sizeof(U2fPubKey);
 }
 
-static bool zf_u2f_hmac_sha256(const uint8_t *key, size_t key_len, const uint8_t *first,
-                               size_t first_len, const uint8_t *second, size_t second_len,
-                               uint8_t *out) {
-    mbedtls_md_context_t hmac_ctx;
-    bool ok = false;
-
-    mbedtls_md_init(&hmac_ctx);
-    ok = mbedtls_md_setup(&hmac_ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 1) == 0 &&
-         mbedtls_md_hmac_starts(&hmac_ctx, key, key_len) == 0 &&
-         mbedtls_md_hmac_update(&hmac_ctx, first, first_len) == 0 &&
-         mbedtls_md_hmac_update(&hmac_ctx, second, second_len) == 0 &&
-         mbedtls_md_hmac_finish(&hmac_ctx, out) == 0;
-    mbedtls_md_free(&hmac_ctx);
-    return ok;
-}
-
 static inline uint32_t zf_u2f_to_big_endian(uint32_t value) {
     return __builtin_bswap32(value);
 }
@@ -127,6 +118,7 @@ uint16_t zf_u2f_encode_register_response(U2fData *instance, uint8_t *buf,
     U2fPubKey public_key;
     uint8_t hash[U2F_HASH_SIZE];
     uint8_t signature[U2F_EC_BIGNUM_SIZE * 2];
+    ZfHmacSha256Scratch hmac_scratch;
     size_t response_base_len = offsetof(U2fRegisterResp, cert);
     size_t cert_capacity =
         response_capacity > response_base_len ? response_capacity - response_base_len : 0;
@@ -144,19 +136,21 @@ uint16_t zf_u2f_encode_register_response(U2fData *instance, uint8_t *buf,
     handle.len = U2F_HASH_SIZE * 2;
     furi_hal_random_fill_buf(handle.nonce, sizeof(handle.nonce));
 
-    if (!zf_u2f_hmac_sha256(instance->device_key, sizeof(instance->device_key), req->app_id,
-                            sizeof(req->app_id), handle.nonce, sizeof(handle.nonce), private_key) ||
-        !zf_u2f_hmac_sha256(instance->device_key, sizeof(instance->device_key), private_key,
-                            sizeof(private_key), req->app_id, sizeof(req->app_id), handle.hash)) {
-        memset(private_key, 0, sizeof(private_key));
-        memset(&handle, 0, sizeof(handle));
+    if (!zf_crypto_hmac_sha256_parts_with_scratch(
+            &hmac_scratch, instance->device_key, sizeof(instance->device_key), req->app_id,
+            sizeof(req->app_id), handle.nonce, sizeof(handle.nonce), private_key) ||
+        !zf_crypto_hmac_sha256_parts_with_scratch(
+            &hmac_scratch, instance->device_key, sizeof(instance->device_key), private_key,
+            sizeof(private_key), req->app_id, sizeof(req->app_id), handle.hash)) {
+        zf_crypto_secure_zero(private_key, sizeof(private_key));
+        zf_crypto_secure_zero(&handle, sizeof(handle));
         return zf_u2f_reply_status(buf, zf_u2f_state_not_supported);
     }
 
     if (!zf_u2f_ecc_compute_public_key(&instance->group, private_key, &public_key)) {
-        memset(private_key, 0, sizeof(private_key));
-        memset(&handle, 0, sizeof(handle));
-        memset(&public_key, 0, sizeof(public_key));
+        zf_crypto_secure_zero(private_key, sizeof(private_key));
+        zf_crypto_secure_zero(&handle, sizeof(handle));
+        zf_crypto_secure_zero(&public_key, sizeof(public_key));
         return zf_u2f_reply_status(buf, zf_u2f_state_not_supported);
     }
 
@@ -176,34 +170,33 @@ uint16_t zf_u2f_encode_register_response(U2fData *instance, uint8_t *buf,
     }
 
     if (!zf_u2f_ecc_sign(&instance->group, instance->cert_key, hash, signature)) {
-        memset(signature, 0, sizeof(signature));
-        memset(hash, 0, sizeof(hash));
-        memset(private_key, 0, sizeof(private_key));
-        memset(&handle, 0, sizeof(handle));
-        memset(&public_key, 0, sizeof(public_key));
+        zf_crypto_secure_zero(signature, sizeof(signature));
+        zf_crypto_secure_zero(hash, sizeof(hash));
+        zf_crypto_secure_zero(private_key, sizeof(private_key));
+        zf_crypto_secure_zero(&handle, sizeof(handle));
+        zf_crypto_secure_zero(&public_key, sizeof(public_key));
         return zf_u2f_reply_status(buf, zf_u2f_state_not_supported);
     }
 
-    cert_len = instance->cert_len;
+    cert_len = (uint16_t)u2f_data_cert_load(buf + response_base_len, cert_capacity);
     if (cert_len == 0 || cert_len > cert_capacity) {
-        memset(signature, 0, sizeof(signature));
-        memset(hash, 0, sizeof(hash));
-        memset(private_key, 0, sizeof(private_key));
-        memset(&handle, 0, sizeof(handle));
-        memset(&public_key, 0, sizeof(public_key));
+        zf_crypto_secure_zero(signature, sizeof(signature));
+        zf_crypto_secure_zero(hash, sizeof(hash));
+        zf_crypto_secure_zero(private_key, sizeof(private_key));
+        zf_crypto_secure_zero(&handle, sizeof(handle));
+        zf_crypto_secure_zero(&public_key, sizeof(public_key));
         return zf_u2f_reply_status(buf, zf_u2f_state_not_supported);
     }
-    memcpy(buf + response_base_len, instance->cert, cert_len);
 
     signature_len = zf_u2f_der_encode_signature(buf + response_base_len + cert_len,
                                                 cert_capacity - cert_len, signature);
     if (signature_len == 0 ||
         cert_len + signature_len + sizeof(zf_u2f_state_no_error) > cert_capacity) {
-        memset(signature, 0, sizeof(signature));
-        memset(hash, 0, sizeof(hash));
-        memset(private_key, 0, sizeof(private_key));
-        memset(&handle, 0, sizeof(handle));
-        memset(&public_key, 0, sizeof(public_key));
+        zf_crypto_secure_zero(signature, sizeof(signature));
+        zf_crypto_secure_zero(hash, sizeof(hash));
+        zf_crypto_secure_zero(private_key, sizeof(private_key));
+        zf_crypto_secure_zero(&handle, sizeof(handle));
+        zf_crypto_secure_zero(&public_key, sizeof(public_key));
         return zf_u2f_reply_status(buf, zf_u2f_state_not_supported);
     }
 
@@ -213,11 +206,11 @@ uint16_t zf_u2f_encode_register_response(U2fData *instance, uint8_t *buf,
     memcpy(resp->cert + cert_len + signature_len, zf_u2f_state_no_error,
            sizeof(zf_u2f_state_no_error));
 
-    memset(signature, 0, sizeof(signature));
-    memset(hash, 0, sizeof(hash));
-    memset(private_key, 0, sizeof(private_key));
-    memset(&handle, 0, sizeof(handle));
-    memset(&public_key, 0, sizeof(public_key));
+    zf_crypto_secure_zero(signature, sizeof(signature));
+    zf_crypto_secure_zero(hash, sizeof(hash));
+    zf_crypto_secure_zero(private_key, sizeof(private_key));
+    zf_crypto_secure_zero(&handle, sizeof(handle));
+    zf_crypto_secure_zero(&public_key, sizeof(public_key));
 
     return sizeof(U2fRegisterResp) + cert_len + signature_len + sizeof(zf_u2f_state_no_error);
 }
@@ -231,6 +224,8 @@ uint16_t zf_u2f_encode_authenticate_response(U2fData *instance, uint8_t *buf, ui
     uint8_t flags = 0;
     uint8_t hash[U2F_HASH_SIZE];
     uint8_t signature[U2F_HASH_SIZE * 2];
+    ZfHmacSha256Scratch hmac_scratch;
+    uint32_t next_counter = 0;
     uint32_t be_u2f_counter = 0;
     bool user_present = false;
 
@@ -254,13 +249,14 @@ uint16_t zf_u2f_encode_authenticate_response(U2fData *instance, uint8_t *buf, ui
         return sizeof(zf_u2f_state_not_supported);
     }
 
-    be_u2f_counter = zf_u2f_to_big_endian(instance->counter + 1);
+    next_counter = instance->counter + 1;
+    be_u2f_counter = zf_u2f_to_big_endian(next_counter);
 
     if (key_handle_len != (U2F_HASH_SIZE * 2)) {
-        memset(mac_control, 0, sizeof(mac_control));
-        memset(private_key, 0, sizeof(private_key));
-        memset(hash, 0, sizeof(hash));
-        memset(signature, 0, sizeof(signature));
+        zf_crypto_secure_zero(mac_control, sizeof(mac_control));
+        zf_crypto_secure_zero(private_key, sizeof(private_key));
+        zf_crypto_secure_zero(hash, sizeof(hash));
+        zf_crypto_secure_zero(signature, sizeof(signature));
         if (apdu.p1 == U2fEnforce) {
             u2f_clear_user_present(instance);
         }
@@ -268,24 +264,25 @@ uint16_t zf_u2f_encode_authenticate_response(U2fData *instance, uint8_t *buf, ui
         return sizeof(zf_u2f_state_wrong_data);
     }
 
-    if (!zf_u2f_hmac_sha256(instance->device_key, sizeof(instance->device_key), app_id,
-                            U2F_APP_ID_SIZE, key_handle + U2F_HASH_SIZE, U2F_NONCE_SIZE,
-                            private_key) ||
-        !zf_u2f_hmac_sha256(instance->device_key, sizeof(instance->device_key), private_key,
-                            sizeof(private_key), app_id, U2F_APP_ID_SIZE, mac_control)) {
-        memset(mac_control, 0, sizeof(mac_control));
-        memset(private_key, 0, sizeof(private_key));
-        memset(hash, 0, sizeof(hash));
-        memset(signature, 0, sizeof(signature));
+    if (!zf_crypto_hmac_sha256_parts_with_scratch(
+            &hmac_scratch, instance->device_key, sizeof(instance->device_key), app_id,
+            U2F_APP_ID_SIZE, key_handle + U2F_HASH_SIZE, U2F_NONCE_SIZE, private_key) ||
+        !zf_crypto_hmac_sha256_parts_with_scratch(
+            &hmac_scratch, instance->device_key, sizeof(instance->device_key), private_key,
+            sizeof(private_key), app_id, U2F_APP_ID_SIZE, mac_control)) {
+        zf_crypto_secure_zero(mac_control, sizeof(mac_control));
+        zf_crypto_secure_zero(private_key, sizeof(private_key));
+        zf_crypto_secure_zero(hash, sizeof(hash));
+        zf_crypto_secure_zero(signature, sizeof(signature));
         return zf_u2f_reply_status(buf, zf_u2f_state_not_supported);
     }
 
     if (memcmp(key_handle, mac_control, sizeof(mac_control)) != 0) {
         FURI_LOG_W(TAG, "Wrong handle!");
-        memset(mac_control, 0, sizeof(mac_control));
-        memset(private_key, 0, sizeof(private_key));
-        memset(hash, 0, sizeof(hash));
-        memset(signature, 0, sizeof(signature));
+        zf_crypto_secure_zero(mac_control, sizeof(mac_control));
+        zf_crypto_secure_zero(private_key, sizeof(private_key));
+        zf_crypto_secure_zero(hash, sizeof(hash));
+        zf_crypto_secure_zero(signature, sizeof(signature));
         if (apdu.p1 == U2fEnforce) {
             u2f_clear_user_present(instance);
         }
@@ -293,10 +290,10 @@ uint16_t zf_u2f_encode_authenticate_response(U2fData *instance, uint8_t *buf, ui
         return sizeof(zf_u2f_state_wrong_data);
     }
     if (apdu.p1 == U2fCheckOnly) {
-        memset(mac_control, 0, sizeof(mac_control));
-        memset(private_key, 0, sizeof(private_key));
-        memset(hash, 0, sizeof(hash));
-        memset(signature, 0, sizeof(signature));
+        zf_crypto_secure_zero(mac_control, sizeof(mac_control));
+        zf_crypto_secure_zero(private_key, sizeof(private_key));
+        zf_crypto_secure_zero(hash, sizeof(hash));
+        zf_crypto_secure_zero(signature, sizeof(signature));
         memcpy(&buf[0], zf_u2f_state_user_missing, sizeof(zf_u2f_state_user_missing));
         return sizeof(zf_u2f_state_user_missing);
     }
@@ -305,10 +302,10 @@ uint16_t zf_u2f_encode_authenticate_response(U2fData *instance, uint8_t *buf, ui
     if (user_present) {
         flags |= 1;
     } else if (apdu.p1 == U2fEnforce) {
-        memset(mac_control, 0, sizeof(mac_control));
-        memset(private_key, 0, sizeof(private_key));
-        memset(hash, 0, sizeof(hash));
-        memset(signature, 0, sizeof(signature));
+        zf_crypto_secure_zero(mac_control, sizeof(mac_control));
+        zf_crypto_secure_zero(private_key, sizeof(private_key));
+        zf_crypto_secure_zero(hash, sizeof(hash));
+        zf_crypto_secure_zero(signature, sizeof(signature));
         memcpy(&buf[0], zf_u2f_state_user_missing, sizeof(zf_u2f_state_user_missing));
         return sizeof(zf_u2f_state_user_missing);
     }
@@ -327,18 +324,18 @@ uint16_t zf_u2f_encode_authenticate_response(U2fData *instance, uint8_t *buf, ui
     }
 
     if (!zf_u2f_ecc_sign(&instance->group, private_key, hash, signature)) {
-        memset(mac_control, 0, sizeof(mac_control));
-        memset(private_key, 0, sizeof(private_key));
-        memset(hash, 0, sizeof(hash));
-        memset(signature, 0, sizeof(signature));
+        zf_crypto_secure_zero(mac_control, sizeof(mac_control));
+        zf_crypto_secure_zero(private_key, sizeof(private_key));
+        zf_crypto_secure_zero(hash, sizeof(hash));
+        zf_crypto_secure_zero(signature, sizeof(signature));
         return zf_u2f_reply_status(buf, zf_u2f_state_not_supported);
     }
 
     if (response_capacity <= sizeof(U2fAuthResp)) {
-        memset(mac_control, 0, sizeof(mac_control));
-        memset(private_key, 0, sizeof(private_key));
-        memset(hash, 0, sizeof(hash));
-        memset(signature, 0, sizeof(signature));
+        zf_crypto_secure_zero(mac_control, sizeof(mac_control));
+        zf_crypto_secure_zero(private_key, sizeof(private_key));
+        zf_crypto_secure_zero(hash, sizeof(hash));
+        zf_crypto_secure_zero(signature, sizeof(signature));
         return zf_u2f_reply_status(buf, zf_u2f_state_not_supported);
     }
 
@@ -348,29 +345,33 @@ uint16_t zf_u2f_encode_authenticate_response(U2fData *instance, uint8_t *buf, ui
         resp->signature, response_capacity - sizeof(U2fAuthResp), signature);
     if (signature_len == 0 ||
         sizeof(U2fAuthResp) + signature_len + sizeof(zf_u2f_state_no_error) > response_capacity) {
-        memset(mac_control, 0, sizeof(mac_control));
-        memset(private_key, 0, sizeof(private_key));
-        memset(hash, 0, sizeof(hash));
-        memset(signature, 0, sizeof(signature));
+        zf_crypto_secure_zero(mac_control, sizeof(mac_control));
+        zf_crypto_secure_zero(private_key, sizeof(private_key));
+        zf_crypto_secure_zero(hash, sizeof(hash));
+        zf_crypto_secure_zero(signature, sizeof(signature));
         return zf_u2f_reply_status(buf, zf_u2f_state_not_supported);
     }
     memcpy(resp->signature + signature_len, zf_u2f_state_no_error, sizeof(zf_u2f_state_no_error));
 
-    if (!u2f_data_cnt_write(instance->counter + 1)) {
-        memset(mac_control, 0, sizeof(mac_control));
-        memset(private_key, 0, sizeof(private_key));
-        memset(hash, 0, sizeof(hash));
-        memset(signature, 0, sizeof(signature));
-        memcpy(&buf[0], zf_u2f_state_not_supported, sizeof(zf_u2f_state_not_supported));
-        return sizeof(zf_u2f_state_not_supported);
+    if (next_counter > instance->counter_high_water) {
+        uint32_t high_water = 0;
+        if (!u2f_data_cnt_reserve(next_counter, &high_water)) {
+            zf_crypto_secure_zero(mac_control, sizeof(mac_control));
+            zf_crypto_secure_zero(private_key, sizeof(private_key));
+            zf_crypto_secure_zero(hash, sizeof(hash));
+            zf_crypto_secure_zero(signature, sizeof(signature));
+            memcpy(&buf[0], zf_u2f_state_not_supported, sizeof(zf_u2f_state_not_supported));
+            return sizeof(zf_u2f_state_not_supported);
+        }
+        instance->counter_high_water = high_water;
     }
-    instance->counter++;
+    instance->counter = next_counter;
     FURI_LOG_D(TAG, "Counter: %lu", (unsigned long)instance->counter);
 
-    memset(mac_control, 0, sizeof(mac_control));
-    memset(private_key, 0, sizeof(private_key));
-    memset(hash, 0, sizeof(hash));
-    memset(signature, 0, sizeof(signature));
+    zf_crypto_secure_zero(mac_control, sizeof(mac_control));
+    zf_crypto_secure_zero(private_key, sizeof(private_key));
+    zf_crypto_secure_zero(hash, sizeof(hash));
+    zf_crypto_secure_zero(signature, sizeof(signature));
 
     if (instance->callback != NULL) {
         instance->callback(U2fNotifyAuthSuccess, instance->context);

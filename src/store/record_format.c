@@ -52,36 +52,43 @@ typedef struct {
     uint8_t sealed[sizeof(ZfCounterFloorSeal)];
 } ZfCounterFloorFile;
 
-static void zf_record_compute_counter_binding(const ZfCredentialRecord *record,
-                                              uint8_t binding[24]) {
-    uint8_t material[ZF_CREDENTIAL_ID_LEN + sizeof(record->created_at)];
+static void zf_record_compute_counter_binding_fields(const uint8_t credential_id[ZF_CREDENTIAL_ID_LEN],
+                                                     uint32_t created_at, uint8_t binding[24]) {
+    uint8_t material[ZF_CREDENTIAL_ID_LEN + sizeof(created_at)];
     uint8_t full_digest[ZF_COUNTER_SEAL_SIZE];
     size_t offset = 0;
 
-    memcpy(material + offset, record->credential_id, sizeof(record->credential_id));
-    offset += sizeof(record->credential_id);
-    memcpy(material + offset, &record->created_at, sizeof(record->created_at));
-    offset += sizeof(record->created_at);
+    memcpy(material + offset, credential_id, ZF_CREDENTIAL_ID_LEN);
+    offset += ZF_CREDENTIAL_ID_LEN;
+    memcpy(material + offset, &created_at, sizeof(created_at));
+    offset += sizeof(created_at);
     zf_crypto_sha256(material, offset, full_digest);
     memcpy(binding, full_digest, 24);
-    memset(full_digest, 0, sizeof(full_digest));
+    zf_crypto_secure_zero(full_digest, sizeof(full_digest));
 }
 
-static void zf_record_compute_counter_digest(const ZfCredentialRecord *record, uint8_t digest[24]) {
-    uint8_t material[24 + sizeof(record->sign_count)];
+static void zf_record_compute_counter_digest_fields(const uint8_t credential_id[ZF_CREDENTIAL_ID_LEN],
+                                                    uint32_t created_at, uint32_t sign_count,
+                                                    uint8_t digest[24]) {
+    uint8_t material[24 + sizeof(sign_count)];
     uint8_t binding[24];
     uint8_t full_digest[ZF_COUNTER_SEAL_SIZE];
     size_t offset = 0;
 
-    zf_record_compute_counter_binding(record, binding);
+    zf_record_compute_counter_binding_fields(credential_id, created_at, binding);
     memcpy(material + offset, binding, sizeof(binding));
     offset += sizeof(binding);
-    memcpy(material + offset, &record->sign_count, sizeof(record->sign_count));
-    offset += sizeof(record->sign_count);
+    memcpy(material + offset, &sign_count, sizeof(sign_count));
+    offset += sizeof(sign_count);
     zf_crypto_sha256(material, offset, full_digest);
     memcpy(digest, full_digest, 24);
-    memset(binding, 0, sizeof(binding));
-    memset(full_digest, 0, sizeof(full_digest));
+    zf_crypto_secure_zero(binding, sizeof(binding));
+    zf_crypto_secure_zero(full_digest, sizeof(full_digest));
+}
+
+static void zf_record_compute_counter_digest(const ZfCredentialRecord *record, uint8_t digest[24]) {
+    zf_record_compute_counter_digest_fields(record->credential_id, record->created_at,
+                                            record->sign_count, digest);
 }
 
 static bool zf_record_seal_counter(const ZfCredentialRecord *record, uint8_t iv[ZF_WRAP_IV_LEN],
@@ -99,13 +106,14 @@ static bool zf_record_seal_counter(const ZfCredentialRecord *record, uint8_t iv[
 
     bool ok = furi_hal_crypto_encrypt((const uint8_t *)&plain, sealed, sizeof(plain));
     furi_hal_crypto_enclave_unload_key(FURI_HAL_CRYPTO_ENCLAVE_UNIQUE_KEY_SLOT);
-    memset(&plain, 0, sizeof(plain));
+    zf_crypto_secure_zero(&plain, sizeof(plain));
     return ok;
 }
 
-static bool zf_record_verify_counter_seal(const ZfCredentialRecord *record,
-                                          const uint8_t iv[ZF_WRAP_IV_LEN],
-                                          const uint8_t sealed[ZF_COUNTER_SEAL_SIZE]) {
+static bool zf_record_verify_counter_seal_fields(const uint8_t credential_id[ZF_CREDENTIAL_ID_LEN],
+                                                 uint32_t created_at, uint32_t sign_count,
+                                                 const uint8_t iv[ZF_WRAP_IV_LEN],
+                                                 const uint8_t sealed[ZF_COUNTER_SEAL_SIZE]) {
     ZfRecordCounterSeal plain = {0};
     uint8_t expected_digest[24];
 
@@ -115,51 +123,69 @@ static bool zf_record_verify_counter_seal(const ZfCredentialRecord *record,
 
     bool ok = furi_hal_crypto_decrypt(sealed, (uint8_t *)&plain, sizeof(plain));
     furi_hal_crypto_enclave_unload_key(FURI_HAL_CRYPTO_ENCLAVE_UNIQUE_KEY_SLOT);
-    if (!ok || plain.magic != ZF_COUNTER_SEAL_MAGIC || plain.sign_count != record->sign_count) {
-        memset(&plain, 0, sizeof(plain));
+    if (!ok || plain.magic != ZF_COUNTER_SEAL_MAGIC || plain.sign_count != sign_count) {
+        zf_crypto_secure_zero(&plain, sizeof(plain));
         return false;
     }
 
-    zf_record_compute_counter_digest(record, expected_digest);
+    zf_record_compute_counter_digest_fields(credential_id, created_at, sign_count, expected_digest);
     ok = zf_crypto_constant_time_equal(plain.digest, expected_digest, sizeof(plain.digest));
-    memset(expected_digest, 0, sizeof(expected_digest));
-    memset(&plain, 0, sizeof(plain));
+    zf_crypto_secure_zero(expected_digest, sizeof(expected_digest));
+    zf_crypto_secure_zero(&plain, sizeof(plain));
     return ok;
 }
 
-static bool zf_counter_floor_encode(const ZfCredentialRecord *record,
-                                    ZfCounterFloorFile *out_file) {
+static bool zf_record_verify_counter_seal(const ZfCredentialRecord *record,
+                                          const uint8_t iv[ZF_WRAP_IV_LEN],
+                                          const uint8_t sealed[ZF_COUNTER_SEAL_SIZE]) {
+    return zf_record_verify_counter_seal_fields(record->credential_id, record->created_at,
+                                                record->sign_count, iv, sealed);
+}
+
+static uint32_t zf_counter_reserved_high_water(uint32_t sign_count) {
+    uint32_t available = UINT32_MAX - sign_count;
+
+    if (available < ZF_COUNTER_RESERVATION_WINDOW) {
+        return UINT32_MAX;
+    }
+    return sign_count + ZF_COUNTER_RESERVATION_WINDOW;
+}
+
+static bool zf_counter_floor_encode_fields(const uint8_t credential_id[ZF_CREDENTIAL_ID_LEN],
+                                           uint32_t created_at, uint32_t sign_count,
+                                           ZfCounterFloorFile *out_file) {
     ZfCounterFloorSeal plain = {
         .magic = ZF_COUNTER_FLOOR_MAGIC,
-        .sign_count = record->sign_count,
+        .sign_count = sign_count,
     };
 
     memset(out_file, 0, sizeof(*out_file));
     out_file->version = ZF_COUNTER_FLOOR_VERSION;
-    zf_record_compute_counter_binding(record, plain.binding);
+    zf_record_compute_counter_binding_fields(credential_id, created_at, plain.binding);
     furi_hal_random_fill_buf(out_file->iv, sizeof(out_file->iv));
     if (!furi_hal_crypto_enclave_load_key(FURI_HAL_CRYPTO_ENCLAVE_UNIQUE_KEY_SLOT, out_file->iv)) {
-        memset(&plain, 0, sizeof(plain));
-        memset(out_file, 0, sizeof(*out_file));
+        zf_crypto_secure_zero(&plain, sizeof(plain));
+        zf_crypto_secure_zero(out_file, sizeof(*out_file));
         return false;
     }
 
     bool ok = furi_hal_crypto_encrypt((const uint8_t *)&plain, out_file->sealed, sizeof(plain));
     furi_hal_crypto_enclave_unload_key(FURI_HAL_CRYPTO_ENCLAVE_UNIQUE_KEY_SLOT);
-    memset(&plain, 0, sizeof(plain));
+    zf_crypto_secure_zero(&plain, sizeof(plain));
     if (!ok) {
-        memset(out_file, 0, sizeof(*out_file));
+        zf_crypto_secure_zero(out_file, sizeof(*out_file));
     }
     return ok;
 }
 
-static bool zf_counter_floor_decode(const ZfCredentialRecord *record,
-                                    const ZfCounterFloorFile *counter_file,
-                                    uint32_t *stored_sign_count) {
+static bool zf_counter_floor_decode_fields(const uint8_t credential_id[ZF_CREDENTIAL_ID_LEN],
+                                           uint32_t created_at,
+                                           const ZfCounterFloorFile *counter_file,
+                                           uint32_t *stored_sign_count) {
     ZfCounterFloorSeal plain = {0};
     uint8_t expected_binding[24];
 
-    if (!record || !counter_file || !stored_sign_count ||
+    if (!credential_id || !counter_file || !stored_sign_count ||
         counter_file->version != ZF_COUNTER_FLOOR_VERSION) {
         return false;
     }
@@ -171,21 +197,23 @@ static bool zf_counter_floor_decode(const ZfCredentialRecord *record,
     bool ok = furi_hal_crypto_decrypt(counter_file->sealed, (uint8_t *)&plain, sizeof(plain));
     furi_hal_crypto_enclave_unload_key(FURI_HAL_CRYPTO_ENCLAVE_UNIQUE_KEY_SLOT);
     if (!ok || plain.magic != ZF_COUNTER_FLOOR_MAGIC) {
-        memset(&plain, 0, sizeof(plain));
+        zf_crypto_secure_zero(&plain, sizeof(plain));
         return false;
     }
 
-    zf_record_compute_counter_binding(record, expected_binding);
+    zf_record_compute_counter_binding_fields(credential_id, created_at, expected_binding);
     ok = zf_crypto_constant_time_equal(plain.binding, expected_binding, sizeof(plain.binding));
     if (ok) {
         *stored_sign_count = plain.sign_count;
     }
-    memset(expected_binding, 0, sizeof(expected_binding));
-    memset(&plain, 0, sizeof(plain));
+    zf_crypto_secure_zero(expected_binding, sizeof(expected_binding));
+    zf_crypto_secure_zero(&plain, sizeof(plain));
     return ok;
 }
 
-static bool zf_store_counter_floor_write(Storage *storage, const ZfCredentialRecord *record) {
+static bool zf_store_counter_floor_write_value_fields(Storage *storage, const char *file_name,
+                                                      const uint8_t credential_id[ZF_CREDENTIAL_ID_LEN],
+                                                      uint32_t created_at, uint32_t sign_count) {
     ZfCounterFloorFile counter_file;
     char path[128];
     char temp_path[128];
@@ -194,21 +222,21 @@ static bool zf_store_counter_floor_write(Storage *storage, const ZfCredentialRec
     bool wrote = false;
     bool renamed = false;
 
-    if (!storage || !record) {
+    if (!storage || !file_name || !credential_id) {
         return false;
     }
-    if (!zf_counter_floor_encode(record, &counter_file)) {
+    if (!zf_counter_floor_encode_fields(credential_id, created_at, sign_count, &counter_file)) {
         return false;
     }
 
     file = storage_file_alloc(storage);
     if (!file) {
-        memset(&counter_file, 0, sizeof(counter_file));
+        zf_crypto_secure_zero(&counter_file, sizeof(counter_file));
         return false;
     }
 
-    zf_store_build_counter_floor_path(record->file_name, path, sizeof(path));
-    zf_store_build_counter_floor_temp_path(record->file_name, temp_path, sizeof(temp_path));
+    zf_store_build_counter_floor_path(file_name, path, sizeof(path));
+    zf_store_build_counter_floor_temp_path(file_name, temp_path, sizeof(temp_path));
     storage_common_remove(storage, temp_path);
     opened = storage_file_open(file, temp_path, FSAM_WRITE, FSOM_CREATE_ALWAYS);
     wrote = opened &&
@@ -217,24 +245,48 @@ static bool zf_store_counter_floor_write(Storage *storage, const ZfCredentialRec
     renamed = wrote && (storage_common_rename(storage, temp_path, path) == FSE_OK);
     storage_common_remove(storage, temp_path);
     storage_file_free(file);
-    memset(&counter_file, 0, sizeof(counter_file));
+    zf_crypto_secure_zero(&counter_file, sizeof(counter_file));
     return renamed;
 }
 
-static bool zf_store_counter_floor_validate(Storage *storage, const ZfCredentialRecord *record) {
+static bool zf_store_counter_floor_write_value(Storage *storage, const ZfCredentialRecord *record,
+                                               uint32_t sign_count) {
+    if (!record) {
+        return false;
+    }
+    return zf_store_counter_floor_write_value_fields(storage, record->file_name, record->credential_id,
+                                                     record->created_at, sign_count);
+}
+
+static bool zf_store_counter_floor_write(Storage *storage, const ZfCredentialRecord *record) {
+    return zf_store_counter_floor_write_value(storage, record, record->sign_count);
+}
+
+static bool zf_store_counter_floor_validate_fields(Storage *storage, const char *file_name,
+                                                   const uint8_t credential_id[ZF_CREDENTIAL_ID_LEN],
+                                                   uint32_t created_at, uint32_t *sign_count,
+                                                   uint32_t *out_high_water) {
     char path[128];
     uint8_t buffer[sizeof(ZfCounterFloorFile)] = {0};
     size_t size = 0;
     uint32_t stored_sign_count = 0;
     File *file = NULL;
 
-    if (!storage || !record) {
+    if (out_high_water) {
+        *out_high_water = sign_count ? *sign_count : 0;
+    }
+
+    if (!storage || !file_name || !credential_id || !sign_count) {
         return false;
     }
 
-    zf_store_build_counter_floor_path(record->file_name, path, sizeof(path));
+    zf_store_build_counter_floor_path(file_name, path, sizeof(path));
     if (!storage_file_exists(storage, path)) {
-        (void)zf_store_counter_floor_write(storage, record);
+        (void)zf_store_counter_floor_write_value_fields(storage, file_name, credential_id, created_at,
+                                                        *sign_count);
+        if (out_high_water) {
+            *out_high_water = *sign_count;
+        }
         return true;
     }
 
@@ -256,14 +308,58 @@ static bool zf_store_counter_floor_validate(Storage *storage, const ZfCredential
 
     storage_file_close(file);
     storage_file_free(file);
-    if (!zf_counter_floor_decode(record, (const ZfCounterFloorFile *)buffer, &stored_sign_count)) {
+    if (!zf_counter_floor_decode_fields(credential_id, created_at, (const ZfCounterFloorFile *)buffer,
+                                        &stored_sign_count)) {
         return true;
     }
-    if (stored_sign_count > record->sign_count) {
+    if (stored_sign_count > *sign_count) {
+        *sign_count = stored_sign_count;
+    } else if (stored_sign_count < *sign_count) {
+        (void)zf_store_counter_floor_write_value_fields(storage, file_name, credential_id, created_at,
+                                                        *sign_count);
+        stored_sign_count = *sign_count;
+    }
+    if (out_high_water) {
+        *out_high_water = stored_sign_count;
+    }
+    return true;
+}
+
+static bool zf_store_counter_floor_validate(Storage *storage, ZfCredentialRecord *record,
+                                            uint32_t *out_high_water) {
+    if (!record) {
         return false;
     }
-    if (stored_sign_count < record->sign_count) {
-        (void)zf_store_counter_floor_write(storage, record);
+    return zf_store_counter_floor_validate_fields(storage, record->file_name, record->credential_id,
+                                                  record->created_at, &record->sign_count,
+                                                  out_high_water);
+}
+
+static bool zf_store_counter_floor_validate_index(Storage *storage, const char *file_name,
+                                                  ZfCredentialIndexEntry *entry,
+                                                  uint32_t *out_high_water) {
+    if (!entry) {
+        return false;
+    }
+    return zf_store_counter_floor_validate_fields(storage, file_name, entry->credential_id,
+                                                  entry->created_at, &entry->sign_count,
+                                                  out_high_water);
+}
+
+bool zf_store_record_format_reserve_counter(Storage *storage, const ZfCredentialRecord *record,
+                                            uint32_t *out_high_water) {
+    uint32_t high_water = 0;
+
+    if (!record) {
+        return false;
+    }
+
+    high_water = zf_counter_reserved_high_water(record->sign_count);
+    if (!zf_store_counter_floor_write_value(storage, record, high_water)) {
+        return false;
+    }
+    if (out_high_water) {
+        *out_high_water = high_water;
     }
     return true;
 }
@@ -320,14 +416,14 @@ bool zf_store_record_format_encode(const ZfCredentialRecord *record, uint8_t *ou
     }
 
     if (!ok) {
-        memset(counter_iv, 0, sizeof(counter_iv));
-        memset(counter_seal, 0, sizeof(counter_seal));
+        zf_crypto_secure_zero(counter_iv, sizeof(counter_iv));
+        zf_crypto_secure_zero(counter_seal, sizeof(counter_seal));
         return false;
     }
 
     *out_size = zf_cbor_encoder_size(&enc);
-    memset(counter_iv, 0, sizeof(counter_iv));
-    memset(counter_seal, 0, sizeof(counter_seal));
+    zf_crypto_secure_zero(counter_iv, sizeof(counter_iv));
+    zf_crypto_secure_zero(counter_seal, sizeof(counter_seal));
     return true;
 }
 
@@ -351,16 +447,15 @@ void zf_store_record_format_hex_encode(const uint8_t *data, size_t size, char *o
     out[size * 2] = '\0';
 }
 
-static bool zf_record_file_name_matches_id(const ZfCredentialRecord *record,
+static bool zf_record_id_matches_file_name(const uint8_t *credential_id, size_t credential_id_len,
                                            const char *file_name) {
     char expected_name[(ZF_CREDENTIAL_ID_LEN * 2) + 1];
 
-    if (record->credential_id_len != ZF_CREDENTIAL_ID_LEN) {
+    if (!credential_id || !file_name || credential_id_len != ZF_CREDENTIAL_ID_LEN) {
         return false;
     }
 
-    zf_store_record_format_hex_encode(record->credential_id, record->credential_id_len,
-                                      expected_name);
+    zf_store_record_format_hex_encode(credential_id, credential_id_len, expected_name);
     return strcmp(expected_name, file_name) == 0;
 }
 
@@ -572,7 +667,8 @@ static bool zf_record_decode(const uint8_t *data, size_t data_size, const char *
         return false;
     }
     if (version != ZF_STORE_VERSION || out_record->rp_id[0] == '\0' ||
-        !zf_record_file_name_matches_id(out_record, file_name)) {
+        !zf_record_id_matches_file_name(out_record->credential_id, out_record->credential_id_len,
+                                        file_name)) {
         return false;
     }
     if (!saw_cred_protect) {
@@ -588,6 +684,7 @@ static bool zf_record_decode(const uint8_t *data, size_t data_size, const char *
 }
 
 static bool zf_record_decode_user_id_index(ZfCborCursor *cursor, ZfCredentialIndexEntry *entry) {
+#ifdef ZF_HOST_TEST
     const uint8_t *ptr = NULL;
     size_t size = 0;
 
@@ -598,6 +695,36 @@ static bool zf_record_decode_user_id_index(ZfCborCursor *cursor, ZfCredentialInd
     memcpy(entry->user_id, ptr, size);
     entry->user_id_len = size;
     return true;
+#else
+    (void)entry;
+    return zf_cbor_skip(cursor);
+#endif
+}
+
+static bool zf_record_decode_rp_id_index(ZfCborCursor *cursor, ZfCredentialIndexEntry *entry) {
+#ifdef ZF_HOST_TEST
+    return zf_record_decode_text(entry->rp_id, sizeof(entry->rp_id), cursor);
+#else
+    char rp_id[ZF_MAX_RP_ID_LEN];
+
+    if (!zf_record_decode_text(rp_id, sizeof(rp_id), cursor)) {
+        return false;
+    }
+
+    zf_crypto_sha256((const uint8_t *)rp_id, strlen(rp_id), entry->rp_id_hash);
+    zf_crypto_secure_zero(rp_id, sizeof(rp_id));
+    return true;
+#endif
+}
+
+static bool zf_record_decode_index_text_field(ZfCborCursor *cursor, char *out, size_t out_size) {
+#ifdef ZF_HOST_TEST
+    return zf_record_decode_text(out, out_size, cursor);
+#else
+    (void)out;
+    (void)out_size;
+    return zf_cbor_skip(cursor);
+#endif
 }
 
 static bool zf_record_decode_index_field(ZfCborCursor *cursor, uint64_t key,
@@ -610,14 +737,21 @@ static bool zf_record_decode_index_field(ZfCborCursor *cursor, uint64_t key,
     case ZfRecordKeyCredentialId:
         return zf_record_decode_bytes(entry->credential_id, ZF_CREDENTIAL_ID_LEN, cursor);
     case ZfRecordKeyRpId:
-        return zf_record_decode_text(entry->rp_id, sizeof(entry->rp_id), cursor);
+        return zf_record_decode_rp_id_index(cursor, entry);
     case ZfRecordKeyUserId:
         return zf_record_decode_user_id_index(cursor, entry);
+#ifdef ZF_HOST_TEST
     case ZfRecordKeyUserName:
-        return zf_record_decode_text(entry->user_name, sizeof(entry->user_name), cursor);
+        return zf_record_decode_index_text_field(cursor, entry->user_name,
+                                                 sizeof(entry->user_name));
     case ZfRecordKeyDisplayName:
-        return zf_record_decode_text(entry->user_display_name, sizeof(entry->user_display_name),
-                                     cursor);
+        return zf_record_decode_index_text_field(cursor, entry->user_display_name,
+                                                 sizeof(entry->user_display_name));
+#else
+    case ZfRecordKeyUserName:
+    case ZfRecordKeyDisplayName:
+        return zf_record_decode_index_text_field(cursor, NULL, 0);
+#endif
     case ZfRecordKeySignCount:
         return zf_record_decode_counter(cursor, &entry->sign_count);
     case ZfRecordKeyCreatedAt:
@@ -642,24 +776,6 @@ static bool zf_record_decode_index_field(ZfCborCursor *cursor, uint64_t key,
     }
 }
 
-static void zf_record_index_to_stub_record(const char *file_name, const ZfCredentialIndexEntry *entry,
-                                           ZfCredentialRecord *record) {
-    memset(record, 0, sizeof(*record));
-    record->in_use = entry->in_use;
-    record->resident_key = entry->resident_key;
-    strncpy(record->file_name, file_name, sizeof(record->file_name) - 1);
-    memcpy(record->credential_id, entry->credential_id, sizeof(record->credential_id));
-    record->credential_id_len = entry->credential_id_len;
-    memcpy(record->rp_id, entry->rp_id, sizeof(record->rp_id));
-    memcpy(record->user_id, entry->user_id, sizeof(record->user_id));
-    record->user_id_len = entry->user_id_len;
-    memcpy(record->user_name, entry->user_name, sizeof(record->user_name));
-    memcpy(record->user_display_name, entry->user_display_name, sizeof(record->user_display_name));
-    record->sign_count = entry->sign_count;
-    record->created_at = entry->created_at;
-    record->cred_protect = entry->cred_protect;
-}
-
 static bool zf_record_decode_index(const uint8_t *data, size_t data_size, const char *file_name,
                                    ZfCredentialIndexEntry *out_entry) {
     ZfCborCursor cursor;
@@ -677,10 +793,11 @@ static bool zf_record_decode_index(const uint8_t *data, size_t data_size, const 
     bool saw_cred_protect = false;
     bool saw_counter_iv = false;
     bool saw_counter_seal = false;
-    ZfCredentialRecord stub_record;
 
     memset(out_entry, 0, sizeof(*out_entry));
+#ifdef ZF_HOST_TEST
     strncpy(out_entry->file_name, file_name, sizeof(out_entry->file_name) - 1);
+#endif
     out_entry->credential_id_len = ZF_CREDENTIAL_ID_LEN;
 
     zf_cbor_cursor_init(&cursor, data, data_size);
@@ -743,18 +860,24 @@ static bool zf_record_decode_index(const uint8_t *data, size_t data_size, const 
     if (saw_counter_iv != saw_counter_seal) {
         return false;
     }
-    if (version != ZF_STORE_VERSION || out_entry->rp_id[0] == '\0') {
+    if (version != ZF_STORE_VERSION
+#ifdef ZF_HOST_TEST
+        || out_entry->rp_id[0] == '\0'
+#endif
+    ) {
         return false;
     }
     if (!saw_cred_protect) {
         out_entry->cred_protect = ZF_CRED_PROTECT_UV_OPTIONAL;
     }
 
-    zf_record_index_to_stub_record(file_name, out_entry, &stub_record);
-    if (!zf_record_file_name_matches_id(&stub_record, file_name)) {
+    if (!zf_record_id_matches_file_name(out_entry->credential_id, out_entry->credential_id_len,
+                                        file_name)) {
         return false;
     }
-    if (saw_counter_iv && !zf_record_verify_counter_seal(&stub_record, counter_iv, counter_seal)) {
+    if (saw_counter_iv &&
+        !zf_record_verify_counter_seal_fields(out_entry->credential_id, out_entry->created_at,
+                                              out_entry->sign_count, counter_iv, counter_seal)) {
         return false;
     }
 
@@ -777,51 +900,66 @@ bool zf_store_record_format_is_record_name(const char *name) {
     return true;
 }
 
-bool zf_store_record_format_load_record(Storage *storage, const char *file_name,
-                                        ZfCredentialRecord *record) {
+bool zf_store_record_format_load_record_with_buffer(Storage *storage, const char *file_name,
+                                                    ZfCredentialRecord *record, uint8_t *buffer,
+                                                    size_t buffer_size) {
     char path[128];
-    uint8_t buffer[ZF_STORE_RECORD_MAX_SIZE];
     size_t size = 0;
     File *file = storage_file_alloc(storage);
+    bool decoded = false;
 
-    if (!file) {
+    if (!file || !file_name || !record || !buffer || buffer_size == 0) {
+        if (file) {
+            storage_file_free(file);
+        }
+        if (buffer && buffer_size > 0) {
+            zf_crypto_secure_zero(buffer, buffer_size);
+        }
         return false;
     }
     zf_store_build_record_path(file_name, path, sizeof(path));
     if (!storage_file_open(file, path, FSAM_READ, FSOM_OPEN_EXISTING)) {
         storage_file_free(file);
+        zf_crypto_secure_zero(buffer, buffer_size);
         return false;
     }
 
     size = storage_file_size(file);
-    if (size == 0 || size > sizeof(buffer)) {
+    if (size == 0 || size > buffer_size) {
         storage_file_close(file);
         storage_file_free(file);
+        zf_crypto_secure_zero(buffer, buffer_size);
         return false;
     }
     if (storage_file_read(file, buffer, size) != size) {
         storage_file_close(file);
         storage_file_free(file);
+        zf_crypto_secure_zero(buffer, buffer_size);
         return false;
     }
 
     storage_file_close(file);
     storage_file_free(file);
-    if (!zf_record_decode(buffer, size, file_name, record)) {
+    decoded = zf_record_decode(buffer, size, file_name, record);
+    zf_crypto_secure_zero(buffer, buffer_size);
+    if (!decoded) {
         return false;
     }
-    return zf_store_counter_floor_validate(storage, record);
+    return zf_store_counter_floor_validate(storage, record, NULL);
 }
 
-bool zf_store_record_format_load_index(Storage *storage, const char *file_name,
-                                       ZfCredentialIndexEntry *entry) {
+bool zf_store_record_format_load_index_with_buffer(Storage *storage, const char *file_name,
+                                                   ZfCredentialIndexEntry *entry, uint8_t *buffer,
+                                                   size_t buffer_size) {
     char path[128];
-    uint8_t buffer[ZF_STORE_RECORD_MAX_SIZE];
     size_t size = 0;
     File *file = storage_file_alloc(storage);
-    ZfCredentialRecord stub_record;
+    uint32_t counter_high_water = 0;
 
-    if (!file) {
+    if (!file || !file_name || !entry || !buffer || buffer_size == 0) {
+        if (file) {
+            storage_file_free(file);
+        }
         return false;
     }
     zf_store_build_record_path(file_name, path, sizeof(path));
@@ -831,7 +969,7 @@ bool zf_store_record_format_load_index(Storage *storage, const char *file_name,
     }
 
     size = storage_file_size(file);
-    if (size == 0 || size > sizeof(buffer)) {
+    if (size == 0 || size > buffer_size) {
         storage_file_close(file);
         storage_file_free(file);
         return false;
@@ -845,38 +983,64 @@ bool zf_store_record_format_load_index(Storage *storage, const char *file_name,
     storage_file_close(file);
     storage_file_free(file);
     if (!zf_record_decode_index(buffer, size, file_name, entry)) {
+        zf_crypto_secure_zero(buffer, size);
         return false;
     }
+    zf_crypto_secure_zero(buffer, size);
 
-    zf_record_index_to_stub_record(file_name, entry, &stub_record);
-    return zf_store_counter_floor_validate(storage, &stub_record);
+    if (!zf_store_counter_floor_validate_index(storage, file_name, entry, &counter_high_water)) {
+        return false;
+    }
+    entry->counter_high_water = counter_high_water;
+    return true;
 }
 
-bool zf_store_record_format_write_record(Storage *storage, const ZfCredentialRecord *record) {
-    uint8_t buffer[ZF_STORE_RECORD_MAX_SIZE];
+bool zf_store_record_format_write_record_with_buffer(Storage *storage,
+                                                     const ZfCredentialRecord *record,
+                                                     uint8_t *buffer, size_t buffer_size) {
     size_t encoded_size = 0;
     char path[128];
     char temp_path[128];
     File *file = storage_file_alloc(storage);
+    bool opened = false;
+    bool wrote = false;
+    bool renamed = false;
 
-    if (!file) {
+    if (!file || !record || !buffer || buffer_size == 0) {
+        if (file) {
+            storage_file_free(file);
+        }
+        if (buffer && buffer_size > 0) {
+            zf_crypto_secure_zero(buffer, buffer_size);
+        }
         return false;
     }
+    if (buffer_size < ZF_STORE_RECORD_MAX_SIZE) {
+        goto cleanup;
+    }
     if (!zf_store_record_format_encode(record, buffer, &encoded_size)) {
-        storage_file_free(file);
-        return false;
+        goto cleanup;
     }
 
     zf_store_build_record_path(record->file_name, path, sizeof(path));
     zf_store_build_temp_path(record->file_name, temp_path, sizeof(temp_path));
     storage_common_remove(storage, temp_path);
 
-    bool opened = storage_file_open(file, temp_path, FSAM_WRITE, FSOM_CREATE_ALWAYS);
-    bool wrote = opened && (storage_file_write(file, buffer, encoded_size) == encoded_size);
-    storage_file_close(file);
-    bool renamed = wrote && (storage_common_rename(storage, temp_path, path) == FSE_OK);
+    opened = storage_file_open(file, temp_path, FSAM_WRITE, FSOM_CREATE_ALWAYS);
+    wrote = opened && (storage_file_write(file, buffer, encoded_size) == encoded_size);
+    if (opened) {
+        storage_file_close(file);
+        opened = false;
+    }
+    renamed = wrote && (storage_common_rename(storage, temp_path, path) == FSE_OK);
     storage_common_remove(storage, temp_path);
+
+cleanup:
+    if (opened) {
+        storage_file_close(file);
+    }
     storage_file_free(file);
+    zf_crypto_secure_zero(buffer, buffer_size);
     if (renamed) {
         (void)zf_store_counter_floor_write(storage, record);
     }

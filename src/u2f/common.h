@@ -26,7 +26,6 @@ typedef enum {
 #define U2F_EC_BIGNUM_SIZE 32
 #define U2F_EC_POINT_SIZE 65
 #define U2F_DER_SIGNATURE_MAX_LEN 72
-#define U2F_CERT_CACHE_MAX_SIZE 1024
 
 typedef struct {
     uint8_t format;

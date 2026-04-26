@@ -13,10 +13,9 @@ typedef struct U2fData {
     uint8_t device_key[U2F_EC_KEY_SIZE];
     uint8_t cert_key[U2F_EC_KEY_SIZE];
     uint32_t counter;
+    uint32_t counter_high_water;
     bool ready;
     bool user_present;
-    uint16_t cert_len;
-    uint8_t cert[U2F_CERT_CACHE_MAX_SIZE];
     U2fEvtCallback callback;
     void *context;
     mbedtls_ecp_group group;

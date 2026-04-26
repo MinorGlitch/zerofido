@@ -1,9 +1,9 @@
 #include "bootstrap.h"
 
-#include <stdlib.h>
 #include <string.h>
 
 #include "../zerofido_store.h"
+#include "../zerofido_crypto.h"
 #include "internal.h"
 #include "record_format.h"
 #include "recovery.h"
@@ -27,31 +27,34 @@ bool zf_store_bootstrap_ensure_app_data_dir(Storage *storage) {
     return true;
 }
 
-bool zf_store_bootstrap_init(Storage *storage, ZfCredentialStore *store) {
+bool zf_store_bootstrap_init_with_buffer(Storage *storage, ZfCredentialStore *store,
+                                         uint8_t *buffer, size_t buffer_size) {
     File *dir = NULL;
     FileInfo info;
     char name[96];
-    if (!store->records) {
-        store->records = malloc(sizeof(store->records[0]) * ZF_MAX_CREDENTIALS);
-        if (!store->records) {
-            return false;
-        }
+    bool dir_opened = false;
+    bool ok = false;
+
+    if (!storage || !store || !store->records || !buffer ||
+        buffer_size < ZF_STORE_RECORD_MAX_SIZE) {
+        return false;
     }
+
     memset(store->records, 0, sizeof(store->records[0]) * ZF_MAX_CREDENTIALS);
     store->count = 0;
     if (!zf_store_bootstrap_ensure_app_data_dir(storage)) {
-        return false;
+        goto cleanup;
     }
 
     zf_store_recovery_cleanup_temp_files(storage);
     dir = storage_file_alloc(storage);
     if (!dir) {
-        return false;
+        goto cleanup;
     }
     if (!storage_dir_open(dir, ZF_APP_DATA_DIR)) {
-        storage_file_free(dir);
-        return false;
+        goto cleanup;
     }
+    dir_opened = true;
 
     while (storage_dir_read(dir, &info, name, sizeof(name))) {
         if (file_info_is_dir(&info)) {
@@ -63,14 +66,24 @@ bool zf_store_bootstrap_init(Storage *storage, ZfCredentialStore *store) {
         if (store->count >= ZF_MAX_CREDENTIALS) {
             break;
         }
-        if (zf_store_record_format_load_index(storage, name, &store->records[store->count])) {
+        if (zf_store_record_format_load_index_with_buffer(
+                storage, name, &store->records[store->count], buffer,
+                ZF_STORE_RECORD_MAX_SIZE)) {
             store->count++;
         }
     }
 
-    storage_dir_close(dir);
-    storage_file_free(dir);
-    return true;
+    ok = true;
+
+cleanup:
+    if (dir_opened) {
+        storage_dir_close(dir);
+    }
+    if (dir) {
+        storage_file_free(dir);
+    }
+    zf_crypto_secure_zero(buffer, ZF_STORE_RECORD_MAX_SIZE);
+    return ok;
 }
 
 bool zf_store_bootstrap_wipe_app_data(Storage *storage) {

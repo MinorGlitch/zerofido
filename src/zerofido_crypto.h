@@ -1,6 +1,7 @@
 #pragma once
 
 #include <mbedtls/ecp.h>
+#include <mbedtls/sha256.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -13,10 +14,24 @@ typedef struct {
     uint8_t public_y[ZF_PUBLIC_KEY_LEN];
 } ZfP256KeyAgreementKey;
 
+typedef struct {
+    uint8_t key_block[64];
+    uint8_t inner_hash[32];
+    uint8_t pad[64];
+    mbedtls_sha256_context sha;
+} ZfHmacSha256Scratch;
+
 bool zf_crypto_ensure_store_key(void);
+void zf_crypto_secure_zero(void *data, size_t size);
 void zf_crypto_sha256(const uint8_t *data, size_t size, uint8_t out[32]);
 void zf_crypto_sha256_concat(const uint8_t *first, size_t first_size, const uint8_t *second,
                              size_t second_size, uint8_t out[32]);
+bool zf_crypto_hmac_sha256_parts_with_scratch(
+    ZfHmacSha256Scratch *scratch, const uint8_t *key, size_t key_len, const uint8_t *first,
+    size_t first_size, const uint8_t *second, size_t second_size, uint8_t out[32]);
+bool zf_crypto_hmac_sha256_parts(const uint8_t *key, size_t key_len, const uint8_t *first,
+                                 size_t first_size, const uint8_t *second, size_t second_size,
+                                 uint8_t out[32]);
 bool zf_crypto_hmac_sha256(const uint8_t *key, size_t key_len, const uint8_t *data, size_t size,
                            uint8_t out[32]);
 bool zf_crypto_aes256_cbc_zero_iv_encrypt(const uint8_t key[32], const uint8_t *input,
