@@ -69,9 +69,10 @@ static void zerofido_ui_clear_interaction_signal(ZerofidoApp *app) {
     }
 }
 
-static bool zerofido_ui_wait_for_interaction_result(ZerofidoApp *app, uint32_t current_cid,
+static bool zerofido_ui_wait_for_interaction_result(ZerofidoApp *app,
+                                                    ZfTransportSessionId current_session_id,
                                                     bool *approved) {
-    if (!zf_transport_wait_for_interaction(app, current_cid, approved)) {
+    if (!zf_transport_wait_for_interaction(app, current_session_id, approved)) {
         return false;
     }
 
@@ -88,7 +89,7 @@ static bool zerofido_ui_wait_for_interaction_result(ZerofidoApp *app, uint32_t c
 
 bool zerofido_ui_request_approval(ZerofidoApp *app, ZfUiProtocol protocol, const char *operation,
                                   const char *target_id, const char *user_text,
-                                  uint32_t current_cid, bool *approved) {
+                                  ZfTransportSessionId current_session_id, bool *approved) {
     ZfResolvedCapabilities capabilities;
 
     furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
@@ -101,7 +102,7 @@ bool zerofido_ui_request_approval(ZerofidoApp *app, ZfUiProtocol protocol, const
     }
 
     zf_runtime_get_effective_capabilities(app, &capabilities);
-    if (capabilities.auto_accept_requests) {
+    if (capabilities.auto_accept_requests || app->transport_auto_accept_transaction) {
         furi_mutex_release(app->ui_mutex);
         if (approved) {
             *approved = true;
@@ -115,12 +116,12 @@ bool zerofido_ui_request_approval(ZerofidoApp *app, ZfUiProtocol protocol, const
     furi_mutex_release(app->ui_mutex);
 
     zerofido_ui_dispatch_custom_event(app, ZfEventShowApproval);
-    return zerofido_ui_wait_for_interaction_result(app, current_cid, approved);
+    return zerofido_ui_wait_for_interaction_result(app, current_session_id, approved);
 }
 
 bool zerofido_ui_request_assertion_selection(ZerofidoApp *app, const char *rp_id,
                                              const uint16_t *match_indices, size_t match_count,
-                                             uint32_t current_cid,
+                                             ZfTransportSessionId current_session_id,
                                              uint32_t *selected_record_index) {
     bool approved = false;
 
@@ -146,7 +147,7 @@ bool zerofido_ui_request_assertion_selection(ZerofidoApp *app, const char *rp_id
     furi_mutex_release(app->ui_mutex);
 
     zerofido_ui_dispatch_custom_event(app, ZfEventShowApproval);
-    if (!zerofido_ui_wait_for_interaction_result(app, current_cid, &approved) || !approved) {
+    if (!zerofido_ui_wait_for_interaction_result(app, current_session_id, &approved) || !approved) {
         return false;
     }
 
@@ -207,7 +208,7 @@ void zerofido_ui_hide_interaction(ZerofidoApp *app) {
     if (kind == ZfInteractionKindApproval) {
         dialog_ex_reset(app->approval_view);
     }
-    view_dispatcher_switch_to_view(app->view_dispatcher, ZfViewStatus);
+    zerofido_ui_switch_to_view(app, ZfViewStatus);
     if (approval_state == ZfApprovalTimedOut) {
         zerofido_ui_set_status(app, "Request timed out");
     } else if (approval_state == ZfApprovalDenied) {
@@ -249,12 +250,16 @@ bool zerofido_ui_cancel_pending_interaction(ZerofidoApp *app) {
     bool canceled = false;
 
     furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
-    canceled = zerofido_ui_finish_interaction_locked(app, ZfApprovalCanceled);
+    canceled = zerofido_ui_cancel_pending_interaction_locked(app);
     furi_mutex_release(app->ui_mutex);
     if (canceled) {
         zf_transport_notify_interaction_changed(app);
     }
     return canceled;
+}
+
+bool zerofido_ui_cancel_pending_interaction_locked(ZerofidoApp *app) {
+    return zerofido_ui_finish_interaction_locked(app, ZfApprovalCanceled);
 }
 
 ZfApprovalState zerofido_ui_get_interaction_state(ZerofidoApp *app) {

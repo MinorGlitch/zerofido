@@ -3,6 +3,7 @@
 #include <notification/notification_messages.h>
 
 #include "zerofido_app_i.h"
+#include "zerofido_ui_i.h"
 
 #define ZF_NOTIFY_WINK_MS 250
 #define ZF_NOTIFY_SUCCESS_MS 350
@@ -20,7 +21,7 @@ static const NotificationSequence zf_sequence_idle_charged = {
     &message_red_0, &message_green_255, &message_blue_0, &message_do_not_reset, NULL,
 };
 
-static void zf_notify_apply_idle_state(ZerofidoApp *app) {
+static void zf_notify_apply_idle_state(ZerofidoApp *app, bool block) {
     const NotificationSequence *sequence = &zf_sequence_idle_dark;
 
     if (!app || !app->notifications) {
@@ -35,7 +36,11 @@ static void zf_notify_apply_idle_state(ZerofidoApp *app) {
         }
     }
 
-    notification_message_block(app->notifications, sequence);
+    if (block) {
+        notification_message_block(app->notifications, sequence);
+    } else {
+        notification_message(app->notifications, sequence);
+    }
 }
 
 static void zf_notify_clear(ZerofidoApp *app) {
@@ -44,12 +49,21 @@ static void zf_notify_clear(ZerofidoApp *app) {
     }
 
     notification_message_block(app->notifications, &sequence_blink_stop);
-    zf_notify_apply_idle_state(app);
+    zf_notify_apply_idle_state(app, true);
+}
+
+static void zf_notify_clear_async(ZerofidoApp *app) {
+    if (!app || !app->notifications) {
+        return;
+    }
+
+    notification_message(app->notifications, &sequence_blink_stop);
+    zf_notify_apply_idle_state(app, false);
 }
 
 static void zf_notify_timeout_callback(void *context) {
     ZerofidoApp *app = context;
-    zf_notify_clear(app);
+    zf_notify_clear_async(app);
 }
 
 static void zf_notify_stop_timer(ZerofidoApp *app) {
@@ -78,7 +92,7 @@ bool zerofido_notify_init(ZerofidoApp *app) {
         return false;
     }
 
-    zf_notify_apply_idle_state(app);
+    zf_notify_apply_idle_state(app, true);
     return true;
 }
 
