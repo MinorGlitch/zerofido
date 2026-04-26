@@ -16,6 +16,7 @@
 
 #define ZF_NFC_WORKER_EVT_STOP (1U << 0)
 #define ZF_NFC_WORKER_EVT_REQUEST (1U << 1)
+#define ZF_NFC_LAST_TX_CAPACITY 320U
 
 typedef struct ZerofidoApp ZerofidoApp;
 typedef struct ZfNfcIso4Layer ZfNfcIso4Layer;
@@ -56,9 +57,11 @@ typedef struct {
     bool command_chain_active;
     bool iso4_last_tx_valid;
     bool iso_cid_present;
+    uint8_t iso4_last_tx[ZF_NFC_LAST_TX_CAPACITY];
     uint8_t iso_pcb;
     uint8_t iso_cid;
     uint8_t desfire_probe_frame;
+    size_t iso4_last_tx_len;
     size_t request_len;
     size_t response_len;
     size_t response_offset;
