@@ -14,6 +14,7 @@
 #include "zerofido_cbor.h"
 #include "zerofido_crypto.h"
 #include "ctap/parse.h"
+#include "ctap/policy.h"
 #include "ctap/response.h"
 #include "store/internal.h"
 #include "pin/state_store_internal.h"
@@ -86,6 +87,7 @@ static uint8_t g_transport_poll_status = ZF_CTAP_SUCCESS;
 static size_t g_mutex_depth = 0;
 static bool g_transport_poll_requires_unlocked = false;
 static size_t g_storage_file_alloc_index = 0;
+static size_t g_storage_counter_rename_count = 0;
 static bool g_storage_root_exists = true;
 static bool g_storage_app_data_exists = true;
 static char g_last_status_text[160];
@@ -196,6 +198,7 @@ static void test_storage_reset(void) {
     g_mutex_depth = 0;
     g_transport_poll_requires_unlocked = false;
     g_storage_file_alloc_index = 0;
+    g_storage_counter_rename_count = 0;
     g_storage_root_exists = true;
     g_storage_app_data_exists = true;
     memset(g_last_status_text, 0, sizeof(g_last_status_text));
@@ -244,6 +247,9 @@ FS_Error storage_common_rename(Storage *storage, const char *old_path, const cha
     new_data = test_storage_select_data(new_path, &new_size, &new_exists);
     if (old_data == NULL || new_data == NULL || !*old_exists) {
         return FSE_NOT_EXIST;
+    }
+    if (strstr(new_path, ".counter") != NULL) {
+        g_storage_counter_rename_count++;
     }
 
     memcpy(new_data, old_data, *old_size);
@@ -475,6 +481,19 @@ void furi_hal_crypto_enclave_unload_key(uint8_t slot) {
     UNUSED(slot);
 }
 
+bool furi_hal_crypto_load_key(const uint8_t *key, const uint8_t *iv) {
+    UNUSED(key);
+    UNUSED(iv);
+    if (g_fail_crypto_enclave_load_key) {
+        return false;
+    }
+    return true;
+}
+
+bool furi_hal_crypto_unload_key(void) {
+    return true;
+}
+
 bool furi_hal_crypto_encrypt(const uint8_t *input, uint8_t *output, size_t size) {
     memcpy(output, input, size);
     return true;
@@ -501,6 +520,11 @@ const uint8_t *zf_attestation_get_leaf_cert_der(size_t *out_len) {
     static const uint8_t cert[] = {0x30, 0x82, 0x00, 0x00};
     *out_len = sizeof(cert);
     return cert;
+}
+
+const uint8_t *zf_attestation_get_leaf_private_key(void) {
+    static const uint8_t private_key[ZF_PRIVATE_KEY_LEN] = {0};
+    return private_key;
 }
 
 size_t zf_attestation_get_cert_chain(const uint8_t **certs, size_t *cert_lens, size_t max_certs) {
@@ -534,6 +558,10 @@ bool zf_crypto_ensure_store_key(void) {
     return true;
 }
 
+void zf_crypto_secure_zero(void *data, size_t size) {
+    memset(data, 0, size);
+}
+
 void zf_crypto_sha256(const uint8_t *data, size_t size, uint8_t out[32]) {
     memset(out, 0, 32);
     for (size_t i = 0; i < size; ++i) {
@@ -549,13 +577,30 @@ void zf_crypto_sha256_concat(const uint8_t *first, size_t first_size, const uint
     }
 }
 
-bool zf_crypto_hmac_sha256(const uint8_t *key, size_t key_len, const uint8_t *data, size_t size,
-                           uint8_t out[32]) {
+bool zf_crypto_hmac_sha256_parts_with_scratch(
+    ZfHmacSha256Scratch *scratch, const uint8_t *key, size_t key_len, const uint8_t *first,
+    size_t first_size, const uint8_t *second, size_t second_size, uint8_t out[32]) {
+    UNUSED(scratch);
+    if (!key || !out || (first_size > 0U && !first) || (second_size > 0U && !second)) {
+        return false;
+    }
+
     zf_crypto_sha256(key, key_len, out);
-    for (size_t i = 0; i < size; ++i) {
-        out[i % 32] ^= data[i];
+    for (size_t i = 0; i < first_size; ++i) {
+        out[i % 32] ^= first[i];
+    }
+    for (size_t i = 0; i < second_size; ++i) {
+        out[i % 32] ^= second[i];
     }
     return true;
+}
+
+bool zf_crypto_hmac_sha256(const uint8_t *key, size_t key_len, const uint8_t *data, size_t size,
+                           uint8_t out[32]) {
+    ZfHmacSha256Scratch scratch;
+
+    return zf_crypto_hmac_sha256_parts_with_scratch(&scratch, key, key_len, data, size, NULL, 0,
+                                                    out);
 }
 
 bool zf_crypto_aes256_cbc_zero_iv_encrypt(const uint8_t key[32], const uint8_t *input,
@@ -894,7 +939,8 @@ bool zerofido_ui_request_approval(ZerofidoApp *app, ZfUiProtocol protocol, const
     UNUSED(target_id);
     UNUSED(user_text);
     UNUSED(current_cid);
-    if (app && app->runtime_config.auto_accept_requests) {
+    if (app &&
+        (app->runtime_config.auto_accept_requests || app->transport_auto_accept_transaction)) {
         *approved = true;
         return true;
     }
@@ -994,6 +1040,34 @@ static void expect(bool condition, const char *message) {
         fprintf(stderr, "FAIL: %s\n", message);
         exit(1);
     }
+}
+
+static bool test_zf_store_add_record(Storage *storage, ZfCredentialStore *store,
+                                     const ZfCredentialRecord *record) {
+    uint8_t buffer[ZF_STORE_RECORD_IO_SIZE];
+
+    return zf_store_add_record_with_buffer(storage, store, record, buffer, sizeof(buffer));
+}
+
+static bool test_zf_store_init(Storage *storage, ZfCredentialStore *store) {
+    uint8_t buffer[ZF_STORE_RECORD_IO_SIZE];
+
+    return zf_store_init_with_buffer(storage, store, buffer, sizeof(buffer));
+}
+
+static bool test_zf_store_record_format_load_record(Storage *storage, const char *file_name,
+                                                    ZfCredentialRecord *record) {
+    uint8_t buffer[ZF_STORE_RECORD_MAX_SIZE];
+
+    return zf_store_record_format_load_record_with_buffer(storage, file_name, record, buffer,
+                                                          sizeof(buffer));
+}
+
+static bool test_zf_store_record_format_write_record(Storage *storage,
+                                                     const ZfCredentialRecord *record) {
+    uint8_t buffer[ZF_STORE_RECORD_MAX_SIZE];
+
+    return zf_store_record_format_write_record_with_buffer(storage, record, buffer, sizeof(buffer));
 }
 
 static bool contains_text(const uint8_t *buffer, size_t size, const char *needle) {
@@ -1271,6 +1345,40 @@ static bool parse_make_credential_cred_protect_output(const uint8_t *buffer, siz
     return true;
 }
 
+static bool parse_make_credential_auth_flags(const uint8_t *buffer, size_t size, uint8_t *flags) {
+    ZfCborCursor cursor;
+    size_t pairs = 0;
+
+    zf_cbor_cursor_init(&cursor, buffer, size);
+    if (!zf_cbor_read_map_start(&cursor, &pairs)) {
+        return false;
+    }
+
+    for (size_t i = 0; i < pairs; ++i) {
+        uint64_t key = 0;
+        const uint8_t *auth_data = NULL;
+        size_t auth_data_len = 0;
+
+        if (!zf_cbor_read_uint(&cursor, &key)) {
+            return false;
+        }
+        if (key != 2) {
+            if (!zf_cbor_skip(&cursor)) {
+                return false;
+            }
+            continue;
+        }
+
+        if (!zf_cbor_read_bytes_ptr(&cursor, &auth_data, &auth_data_len) || auth_data_len < 37U) {
+            return false;
+        }
+        *flags = auth_data[32];
+        return true;
+    }
+
+    return false;
+}
+
 static void mark_pin_token_issued(ZfClientPinState *state) {
     state->pin_token_active = true;
     state->pin_token_issued_at = g_fake_tick;
@@ -1446,20 +1554,20 @@ static void test_record_decode_rejects_oversized_version(void) {
            "oversized version should be rejected");
 }
 
-static void test_record_decode_rejects_downgraded_sealed_version(void) {
+static void test_record_decode_rejects_unsupported_sealed_version(void) {
     uint8_t buffer[ZF_STORE_RECORD_MAX_SIZE];
     ZfCredentialRecord record;
     size_t size = encode_complete_record(buffer, sizeof(buffer));
 
     expect(buffer[1] == 0x01 && buffer[2] == ZF_STORE_FORMAT_VERSION,
            "sealed record version field should be at the expected prefix");
-    buffer[2] = 0x02;
+    buffer[2] = 0x00;
 
     expect(!zf_record_decode(buffer, size, k_repeated_credential_file_name, &record),
-           "downgraded sealed record versions should be rejected");
+           "unsupported sealed record versions should be rejected");
 }
 
-static void test_store_init_ignores_downgraded_record_file(void) {
+static void test_store_init_ignores_unsupported_record_file(void) {
     Storage storage = {0};
     ZfCredentialStore store = {0};
     ZfCredentialIndexEntry store_records[ZF_MAX_CREDENTIALS] = {0};
@@ -1472,19 +1580,19 @@ static void test_store_init_ignores_downgraded_record_file(void) {
     test_storage_reset();
     expect(buffer[1] == 0x01 && buffer[2] == ZF_STORE_FORMAT_VERSION,
            "sealed record version field should be at the expected prefix");
-    buffer[2] = 0x02;
+    buffer[2] = 0x00;
 
     snprintf(path, sizeof(path), "%s/%s", ZF_APP_DATA_DIR, k_repeated_credential_file_name);
     slot = test_storage_file_slot(path, true);
-    expect(slot != NULL, "allocate storage slot for downgraded record");
+    expect(slot != NULL, "allocate storage slot for unsupported-version record");
     memcpy(slot->data, buffer, size);
     slot->size = size;
     slot->exists = true;
 
-    expect(zf_store_init(&storage, &store),
-           "store init should succeed with downgraded record present");
-    expect(store.count == 0, "store init should ignore downgraded record files");
-    expect(slot->exists, "store init should not rewrite downgraded record files");
+    expect(test_zf_store_init(&storage, &store),
+           "store init should succeed with unsupported-version record present");
+    expect(store.count == 0, "store init should ignore unsupported-version record files");
+    expect(slot->exists, "store init should not rewrite unsupported-version record files");
 }
 
 static void test_cbor_text_read_rejects_declared_length_past_buffer(void) {
@@ -1559,7 +1667,8 @@ static void test_get_assertion_parse_treats_empty_allow_list_as_omitted(void) {
     expect(zf_ctap_parse_get_assertion(buffer, zf_cbor_encoder_size(&enc), &request) ==
                ZF_CTAP_SUCCESS,
            "empty allow list should be accepted");
-    expect(!request.has_allow_list, "empty allow list should be treated as omitted");
+    expect(!zf_ctap_request_uses_allow_list(&request),
+           "empty allow list should be treated as omitted");
 }
 
 static void test_get_assertion_parse_skips_unknown_float_member(void) {
@@ -1667,9 +1776,12 @@ static void test_get_assertion_parse_accepts_oversized_descriptor_id(void) {
     expect(zf_ctap_parse_get_assertion(buffer, zf_cbor_encoder_size(&enc), &request) ==
                ZF_CTAP_SUCCESS,
            "oversized descriptor id should be accepted");
-    expect(request.allow_list_count == 1, "oversized descriptor id should be retained");
-    expect(request.allow_list_lens[0] == sizeof(oversized_id),
-           "oversized descriptor id should preserve its original length");
+    expect(request.allow_list.count == 1, "oversized descriptor id should be counted");
+    expect(zf_ctap_request_uses_allow_list(&request),
+           "oversized public-key descriptor should still make an allow-list request");
+    expect(!zf_ctap_descriptor_list_contains_id(&request.allow_list, oversized_id,
+                                                ZF_CREDENTIAL_ID_LEN),
+           "oversized descriptor id should not match by truncated bytes");
 }
 
 static void test_get_assertion_parse_rejects_duplicate_descriptor_type_after_invalid_value(void) {
@@ -2009,9 +2121,65 @@ static void test_get_assertion_parse_rejects_duplicate_allow_list_descriptors(vo
            "duplicate allowList descriptors should be rejected");
 }
 
+static void test_get_assertion_parse_rejects_too_many_allow_list_descriptors(void) {
+    uint8_t buffer[1024];
+    ZfCborEncoder enc;
+    ZfGetAssertionRequest request;
+    static const uint8_t client_data_hash[32] = {0};
+
+    expect(zf_cbor_encoder_init(&enc, buffer, sizeof(buffer)),
+           "init oversized getAssertion allowList encoder");
+    expect(zf_cbor_encode_map(&enc, 3) && zf_cbor_encode_uint(&enc, 1) &&
+               zf_cbor_encode_text(&enc, "example.com") && zf_cbor_encode_uint(&enc, 2) &&
+               zf_cbor_encode_bytes(&enc, client_data_hash, sizeof(client_data_hash)) &&
+               zf_cbor_encode_uint(&enc, 3) && zf_cbor_encode_array(&enc, ZF_MAX_ALLOW_LIST + 1U),
+           "encode oversized getAssertion allowList header");
+    for (size_t i = 0; i <= ZF_MAX_ALLOW_LIST; ++i) {
+        uint8_t credential_id[] = {(uint8_t)(i + 1U)};
+        expect(zf_cbor_encode_map(&enc, 2) && zf_cbor_encode_text(&enc, "id") &&
+                   zf_cbor_encode_bytes(&enc, credential_id, sizeof(credential_id)) &&
+                   zf_cbor_encode_text(&enc, "type") && zf_cbor_encode_text(&enc, "public-key"),
+               "encode allowList descriptor");
+    }
+
+    expect(zf_ctap_parse_get_assertion(buffer, zf_cbor_encoder_size(&enc), &request) ==
+               ZF_CTAP_ERR_INVALID_PARAMETER,
+           "too many effective allowList descriptors should be rejected");
+}
+
+static void test_get_assertion_parse_accepts_duplicate_oversized_allow_list_descriptors(void) {
+    uint8_t buffer[512];
+    uint8_t oversized_id[ZF_CREDENTIAL_ID_LEN + 1];
+    ZfCborEncoder enc;
+    ZfGetAssertionRequest request;
+    static const uint8_t client_data_hash[32] = {0};
+
+    memset(oversized_id, 0xBC, sizeof(oversized_id));
+    expect(zf_cbor_encoder_init(&enc, buffer, sizeof(buffer)),
+           "init duplicate oversized allowList encoder");
+    expect(zf_cbor_encode_map(&enc, 3) && zf_cbor_encode_uint(&enc, 1) &&
+               zf_cbor_encode_text(&enc, "example.com") && zf_cbor_encode_uint(&enc, 2) &&
+               zf_cbor_encode_bytes(&enc, client_data_hash, sizeof(client_data_hash)) &&
+               zf_cbor_encode_uint(&enc, 3) && zf_cbor_encode_array(&enc, 2) &&
+               zf_cbor_encode_map(&enc, 2) && zf_cbor_encode_text(&enc, "id") &&
+               zf_cbor_encode_bytes(&enc, oversized_id, sizeof(oversized_id)) &&
+               zf_cbor_encode_text(&enc, "type") && zf_cbor_encode_text(&enc, "public-key") &&
+               zf_cbor_encode_map(&enc, 2) && zf_cbor_encode_text(&enc, "id") &&
+               zf_cbor_encode_bytes(&enc, oversized_id, sizeof(oversized_id)) &&
+               zf_cbor_encode_text(&enc, "type") && zf_cbor_encode_text(&enc, "public-key"),
+           "encode duplicate oversized allowList descriptors");
+
+    expect(zf_ctap_parse_get_assertion(buffer, zf_cbor_encoder_size(&enc), &request) ==
+               ZF_CTAP_SUCCESS,
+           "duplicate oversized allowList descriptors should preserve previous acceptance");
+    expect(request.allow_list.count == 2,
+           "duplicate oversized allowList descriptors should still count as effective entries");
+}
+
 static void test_assertion_response_user_fields_follow_uv(void) {
     ZfGetAssertionRequest request = {0};
     ZfCredentialRecord record = {0};
+    ZfAssertionResponseScratch scratch = {0};
     uint8_t response[256];
     size_t response_len = 0;
 
@@ -2024,9 +2192,9 @@ static void test_assertion_response_user_fields_follow_uv(void) {
     strcpy(record.user_name, "alice");
     strcpy(record.user_display_name, "Alice Example");
 
-    expect(zf_ctap_build_assertion_response(&request, &record, true, true, 8, true, true, 2,
-                                            response, sizeof(response),
-                                            &response_len) == ZF_CTAP_SUCCESS,
+    expect(zf_ctap_build_assertion_response_with_scratch(
+               &scratch, &request, &record, true, true, 8, true, true, 2, response,
+               sizeof(response), &response_len) == ZF_CTAP_SUCCESS,
            "uv assertion response should build");
     expect(contains_text(response, response_len, "name"), "uv response should include name key");
     expect(contains_text(response, response_len, "displayName"),
@@ -2035,9 +2203,9 @@ static void test_assertion_response_user_fields_follow_uv(void) {
     expect(contains_text(response, response_len, "Alice Example"),
            "uv response should include display name value");
 
-    expect(zf_ctap_build_assertion_response(&request, &record, true, false, 9, false, false, 1,
-                                            response, sizeof(response),
-                                            &response_len) == ZF_CTAP_SUCCESS,
+    expect(zf_ctap_build_assertion_response_with_scratch(
+               &scratch, &request, &record, true, false, 9, false, false, 1, response,
+               sizeof(response), &response_len) == ZF_CTAP_SUCCESS,
            "non-uv assertion response should build");
     expect(!contains_text(response, response_len, "displayName"),
            "non-uv response omits displayName");
@@ -2282,9 +2450,10 @@ static void test_make_credential_parse_accepts_oversized_exclude_id(void) {
     expect(zf_ctap_parse_make_credential(buffer, zf_cbor_encoder_size(&enc), &request) ==
                ZF_CTAP_SUCCESS,
            "oversized exclude id should be accepted");
-    expect(request.exclude_count == 1, "oversized exclude id should be retained");
-    expect(request.exclude_lens[0] == sizeof(oversized_id),
-           "oversized exclude id should preserve its original length");
+    expect(request.exclude_list.count == 1, "oversized exclude id should be counted");
+    expect(!zf_ctap_descriptor_list_contains_id(&request.exclude_list, oversized_id,
+                                                ZF_CREDENTIAL_ID_LEN),
+           "oversized exclude id should not match by truncated bytes");
 }
 
 static void test_make_credential_parse_ignores_non_public_key_exclude_descriptor(void) {
@@ -2317,7 +2486,7 @@ static void test_make_credential_parse_ignores_non_public_key_exclude_descriptor
     expect(zf_ctap_parse_make_credential(buffer, zf_cbor_encoder_size(&enc), &request) ==
                ZF_CTAP_SUCCESS,
            "excludeList entries with non-public-key type should be ignored");
-    expect(request.exclude_count == 0,
+    expect(request.exclude_list.count == 0,
            "non-public-key exclude descriptors should not populate the parsed list");
 }
 
@@ -2366,7 +2535,7 @@ static void test_get_assertion_parse_ignores_non_public_key_allow_list_descripto
     expect(zf_ctap_parse_get_assertion(buffer, zf_cbor_encoder_size(&enc), &request) ==
                ZF_CTAP_SUCCESS,
            "allowList entries with non-public-key type should be ignored");
-    expect(request.allow_list_count == 0,
+    expect(request.allow_list.count == 0,
            "non-public-key allowList descriptors should not populate the parsed list");
 }
 
@@ -2388,30 +2557,48 @@ static void test_store_find_by_rp_orders_records_by_newest_first(void) {
     store.records[1].created_at = 30;
     store.records[2].created_at = 20;
 
-    expect(zf_store_find_by_rp(&store, "example.com", matches, ZF_MAX_CREDENTIALS) == 3,
+    expect(zf_store_find_by_rp(NULL, &store, "example.com", matches, ZF_MAX_CREDENTIALS) == 3,
            "should find all resident credentials for rp");
     expect(matches[0] == 1, "newest credential should be first");
     expect(matches[1] == 2, "second-newest credential should be second");
     expect(matches[2] == 0, "oldest credential should be last");
 }
 
-static void test_store_allow_list_ignores_oversized_descriptor_ids(void) {
+static void test_store_descriptor_list_ignores_oversized_descriptor_ids(void) {
     ZfCredentialStore store = {0};
     ZfCredentialIndexEntry store_records[ZF_MAX_CREDENTIALS] = {0};
+    ZfGetAssertionRequest request;
     store.records = store_records;
     uint16_t matches[ZF_MAX_CREDENTIALS] = {0};
-    uint8_t allow_list[1][ZF_CREDENTIAL_ID_LEN] = {{0}};
-    size_t allow_list_lens[1] = {ZF_CREDENTIAL_ID_LEN + 1};
+    uint8_t buffer[512];
+    uint8_t oversized_id[ZF_CREDENTIAL_ID_LEN + 1];
+    ZfCborEncoder enc;
+    static const uint8_t client_data_hash[32] = {0};
 
+    memset(oversized_id, 0xAB, sizeof(oversized_id));
     store.count = 1;
     store.records[0].in_use = true;
     strcpy(store.records[0].rp_id, "example.com");
     store.records[0].credential_id_len = ZF_CREDENTIAL_ID_LEN;
     memset(store.records[0].credential_id, 0xAB, ZF_CREDENTIAL_ID_LEN);
-    memset(allow_list[0], 0xAB, ZF_CREDENTIAL_ID_LEN);
 
-    expect(zf_store_find_by_rp_and_allow_list(&store, "example.com", allow_list, allow_list_lens, 1,
-                                              matches, ZF_MAX_CREDENTIALS) == 0,
+    expect(zf_cbor_encoder_init(&enc, buffer, sizeof(buffer)),
+           "init oversized store allowList encoder");
+    expect(zf_cbor_encode_map(&enc, 3) && zf_cbor_encode_uint(&enc, 1) &&
+               zf_cbor_encode_text(&enc, "example.com") && zf_cbor_encode_uint(&enc, 2) &&
+               zf_cbor_encode_bytes(&enc, client_data_hash, sizeof(client_data_hash)) &&
+               zf_cbor_encode_uint(&enc, 3) && zf_cbor_encode_array(&enc, 1) &&
+               zf_cbor_encode_map(&enc, 2) && zf_cbor_encode_text(&enc, "id") &&
+               zf_cbor_encode_bytes(&enc, oversized_id, sizeof(oversized_id)) &&
+               zf_cbor_encode_text(&enc, "type") && zf_cbor_encode_text(&enc, "public-key"),
+           "encode oversized store allowList descriptor");
+    expect(zf_ctap_parse_get_assertion(buffer, zf_cbor_encoder_size(&enc), &request) ==
+               ZF_CTAP_SUCCESS,
+           "parse oversized store allowList descriptor");
+
+    expect(zf_store_find_by_rp_filtered(NULL, &store, request.rp_id,
+                                        zf_ctap_store_entry_matches_descriptor_list,
+                                        &request.allow_list, matches, ZF_MAX_CREDENTIALS) == 0,
            "oversized descriptor ids should be ignored rather than matched");
 }
 
@@ -2487,9 +2674,9 @@ static void seed_assertion_queue_record_full(ZfCredentialRecord *record, uint8_t
                                              uint32_t sign_count);
 static void seed_assertion_queue_record_index(ZfCredentialIndexEntry *record, uint8_t id_byte,
                                               uint32_t sign_count);
-#define seed_assertion_queue_record(record, id_byte, sign_count) \
-    _Generic((record), \
-        ZfCredentialRecord *: seed_assertion_queue_record_full, \
+#define seed_assertion_queue_record(record, id_byte, sign_count)                                   \
+    _Generic((record),                                                                             \
+        ZfCredentialRecord *: seed_assertion_queue_record_full,                                    \
         ZfCredentialIndexEntry *: seed_assertion_queue_record_index)(record, id_byte, sign_count)
 
 static size_t encode_get_assertion_ctap_request_with_pin_auth(
@@ -2624,41 +2811,41 @@ static void test_pin_clear_removes_persisted_state_and_resets_runtime(void) {
     expect(!restored.pin_set, "re-init after clear should not restore a PIN");
 }
 
-static void test_pin_init_rejects_unsealed_v3_state(void) {
+static void test_pin_init_rejects_unsupported_format_state(void) {
     Storage storage = {0};
     ZfClientPinState state = {0};
-    ZfPinFileRecordV3 legacy = {0};
+    ZfPinFileRecordBase invalid = {0};
 
     test_storage_reset();
-    legacy.magic = ZF_PIN_FILE_MAGIC;
-    legacy.version = ZF_PIN_FILE_VERSION_UNSEALED;
-    legacy.pin_retries = 5;
-    legacy.pin_consecutive_mismatches = 2;
-    legacy.flags = ZF_PIN_FILE_FLAG_AUTH_BLOCKED;
-    memset(legacy.iv, 0xA5, sizeof(legacy.iv));
-    memset(legacy.encrypted_pin_hash, 0x5C, sizeof(legacy.encrypted_pin_hash));
-    memcpy(g_pin_file_data, &legacy, sizeof(legacy));
-    g_pin_file_size = sizeof(legacy);
+    invalid.magic = ZF_PIN_FILE_MAGIC;
+    invalid.version = 0U;
+    invalid.pin_retries = 5;
+    invalid.pin_consecutive_mismatches = 2;
+    invalid.flags = ZF_PIN_FILE_FLAG_AUTH_BLOCKED;
+    memset(invalid.iv, 0xA5, sizeof(invalid.iv));
+    memset(invalid.encrypted_pin_hash, 0x5C, sizeof(invalid.encrypted_pin_hash));
+    memcpy(g_pin_file_data, &invalid, sizeof(invalid));
+    g_pin_file_size = sizeof(invalid);
     g_pin_file_exists = true;
 
-    expect(!zerofido_pin_init(&storage, &state), "legacy unsealed PIN state should be rejected");
+    expect(!zerofido_pin_init(&storage, &state), "unsupported PIN state format should be rejected");
     expect(zerofido_pin_init_with_result(&storage, &state) == ZfPinInitInvalidPersistedState,
-           "legacy unsealed PIN state should be classified as invalid persisted state");
+           "unsupported PIN state format should be classified as invalid persisted state");
 }
 
-static void test_pin_init_rejects_downgraded_current_format_state(void) {
+static void test_pin_init_rejects_unsupported_current_format_version(void) {
     Storage storage = {0};
     ZfClientPinState state = {0};
     ZfClientPinState restored = {0};
 
     test_storage_reset();
-    expect(zerofido_pin_init(&storage, &state), "init PIN state for downgrade test");
+    expect(zerofido_pin_init(&storage, &state), "init PIN state for unsupported-version test");
     expect(zerofido_pin_set_plaintext(&storage, &state, "1234") == ZF_CTAP_SUCCESS,
-           "set PIN for downgrade test");
+           "set PIN for unsupported-version test");
 
-    ((ZfPinFileRecord *)g_pin_file_data)->base.version = ZF_PIN_FILE_VERSION_UNSEALED;
+    ((ZfPinFileRecord *)g_pin_file_data)->base.version = 0U;
     expect(!zerofido_pin_init(&storage, &restored),
-           "downgraded current-format PIN state should be rejected");
+           "current-format PIN state with unsupported version should be rejected");
 }
 
 static void test_pin_init_rejects_tampered_retry_state(void) {
@@ -2732,7 +2919,7 @@ static void test_ui_format_approval_body_uses_protocol_specific_target_label(voi
 }
 
 static void test_ui_format_fido2_credential_label_uses_type_tag(void) {
-    ZfCredentialIndexEntry record = {0};
+    ZfCredentialRecord record = {0};
     char out[128];
 
     record.in_use = true;
@@ -2751,7 +2938,7 @@ static void test_ui_format_fido2_credential_label_uses_type_tag(void) {
 }
 
 static void test_ui_format_fido2_credential_detail_includes_protocol_and_type(void) {
-    ZfCredentialIndexEntry record = {0};
+    ZfCredentialRecord record = {0};
     char out[256];
 
     record.in_use = true;
@@ -3139,6 +3326,23 @@ static void test_runtime_config_persist_round_trips_auto_accept_setting(void) {
            "runtime config load should restore the persisted FIDO2 enabled setting");
 }
 
+static void test_runtime_config_persist_round_trips_transport_mode(void) {
+    Storage storage = {0};
+    ZfRuntimeConfig saved = {0};
+    ZfRuntimeConfig loaded = {0};
+
+    test_storage_reset();
+    zf_runtime_config_load_defaults(&saved);
+    saved.transport_mode = ZfTransportModeNfc;
+
+    expect(zf_runtime_config_persist(&storage, &saved),
+           "persisting NFC transport config should succeed in native storage");
+
+    zf_runtime_config_load(&storage, &loaded);
+    expect(loaded.transport_mode == ZfTransportModeNfc,
+           "runtime config load should restore the persisted NFC transport mode");
+}
+
 static void test_runtime_config_load_invalid_file_falls_back_to_defaults(void) {
     Storage storage = {0};
     ZfRuntimeConfig loaded = {.auto_accept_requests = true, .fido2_enabled = false};
@@ -3156,6 +3360,32 @@ static void test_runtime_config_load_invalid_file_falls_back_to_defaults(void) {
            "invalid runtime config file should fall back to defaults");
     expect(loaded.fido2_enabled,
            "invalid runtime config file should restore default FIDO2 availability");
+}
+
+static void test_runtime_config_load_rejects_unsupported_version(void) {
+    Storage storage = {0};
+    ZfRuntimeConfig loaded = {.auto_accept_requests = true, .fido2_enabled = false};
+    TestStorageFile *file = NULL;
+    ZfRuntimeConfigFileRecord record = {
+        .magic = ZF_RUNTIME_CONFIG_FILE_MAGIC,
+        .version = 3U,
+        .flags = ZF_RUNTIME_CONFIG_FLAG_AUTO_ACCEPT_REQUESTS,
+        .transport_mode = ZfTransportModeUsbHid,
+        .reserved = 0,
+    };
+
+    test_storage_reset();
+    file = test_storage_file_slot(ZF_RUNTIME_CONFIG_FILE_PATH, true);
+    expect(file != NULL, "allocate runtime config storage slot for unsupported version");
+    file->exists = true;
+    file->size = sizeof(record);
+    memcpy(file->data, &record, sizeof(record));
+
+    zf_runtime_config_load(&storage, &loaded);
+    expect(!loaded.auto_accept_requests,
+           "unsupported runtime config version should fall back to defaults");
+    expect(loaded.fido2_enabled,
+           "unsupported runtime config version should keep default FIDO2 availability");
 }
 
 static void test_runtime_config_set_auto_accept_preserves_runtime_state_on_persist_failure(void) {
@@ -3701,19 +3931,20 @@ static void test_store_resident_records_for_same_user_coexist_after_reload(void)
     second.in_use = true;
     second.created_at = 2;
 
-    expect(zf_store_add_record(&storage, &store, &first), "write original resident record");
-    expect(zf_store_add_record(&storage, &store, &second),
+    expect(test_zf_store_add_record(&storage, &store, &first), "write original resident record");
+    expect(test_zf_store_add_record(&storage, &store, &second),
            "second resident record for the same user should coexist");
     expect(store.count == 2, "coexisting resident records should both remain in memory");
-    expect(zf_store_record_format_load_record(&storage, first.file_name, &loaded),
+    expect(test_zf_store_record_format_load_record(&storage, first.file_name, &loaded),
            "original resident record should remain reloadable");
     expect(memcmp(loaded.credential_id, first.credential_id, sizeof(first.credential_id)) == 0,
            "loaded original record should keep its credential id");
-    expect(zf_store_record_format_load_record(&storage, second.file_name, &loaded),
+    expect(test_zf_store_record_format_load_record(&storage, second.file_name, &loaded),
            "second resident record should load from its own file");
     expect(memcmp(loaded.credential_id, second.credential_id, sizeof(second.credential_id)) == 0,
            "loaded resident record should keep its credential id");
-    expect(zf_store_init(&storage, &reloaded), "reloading store should preserve both records");
+    expect(test_zf_store_init(&storage, &reloaded),
+           "reloading store should preserve both records");
     expect(reloaded.count == 2, "store init must not collapse resident credentials for one user");
 }
 
@@ -3730,21 +3961,21 @@ static void test_store_wipe_app_data_clears_credentials_and_pin_state(void) {
     ZfCredentialRecord record = {0};
 
     test_storage_reset();
-    expect(zf_store_init(&storage, &store), "init store before app-data wipe");
+    expect(test_zf_store_init(&storage, &store), "init store before app-data wipe");
     expect(zerofido_pin_init(&storage, &state), "init PIN state before app-data wipe");
     expect(zerofido_pin_set_plaintext(&storage, &state, "1234") == ZF_CTAP_SUCCESS,
            "set PIN before app-data wipe");
     expect(zf_store_prepare_credential(&record, "example.com", (const uint8_t *)"user-1", 6,
                                        "alice", "Alice", true),
            "prepare credential before app-data wipe");
-    expect(zf_store_add_record(&storage, &store, &record),
+    expect(test_zf_store_add_record(&storage, &store, &record),
            "persist credential before app-data wipe");
     expect(zf_store_count_saved(&store) == 1, "store should contain one credential before wipe");
     expect(g_pin_file_exists, "PIN file should exist before app-data wipe");
 
     expect(zf_store_wipe_app_data(&storage), "wipe ZeroFIDO app data");
     expect(!g_pin_file_exists, "PIN file should be removed by app-data wipe");
-    expect(zf_store_init(&storage, &reloaded), "re-init store after app-data wipe");
+    expect(test_zf_store_init(&storage, &reloaded), "re-init store after app-data wipe");
     expect(zf_store_count_saved(&reloaded) == 0, "store should be empty after app-data wipe");
     expect(zerofido_pin_init(&storage, &restored), "re-init PIN state after app-data wipe");
     expect(!restored.pin_set, "PIN should be cleared after app-data wipe");
@@ -4387,6 +4618,64 @@ static void test_make_credential_auto_accept_bypasses_approval_prompt(void) {
     expect(response[0] == ZF_CTAP_SUCCESS, "auto-accept makeCredential should return success");
     expect(g_approval_request_count == 0,
            "auto-accept makeCredential should bypass the approval prompt");
+}
+
+static void test_make_credential_nfc_auto_accept_keeps_uv_clear(void) {
+    Storage storage = {0};
+    ZerofidoApp app = {0};
+    ZfCredentialIndexEntry app_store_records[ZF_MAX_CREDENTIALS] = {0};
+    app.store.records = app_store_records;
+    FuriMutex ui_mutex = {0};
+    uint8_t request[256];
+    uint8_t response[512];
+    size_t response_len = 0;
+    uint8_t flags = 0;
+
+    test_storage_reset();
+    app.storage = &storage;
+    app.ui_mutex = &ui_mutex;
+    app.transport_auto_accept_transaction = true;
+
+    response_len = zerofido_handle_ctap2(
+        &app, 0x01020304, request, encode_make_credential_ctap_request(request, sizeof(request)),
+        response, sizeof(response));
+
+    expect(response_len > 1, "NFC auto-accept makeCredential should still succeed");
+    expect(response[0] == ZF_CTAP_SUCCESS, "NFC auto-accept makeCredential should return success");
+    expect(parse_make_credential_auth_flags(response + 1, response_len - 1, &flags),
+           "NFC makeCredential response should expose authenticator data flags");
+    expect((flags & 0x04U) == 0U,
+           "NFC auto-accept makeCredential should not fake user verification");
+    expect(g_approval_request_count == 0,
+           "NFC auto-accept makeCredential should bypass the approval prompt");
+}
+
+static void test_make_credential_nfc_auto_accept_rejects_uv_option_without_pin(void) {
+    Storage storage = {0};
+    ZerofidoApp app = {0};
+    ZfCredentialIndexEntry app_store_records[ZF_MAX_CREDENTIALS] = {0};
+    app.store.records = app_store_records;
+    FuriMutex ui_mutex = {0};
+    uint8_t request[256];
+    uint8_t response[512];
+    size_t response_len = 0;
+
+    test_storage_reset();
+    app.storage = &storage;
+    app.ui_mutex = &ui_mutex;
+    app.transport_auto_accept_transaction = true;
+
+    response_len = zerofido_handle_ctap2(
+        &app, 0x01020304, request,
+        encode_make_credential_ctap_request_with_pin_auth(request, sizeof(request), true, true,
+                                                          false, NULL, 0, false, false, NULL, 0),
+        response, sizeof(response));
+
+    expect(response_len == 1, "NFC auto-accept uv=true makeCredential should return only status");
+    expect(response[0] == ZF_CTAP_ERR_UNSUPPORTED_OPTION,
+           "NFC auto-accept must not satisfy uv=true without real UV/PIN support");
+    expect(g_approval_request_count == 0,
+           "NFC auto-accept uv=true rejection should happen before approval");
 }
 
 static void test_get_assertion_pin_auth_takes_precedence_over_uv(void) {
@@ -5086,7 +5375,11 @@ static void test_get_assertion_allow_list_does_not_open_account_selection(void) 
     FuriMutex ui_mutex = {0};
     uint8_t request[256];
     uint8_t response[512];
+    uint8_t next_response[512];
     size_t response_len = 0;
+    size_t next_response_len = 0;
+    const uint8_t *credential_id = NULL;
+    size_t credential_id_len = 0;
 
     test_storage_reset();
     app.storage = &storage;
@@ -5094,6 +5387,8 @@ static void test_get_assertion_allow_list_does_not_open_account_selection(void) 
     app.store.count = 2;
     seed_assertion_queue_record(&app.store.records[0], 0x11, 4);
     seed_assertion_queue_record(&app.store.records[1], 0x22, 5);
+    app.store.records[0].created_at = 20;
+    app.store.records[1].created_at = 10;
 
     response_len = zerofido_handle_ctap2(
         &app, 0x01020304, request,
@@ -5109,8 +5404,32 @@ static void test_get_assertion_allow_list_does_not_open_account_selection(void) 
            "allowList GetAssertion should not use account selection");
     expect(g_approval_request_count == 1,
            "allowList GetAssertion should keep the approval-only path");
-    expect(!cbor_map_contains_uint_key(response + 1, response_len - 1, 5),
-           "allowList GetAssertion should omit numberOfCredentials");
+    expect(get_info_has_uint_field(response + 1, response_len - 1, 5, 2),
+           "allowList GetAssertion should include numberOfCredentials for multiple matches");
+    expect(app.assertion_queue.active,
+           "allowList GetAssertion should seed the GetNextAssertion queue");
+    expect(app.assertion_queue.session_id == 0x01020304,
+           "allowList GetAssertion should bind the queue to the active CID");
+    expect(app.assertion_queue.count == 2,
+           "allowList GetAssertion should queue every matching credential");
+    expect(app.assertion_queue.index == 1,
+           "allowList GetAssertion should leave the first queued follow-up pending");
+
+    next_response_len =
+        zerofido_handle_ctap2(&app, 0x01020304, (const uint8_t[]){ZfCtapeCmdGetNextAssertion}, 1,
+                              next_response, sizeof(next_response));
+
+    expect(next_response_len > 1, "allowList GetNextAssertion should return the queued assertion");
+    expect(next_response[0] == ZF_CTAP_SUCCESS, "allowList GetNextAssertion should succeed");
+    expect(parse_assertion_response_credential_id(next_response + 1, next_response_len - 1,
+                                                  &credential_id, &credential_id_len),
+           "allowList GetNextAssertion should include a credential descriptor");
+    expect(credential_id_len == app.store.records[1].credential_id_len,
+           "allowList GetNextAssertion should return the next credential length");
+    expect(memcmp(credential_id, app.store.records[1].credential_id, credential_id_len) == 0,
+           "allowList GetNextAssertion should return the next matching credential");
+    expect(!app.assertion_queue.active,
+           "final allowList GetNextAssertion should clear the assertion queue");
 }
 
 static void seed_assertion_queue_record_full(ZfCredentialRecord *record, uint8_t id_byte,
@@ -5158,7 +5477,7 @@ static void test_get_next_assertion_rejects_wrong_cid(void) {
     seed_assertion_queue_record(&app.store.records[1], 0x22, 5);
 
     app.assertion_queue.active = true;
-    app.assertion_queue.cid = 0x01020304;
+    app.assertion_queue.session_id = 0x01020304;
     app.assertion_queue.count = 2;
     app.assertion_queue.index = 1;
     app.assertion_queue.expires_at = g_fake_tick + ZF_ASSERTION_QUEUE_TIMEOUT_MS;
@@ -5197,7 +5516,7 @@ static void test_get_next_assertion_refreshes_queue_expiry(void) {
     seed_assertion_queue_record(&app.store.records[2], 0x33, 6);
 
     app.assertion_queue.active = true;
-    app.assertion_queue.cid = 0x01020304;
+    app.assertion_queue.session_id = 0x01020304;
     app.assertion_queue.count = 3;
     app.assertion_queue.index = 1;
     app.assertion_queue.expires_at = g_fake_tick + 50;
@@ -5261,7 +5580,7 @@ static void test_get_next_assertion_rejects_expired_queue(void) {
     seed_assertion_queue_record(&app.store.records[1], 0x22, 5);
 
     app.assertion_queue.active = true;
-    app.assertion_queue.cid = 0x01020304;
+    app.assertion_queue.session_id = 0x01020304;
     app.assertion_queue.count = 2;
     app.assertion_queue.index = 1;
     app.assertion_queue.expires_at = g_fake_tick - 1;
@@ -5299,7 +5618,7 @@ static void test_get_next_assertion_clears_final_queue_state(void) {
     seed_assertion_queue_record(&app.store.records[1], 0x22, 5);
 
     app.assertion_queue.active = true;
-    app.assertion_queue.cid = 0x01020304;
+    app.assertion_queue.session_id = 0x01020304;
     app.assertion_queue.count = 2;
     app.assertion_queue.index = 1;
     app.assertion_queue.expires_at = g_fake_tick + ZF_ASSERTION_QUEUE_TIMEOUT_MS;
@@ -5338,7 +5657,7 @@ static void test_get_next_assertion_missing_record_clears_queue(void) {
     seed_assertion_queue_record(&app.store.records[0], 0x11, 4);
 
     app.assertion_queue.active = true;
-    app.assertion_queue.cid = 0x01020304;
+    app.assertion_queue.session_id = 0x01020304;
     app.assertion_queue.count = 2;
     app.assertion_queue.index = 1;
     app.assertion_queue.expires_at = g_fake_tick + ZF_ASSERTION_QUEUE_TIMEOUT_MS;
@@ -5377,7 +5696,7 @@ static void test_get_next_assertion_rejects_trailing_payload(void) {
     seed_assertion_queue_record(&app.store.records[1], 0x22, 5);
 
     app.assertion_queue.active = true;
-    app.assertion_queue.cid = 0x01020304;
+    app.assertion_queue.session_id = 0x01020304;
     app.assertion_queue.count = 2;
     app.assertion_queue.index = 1;
     app.assertion_queue.expires_at = g_fake_tick + ZF_ASSERTION_QUEUE_TIMEOUT_MS;
@@ -5508,14 +5827,15 @@ static void test_ctap_reset_succeeds_and_wipes_runtime_state(void) {
     zf_runtime_config_resolve_capabilities(&app.runtime_config, &app.capabilities);
     app.capabilities_resolved = true;
 
-    expect(zf_store_init(&storage, &app.store), "init store before reset");
+    expect(test_zf_store_init(&storage, &app.store), "init store before reset");
     expect(zerofido_pin_init(&storage, &app.pin_state), "init PIN state before reset");
     expect(zerofido_pin_set_plaintext(&storage, &app.pin_state, "1234") == ZF_CTAP_SUCCESS,
            "set PIN before reset");
     expect(zf_store_prepare_credential(&record, "example.com", (const uint8_t *)"user-1", 6,
                                        "alice", "Alice", true),
            "prepare credential before reset");
-    expect(zf_store_add_record(&storage, &app.store, &record), "persist credential before reset");
+    expect(test_zf_store_add_record(&storage, &app.store, &record),
+           "persist credential before reset");
     u2f_key = test_storage_file_slot("/ext/apps_data/zerofido/u2f/key.u2f", true);
     u2f_counter = test_storage_file_slot("/ext/apps_data/zerofido/u2f/cnt.u2f", true);
     expect(u2f_key && u2f_counter, "allocate U2F persistence slots before reset");
@@ -5561,14 +5881,14 @@ static void test_ctap_reset_auto_accept_bypasses_approval_prompt(void) {
     app.ui_mutex = (FuriMutex *)0x1;
     test_enable_auto_accept_requests(&app);
 
-    expect(zf_store_init(&storage, &app.store), "init store before auto-accept reset");
+    expect(test_zf_store_init(&storage, &app.store), "init store before auto-accept reset");
     expect(zerofido_pin_init(&storage, &app.pin_state), "init PIN state before auto-accept reset");
     expect(zerofido_pin_set_plaintext(&storage, &app.pin_state, "1234") == ZF_CTAP_SUCCESS,
            "set PIN before auto-accept reset");
     expect(zf_store_prepare_credential(&record, "example.com", (const uint8_t *)"user-1", 6,
                                        "alice", "Alice", true),
            "prepare credential before auto-accept reset");
-    expect(zf_store_add_record(&storage, &app.store, &record),
+    expect(test_zf_store_add_record(&storage, &app.store, &record),
            "persist credential before auto-accept reset");
 
     response_len = zerofido_handle_ctap2(&app, 0x01020304, (const uint8_t[]){ZfCtapeCmdReset}, 1,
@@ -5576,8 +5896,7 @@ static void test_ctap_reset_auto_accept_bypasses_approval_prompt(void) {
 
     expect(response_len == 1, "auto-accept Reset should return status only");
     expect(response[0] == ZF_CTAP_SUCCESS, "auto-accept Reset should succeed");
-    expect(g_approval_request_count == 0,
-           "auto-accept Reset should bypass the approval prompt");
+    expect(g_approval_request_count == 0, "auto-accept Reset should bypass the approval prompt");
 }
 
 static void test_ctap_reset_rejects_trailing_payload(void) {
@@ -5872,7 +6191,7 @@ static void test_get_next_assertion_polls_control_without_holding_ui_mutex(void)
     seed_assertion_queue_record(&app.store.records[1], 0x22, 5);
 
     app.assertion_queue.active = true;
-    app.assertion_queue.cid = 0x01020304;
+    app.assertion_queue.session_id = 0x01020304;
     app.assertion_queue.count = 2;
     app.assertion_queue.index = 1;
     app.assertion_queue.expires_at = g_fake_tick + ZF_ASSERTION_QUEUE_TIMEOUT_MS;
@@ -5932,21 +6251,22 @@ static void test_store_add_record_failure_keeps_original_record(void) {
     strcpy(first.file_name, k_repeated_credential_file_name);
     strcpy(second.file_name, "2020202020202020202020202020202020202020202020202020202020202020");
 
-    expect(zf_store_add_record(&storage, &store, &first), "write original resident record");
+    expect(test_zf_store_add_record(&storage, &store, &first),
+           "write original resident record");
 
     g_storage_fail_rename_match = second.file_name;
-    expect(!zf_store_add_record(&storage, &store, &second),
+    expect(!test_zf_store_add_record(&storage, &store, &second),
            "adding a second resident record should fail when its rename fails");
     expect(store.count == 1, "failed add must keep in-memory store unchanged");
     expect(memcmp(store.records[0].credential_id, first.credential_id, ZF_CREDENTIAL_ID_LEN) == 0,
            "failed add must keep original credential in memory");
-    expect(zf_store_record_format_load_record(&storage, first.file_name, &loaded),
+    expect(test_zf_store_record_format_load_record(&storage, first.file_name, &loaded),
            "failed add should keep original file on disk");
-    expect(!zf_store_record_format_load_record(&storage, second.file_name, &loaded),
+    expect(!test_zf_store_record_format_load_record(&storage, second.file_name, &loaded),
            "failed add must not leave the second record committed");
 }
 
-static void test_store_file_rejects_record_rollback_when_counter_floor_is_newer(void) {
+static void test_store_file_advances_record_rollback_to_counter_high_water(void) {
     Storage storage = {0};
     ZfCredentialRecord record = {0};
     ZfCredentialRecord loaded = {0};
@@ -5962,7 +6282,7 @@ static void test_store_file_rejects_record_rollback_when_counter_floor_is_newer(
                                        "alice", "Alice", true),
            "prepare rollback test credential");
     record.sign_count = 3;
-    expect(zf_store_record_format_write_record(&storage, &record),
+    expect(test_zf_store_record_format_write_record(&storage, &record),
            "write initial credential record for rollback test");
 
     snprintf(record_path, sizeof(record_path), "%s/%s", ZF_APP_DATA_DIR, record.file_name);
@@ -5979,7 +6299,7 @@ static void test_store_file_rejects_record_rollback_when_counter_floor_is_newer(
     original_size = record_slot->size;
 
     record.sign_count = 9;
-    expect(zf_store_record_format_write_record(&storage, &record),
+    expect(test_zf_store_record_format_write_record(&storage, &record),
            "write updated credential record for rollback test");
     expect(counter_slot->exists && counter_slot->size > 0,
            "updated counter floor should remain present");
@@ -5988,8 +6308,47 @@ static void test_store_file_rejects_record_rollback_when_counter_floor_is_newer(
     record_slot->size = original_size;
     record_slot->exists = true;
 
-    expect(!zf_store_record_format_load_record(&storage, record.file_name, &loaded),
-           "loading a rolled-back record should fail when the counter floor is newer");
+    expect(test_zf_store_record_format_load_record(&storage, record.file_name, &loaded),
+           "rolled-back records should load using the counter high-water mark");
+    expect(loaded.sign_count == 9,
+           "rolled-back record sign count should advance to the counter high-water mark");
+}
+
+static void test_store_advance_counter_uses_reserved_counter_window(void) {
+    Storage storage = {0};
+    ZfCredentialStore store = {0};
+    ZfCredentialIndexEntry store_records[ZF_MAX_CREDENTIALS] = {0};
+    ZfCredentialRecord record = {0};
+
+    test_storage_reset();
+    store.records = store_records;
+    store.count = 1;
+    expect(zf_store_prepare_credential(&record, "example.com", (const uint8_t *)"user-1", 6,
+                                       "alice", "Alice", true),
+           "prepare credential for counter high-water test");
+    zf_store_index_entry_from_record(&record, &store.records[0]);
+    store.records[0].counter_high_water = 2;
+
+    record.sign_count = 1;
+    expect(zf_store_advance_counter(&storage, &store, &record),
+           "counter inside high-water window should advance in memory");
+    expect(g_storage_counter_rename_count == 0,
+           "counter inside high-water window should not rewrite the counter file");
+    expect(store.records[0].sign_count == 1, "in-memory sign count should advance");
+
+    record.sign_count = 3;
+    expect(zf_store_advance_counter(&storage, &store, &record),
+           "counter past high-water window should reserve a new window");
+    expect(g_storage_counter_rename_count == 1,
+           "crossing high-water should rewrite only the small counter file");
+    expect(store.records[0].counter_high_water > record.sign_count,
+           "new counter high-water should reserve future assertions");
+
+    record.sign_count = 4;
+    expect(zf_store_advance_counter(&storage, &store, &record),
+           "counter inside the new high-water window should advance");
+    expect(g_storage_counter_rename_count == 1,
+           "counter file should not be rewritten again inside the new window");
 }
 
 static void test_store_file_write_and_load_survive_missing_counter_seal(void) {
@@ -6007,7 +6366,7 @@ static void test_store_file_write_and_load_survive_missing_counter_seal(void) {
            "prepare credential for missing counter seal test");
     record.sign_count = 4;
     g_fail_crypto_enclave_load_key = true;
-    expect(zf_store_record_format_write_record(&storage, &record),
+    expect(test_zf_store_record_format_write_record(&storage, &record),
            "record write should survive missing counter seal");
 
     snprintf(record_path, sizeof(record_path), "%s/%s", ZF_APP_DATA_DIR, record.file_name);
@@ -6020,7 +6379,7 @@ static void test_store_file_write_and_load_survive_missing_counter_seal(void) {
     expect(counter_slot == NULL || !counter_slot->exists,
            "counter floor should remain optional when seal generation is unavailable");
 
-    expect(zf_store_record_format_load_record(&storage, record.file_name, &loaded),
+    expect(test_zf_store_record_format_load_record(&storage, record.file_name, &loaded),
            "record load should survive missing counter seal");
     expect(loaded.in_use, "loaded record should remain active");
     expect(loaded.sign_count == record.sign_count, "loaded sign count should round-trip");
@@ -6032,8 +6391,8 @@ int main(void) {
     test_record_decode_rejects_embedded_nul_text();
     test_record_decode_rejects_file_name_mismatch();
     test_record_decode_rejects_oversized_version();
-    test_record_decode_rejects_downgraded_sealed_version();
-    test_store_init_ignores_downgraded_record_file();
+    test_record_decode_rejects_unsupported_sealed_version();
+    test_store_init_ignores_unsupported_record_file();
     test_cbor_text_read_rejects_declared_length_past_buffer();
     test_cbor_skip_rejects_declared_length_past_buffer();
     test_cbor_skip_accepts_single_precision_float();
@@ -6067,14 +6426,16 @@ int main(void) {
     test_make_credential_parse_ignores_non_public_key_exclude_descriptor();
     test_make_credential_parse_rejects_empty_user_id();
     test_get_assertion_parse_rejects_duplicate_allow_list_descriptors();
+    test_get_assertion_parse_rejects_too_many_allow_list_descriptors();
+    test_get_assertion_parse_accepts_duplicate_oversized_allow_list_descriptors();
     test_get_assertion_parse_ignores_non_public_key_allow_list_descriptor();
     test_store_find_by_rp_orders_records_by_newest_first();
-    test_store_allow_list_ignores_oversized_descriptor_ids();
+    test_store_descriptor_list_ignores_oversized_descriptor_ids();
     test_pin_auth_block_state_clears_on_reinit_but_keeps_retries();
     test_pin_resume_auth_attempts_clears_persisted_block();
     test_pin_clear_removes_persisted_state_and_resets_runtime();
-    test_pin_init_rejects_unsealed_v3_state();
-    test_pin_init_rejects_downgraded_current_format_state();
+    test_pin_init_rejects_unsupported_format_state();
+    test_pin_init_rejects_unsupported_current_format_version();
     test_pin_init_rejects_tampered_retry_state();
     test_pin_auth_blocks_after_three_mismatches();
     test_ui_format_approval_header_prefixes_protocol();
@@ -6110,7 +6471,9 @@ int main(void) {
     test_store_wipe_app_data_clears_credentials_and_pin_state();
     test_runtime_config_load_defaults_auto_accept_off();
     test_runtime_config_persist_round_trips_auto_accept_setting();
+    test_runtime_config_persist_round_trips_transport_mode();
     test_runtime_config_load_invalid_file_falls_back_to_defaults();
+    test_runtime_config_load_rejects_unsupported_version();
     test_runtime_config_set_auto_accept_preserves_runtime_state_on_persist_failure();
     test_runtime_config_set_fido2_preserves_runtime_state_on_persist_failure();
     test_ctap_error_response_omits_body_when_store_add_fails();
@@ -6126,6 +6489,8 @@ int main(void) {
     test_make_credential_legacy_pin_token_survives_up();
     test_make_credential_allows_discouraged_uv_when_pin_is_set();
     test_make_credential_auto_accept_bypasses_approval_prompt();
+    test_make_credential_nfc_auto_accept_keeps_uv_clear();
+    test_make_credential_nfc_auto_accept_rejects_uv_option_without_pin();
     test_get_assertion_pin_auth_takes_precedence_over_uv();
     test_get_assertion_pin_auth_preserves_permission_scoped_token_after_up();
     test_permission_scoped_pin_token_survives_browser_style_mc_then_ga();
@@ -6174,7 +6539,8 @@ int main(void) {
     test_get_next_assertion_polls_control_without_holding_ui_mutex();
     test_u2f_der_length_rejects_overflowing_long_form_length();
     test_store_add_record_failure_keeps_original_record();
-    test_store_file_rejects_record_rollback_when_counter_floor_is_newer();
+    test_store_file_advances_record_rollback_to_counter_high_water();
+    test_store_advance_counter_uses_reserved_counter_window();
     test_store_file_write_and_load_survive_missing_counter_seal();
     puts("native protocol regressions passed");
     return 0;
