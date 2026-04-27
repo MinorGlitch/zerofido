@@ -18,6 +18,10 @@ bool zf_ctap_local_maintenance_busy(ZerofidoApp *app);
 bool zf_ctap_pin_is_set(ZerofidoApp *app);
 bool zf_ctap_store_entry_matches_descriptor_list(const ZfCredentialIndexEntry *entry,
                                                  const void *context);
+bool zf_ctap_exclude_list_has_visible_match(Storage *storage, const ZfCredentialStore *store,
+                                            const char *rp_id,
+                                            const ZfCredentialDescriptorList *exclude_list,
+                                            bool uv_verified, uint8_t *buffer, size_t buffer_size);
 size_t zf_ctap_resolve_assertion_matches(Storage *storage, ZfCredentialStore *store,
                                          const ZfGetAssertionRequest *request, bool uv_verified,
                                          uint16_t *match_indices);

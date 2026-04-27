@@ -1,6 +1,8 @@
-#include "parse_internal.h"
+#include "internal.h"
 
 #include <string.h>
+
+#include "../../zerofido_crypto.h"
 
 bool zf_ctap_text_equals(const uint8_t *ptr, size_t size, const char *text) {
     size_t expected = strlen(text);
@@ -211,8 +213,9 @@ uint8_t zf_ctap_parse_extensions_map(ZfCborCursor *cursor, bool *has_cred_protec
     return ZF_CTAP_SUCCESS;
 }
 
-static bool zf_ctap_parse_credential_descriptor(ZfCborCursor *cursor, uint8_t *credential_id,
-                                                size_t *credential_id_len, bool *include_entry) {
+static bool zf_ctap_parse_credential_descriptor(ZfCborCursor *cursor,
+                                                ZfCredentialDescriptor *descriptor,
+                                                bool *include_entry) {
     size_t pairs = 0;
     bool saw_id = false;
     bool saw_type = false;
@@ -238,13 +241,16 @@ static bool zf_ctap_parse_credential_descriptor(ZfCborCursor *cursor, uint8_t *c
             if (!zf_cbor_read_bytes_ptr(cursor, &id_ptr, &id_size)) {
                 return false;
             }
-            if (id_size == 0 || id_size > ZF_MAX_DESCRIPTOR_ID_LEN) {
+            if (!descriptor || id_size == 0 || id_size > ZF_MAX_DESCRIPTOR_ID_LEN ||
+                id_size > UINT16_MAX) {
                 return false;
             }
-            memset(credential_id, 0, ZF_CREDENTIAL_ID_LEN);
-            *credential_id_len = id_size;
-            memcpy(credential_id, id_ptr,
-                   id_size > ZF_CREDENTIAL_ID_LEN ? ZF_CREDENTIAL_ID_LEN : id_size);
+            memset(descriptor->credential_id, 0, sizeof(descriptor->credential_id));
+            descriptor->credential_id_len = (uint16_t)id_size;
+            memcpy(descriptor->credential_id, id_ptr,
+                   id_size > sizeof(descriptor->credential_id) ? sizeof(descriptor->credential_id)
+                                                               : id_size);
+            zf_crypto_sha256(id_ptr, id_size, descriptor->credential_id_digest);
             saw_id = true;
             continue;
         }
@@ -340,80 +346,25 @@ uint8_t zf_ctap_parse_pubkey_cred_params(ZfCborCursor *cursor, bool *es256_suppo
     return ZF_CTAP_SUCCESS;
 }
 
-static bool zf_ctap_descriptor_list_has_duplicate_ids(const ZfCredentialDescriptorList *list) {
-    ZfCborCursor cursor;
-    size_t items = 0;
-
-    if (!list || !list->data || list->count <= 1) {
-        return false;
-    }
-
-    zf_cbor_cursor_init(&cursor, list->data, list->size);
-    if (!zf_cbor_read_array_start(&cursor, &items)) {
-        return false;
-    }
-
-    for (size_t i = 0; i < items; ++i) {
-        uint8_t credential_id[ZF_CREDENTIAL_ID_LEN] = {0};
-        size_t credential_id_len = 0;
-        bool include_entry = false;
-
-        if (!zf_ctap_parse_credential_descriptor(&cursor, credential_id, &credential_id_len,
-                                                 &include_entry)) {
-            return false;
-        }
-        if (!include_entry || credential_id_len > ZF_CREDENTIAL_ID_LEN) {
-            continue;
-        }
-
-        ZfCborCursor scan;
-        size_t scan_items = 0;
-        size_t matches = 0;
-
-        zf_cbor_cursor_init(&scan, list->data, list->size);
-        if (!zf_cbor_read_array_start(&scan, &scan_items)) {
-            return false;
-        }
-
-        for (size_t j = 0; j < scan_items; ++j) {
-            uint8_t other_id[ZF_CREDENTIAL_ID_LEN] = {0};
-            size_t other_id_len = 0;
-            bool other_include = false;
-
-            if (!zf_ctap_parse_credential_descriptor(&scan, other_id, &other_id_len,
-                                                     &other_include)) {
-                return false;
-            }
-            if (other_include && other_id_len == credential_id_len &&
-                memcmp(other_id, credential_id, credential_id_len) == 0 && ++matches > 1) {
-                return true;
-            }
-        }
-    }
-
-    return false;
-}
-
 uint8_t zf_ctap_parse_descriptor_array(ZfCborCursor *cursor, ZfCredentialDescriptorList *list) {
-    const uint8_t *start = cursor ? cursor->ptr : NULL;
     size_t items = 0;
 
-    if (!zf_cbor_read_array_start(cursor, &items)) {
+    if (!list || !zf_cbor_read_array_start(cursor, &items)) {
         return ZF_CTAP_ERR_INVALID_CBOR;
     }
 
-    list->data = start;
-    list->size = 0;
+    memset(list, 0, sizeof(*list));
     list->count = 0;
 
     for (size_t j = 0; j < items; ++j) {
-        uint8_t parsed_id[ZF_CREDENTIAL_ID_LEN] = {0};
-        size_t parsed_len = 0;
+        ZfCredentialDescriptor parsed;
         bool include_entry = false;
-        if (!zf_ctap_parse_credential_descriptor(cursor, parsed_id, &parsed_len, &include_entry)) {
+
+        memset(&parsed, 0, sizeof(parsed));
+        if (!zf_ctap_parse_credential_descriptor(cursor, &parsed, &include_entry)) {
             return ZF_CTAP_ERR_INVALID_CBOR;
         }
-        if (parsed_len == 0) {
+        if (parsed.credential_id_len == 0) {
             return ZF_CTAP_ERR_INVALID_CBOR;
         }
         if (!include_entry) {
@@ -422,12 +373,16 @@ uint8_t zf_ctap_parse_descriptor_array(ZfCborCursor *cursor, ZfCredentialDescrip
         if (list->count >= ZF_MAX_ALLOW_LIST) {
             return ZF_CTAP_ERR_INVALID_PARAMETER;
         }
+        for (size_t i = 0; i < list->count; ++i) {
+            const ZfCredentialDescriptor *existing = &list->entries[i];
+            if (existing->credential_id_len == parsed.credential_id_len &&
+                memcmp(existing->credential_id_digest, parsed.credential_id_digest,
+                       sizeof(existing->credential_id_digest)) == 0) {
+                return ZF_CTAP_ERR_INVALID_PARAMETER;
+            }
+        }
+        list->entries[list->count] = parsed;
         list->count++;
-    }
-
-    list->size = (size_t)(cursor->ptr - start);
-    if (zf_ctap_descriptor_list_has_duplicate_ids(list)) {
-        return ZF_CTAP_ERR_INVALID_PARAMETER;
     }
 
     return ZF_CTAP_SUCCESS;
@@ -435,29 +390,15 @@ uint8_t zf_ctap_parse_descriptor_array(ZfCborCursor *cursor, ZfCredentialDescrip
 
 bool zf_ctap_descriptor_list_contains_id(const ZfCredentialDescriptorList *list,
                                          const uint8_t *credential_id, size_t credential_id_len) {
-    ZfCborCursor cursor;
-    size_t items = 0;
-
-    if (!list || !list->data || !credential_id || list->count == 0 || credential_id_len == 0 ||
+    if (!list || !credential_id || list->count == 0 || credential_id_len == 0 ||
         credential_id_len > ZF_CREDENTIAL_ID_LEN) {
         return false;
     }
 
-    zf_cbor_cursor_init(&cursor, list->data, list->size);
-    if (!zf_cbor_read_array_start(&cursor, &items)) {
-        return false;
-    }
-
-    for (size_t i = 0; i < items; ++i) {
-        uint8_t parsed_id[ZF_CREDENTIAL_ID_LEN] = {0};
-        size_t parsed_len = 0;
-        bool include_entry = false;
-
-        if (!zf_ctap_parse_credential_descriptor(&cursor, parsed_id, &parsed_len, &include_entry)) {
-            return false;
-        }
-        if (include_entry && parsed_len == credential_id_len &&
-            memcmp(parsed_id, credential_id, credential_id_len) == 0) {
+    for (size_t i = 0; i < list->count; ++i) {
+        const ZfCredentialDescriptor *entry = &list->entries[i];
+        if (entry->credential_id_len == credential_id_len &&
+            memcmp(entry->credential_id, credential_id, credential_id_len) == 0) {
             return true;
         }
     }

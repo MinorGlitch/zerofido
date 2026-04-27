@@ -10,6 +10,7 @@
 #include <gui/view_stack.h>
 #include <notification/notification.h>
 #include <storage/storage.h>
+#include <string.h>
 
 #include "u2f/session.h"
 #include "transport/adapter.h"
@@ -163,5 +164,25 @@ typedef struct ZerofidoApp {
     ZfAssertionQueue assertion_queue;
 } ZerofidoApp;
 
+
+static inline void *zf_app_command_scratch_acquire(ZerofidoApp *app, size_t size) {
+    if (!app || size > sizeof(app->command_scratch.bytes)) {
+        return NULL;
+    }
+
+    memset(app->command_scratch.bytes, 0, size);
+    return app->command_scratch.bytes;
+}
+
+static inline void zf_app_command_scratch_release(ZerofidoApp *app) {
+    if (!app) {
+        return;
+    }
+
+    volatile uint8_t *bytes = app->command_scratch.bytes;
+    for (size_t i = 0; i < sizeof(app->command_scratch.bytes); ++i) {
+        bytes[i] = 0;
+    }
+}
 #define transport_state_storage transport_state_storage_union.usb_hid
 #define transport_nfc_state_storage transport_state_storage_union.nfc

@@ -1,8 +1,8 @@
-#include "parse.h"
+#include "../parse.h"
 
 #include <string.h>
 
-#include "parse_internal.h"
+#include "internal.h"
 
 static uint8_t zf_parse_make_credential_client_data_hash(ZfCborCursor *cursor,
                                                          ZfMakeCredentialRequest *request) {

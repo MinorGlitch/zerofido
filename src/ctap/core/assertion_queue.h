@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "../zerofido_types.h"
+#include "../../zerofido_types.h"
 
 typedef struct ZerofidoApp ZerofidoApp;
 

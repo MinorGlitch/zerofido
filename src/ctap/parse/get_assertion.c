@@ -1,8 +1,8 @@
-#include "parse.h"
+#include "../parse.h"
 
 #include <string.h>
 
-#include "parse_internal.h"
+#include "internal.h"
 
 uint8_t zf_ctap_parse_get_assertion(const uint8_t *data, size_t size,
                                     ZfGetAssertionRequest *request) {

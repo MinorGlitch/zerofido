@@ -2,12 +2,12 @@
 
 #include <string.h>
 
-#include "response.h"
-#include "../transport/adapter.h"
-#include "../zerofido_app_i.h"
-#include "../zerofido_crypto.h"
-#include "../zerofido_notify.h"
-#include "../zerofido_store.h"
+#include "../response.h"
+#include "../../transport/adapter.h"
+#include "../../zerofido_app_i.h"
+#include "../../zerofido_crypto.h"
+#include "../../zerofido_notify.h"
+#include "../../zerofido_store.h"
 
 static bool zf_get_next_sign_count(const ZfCredentialRecord *record, uint32_t *next_sign_count) {
     if (!record || !next_sign_count || record->sign_count == UINT32_MAX) {
@@ -155,12 +155,11 @@ uint8_t zf_ctap_assertion_queue_handle_next(ZerofidoApp *app, ZfTransportSession
     }
     maintenance_acquired = true;
 
-    scratch = (ZfAssertionQueueScratch *)app->command_scratch.bytes;
+    scratch = zf_app_command_scratch_acquire(app, sizeof(*scratch));
     if (!scratch) {
         status = ZF_CTAP_ERR_OTHER;
         goto cleanup;
     }
-    memset(scratch, 0, sizeof(*scratch));
 
     furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
     if (!app->assertion_queue.active ||
@@ -215,7 +214,7 @@ uint8_t zf_ctap_assertion_queue_handle_next(ZerofidoApp *app, ZfTransportSession
 
     status = zf_ctap_build_assertion_response_with_scratch(
         &scratch->response, &scratch->request, &scratch->record, user_present, uv_verified,
-        next_sign_count, uv_verified, false, match_count, out, out_capacity, out_len);
+        next_sign_count, uv_verified, false, match_count, false, out, out_capacity, out_len);
     if (status != ZF_CTAP_SUCCESS) {
         goto cleanup;
     }
@@ -269,6 +268,9 @@ cleanup:
     if (maintenance_acquired) {
         zf_ctap_assertion_queue_end_maintenance(app);
     }
-    zf_crypto_secure_zero(scratch, sizeof(*scratch));
+    if (scratch) {
+        zf_crypto_secure_zero(scratch, sizeof(*scratch));
+    }
+    zf_app_command_scratch_release(app);
     return status;
 }

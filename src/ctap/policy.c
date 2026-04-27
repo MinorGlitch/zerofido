@@ -1,7 +1,10 @@
 #include "policy.h"
 
+#include <string.h>
+
 #include "parse.h"
 #include "../zerofido_app_i.h"
+#include "../zerofido_crypto.h"
 #include "../zerofido_pin.h"
 #include "../zerofido_store.h"
 
@@ -55,6 +58,45 @@ bool zf_ctap_store_entry_matches_descriptor_list(const ZfCredentialIndexEntry *e
 
     return entry && zf_ctap_descriptor_list_contains_id(list, entry->credential_id,
                                                         entry->credential_id_len);
+}
+
+bool zf_ctap_exclude_list_has_visible_match(Storage *storage, const ZfCredentialStore *store,
+                                            const char *rp_id,
+                                            const ZfCredentialDescriptorList *exclude_list,
+                                            bool uv_verified, uint8_t *buffer, size_t buffer_size) {
+    uint16_t matches[ZF_MAX_CREDENTIALS];
+    size_t match_count = 0;
+
+    if (!store || !store->records || !rp_id || !exclude_list || exclude_list->count == 0) {
+        return false;
+    }
+    if (storage && (!buffer || buffer_size < ZF_STORE_RECORD_IO_SIZE)) {
+        return false;
+    }
+
+    match_count = zf_store_find_by_rp_filtered(storage, store, rp_id,
+                                              zf_ctap_store_entry_matches_descriptor_list,
+                                              exclude_list, matches, ZF_MAX_CREDENTIALS);
+    for (size_t i = 0; i < match_count; ++i) {
+        const ZfCredentialIndexEntry *entry = &store->records[matches[i]];
+
+        if (!uv_verified && entry->cred_protect == ZF_CRED_PROTECT_UV_REQUIRED) {
+            continue;
+        }
+        if (storage) {
+            ZfCredentialRecord record = {0};
+            bool loaded =
+                zf_store_load_record_with_buffer(storage, entry, &record, buffer, buffer_size);
+            bool exact_match = loaded && strcmp(record.rp_id, rp_id) == 0;
+            zf_crypto_secure_zero(&record, sizeof(record));
+            if (loaded && !exact_match) {
+                continue;
+            }
+        }
+        return true;
+    }
+
+    return false;
 }
 
 static bool zf_ctap_credential_is_allowed_by_cred_protect(const ZfGetAssertionRequest *request,

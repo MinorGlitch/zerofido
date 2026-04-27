@@ -240,8 +240,8 @@ cleanup:
 uint8_t zf_ctap_build_assertion_response_with_scratch(
     ZfAssertionResponseScratch *scratch, const ZfGetAssertionRequest *request,
     const ZfCredentialRecord *record, bool user_present, bool user_verified, uint32_t sign_count,
-    bool include_user_details, bool include_count, size_t match_count, uint8_t *out,
-    size_t out_capacity, size_t *out_len) {
+    bool include_user_details, bool include_count, size_t match_count, bool user_selected,
+    uint8_t *out, size_t out_capacity, size_t *out_len) {
     uint8_t status = ZF_CTAP_ERR_OTHER;
     size_t signature_len = 0;
 
@@ -281,7 +281,13 @@ uint8_t zf_ctap_build_assertion_response_with_scratch(
         user_pairs++;
     }
 
-    size_t pairs = include_count ? 5 : 4;
+    size_t pairs = 4;
+    if (include_count) {
+        pairs++;
+    }
+    if (user_selected) {
+        pairs++;
+    }
     bool ok = zf_cbor_encode_map(&enc, pairs) && zf_cbor_encode_uint(&enc, 1) &&
               zf_cbor_encode_map(&enc, 2) && zf_cbor_encode_text(&enc, "id") &&
               zf_cbor_encode_bytes(&enc, record->credential_id, record->credential_id_len) &&
@@ -305,6 +311,9 @@ uint8_t zf_ctap_build_assertion_response_with_scratch(
     }
     if (include_count) {
         ok = zf_cbor_encode_uint(&enc, 5) && zf_cbor_encode_uint(&enc, match_count);
+    }
+    if (ok && user_selected) {
+        ok = zf_cbor_encode_uint(&enc, 6) && zf_cbor_encode_bool(&enc, true);
     }
     if (!ok) {
         goto cleanup;

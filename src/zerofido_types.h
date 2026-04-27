@@ -16,7 +16,7 @@
 #define ZF_CTAPHID_PACKET_SIZE 64
 #define ZF_MAX_MSG_SIZE 1024
 #define ZF_TRANSPORT_ARENA_SIZE (ZF_MAX_MSG_SIZE + 2U)
-#define ZF_COMMAND_SCRATCH_SIZE 4096U
+#define ZF_COMMAND_SCRATCH_SIZE 6144U
 #define ZF_UI_SCRATCH_SIZE 2048U
 #define ZF_APPROVAL_TIMEOUT_MS 30000
 #define ZF_ASSERTION_QUEUE_TIMEOUT_MS 30000
@@ -25,6 +25,7 @@
 #define ZF_ASSEMBLY_TIMEOUT_MS 3000
 
 #define ZF_CREDENTIAL_ID_LEN 32
+#define ZF_DESCRIPTOR_ID_DIGEST_LEN 32
 #define ZF_MAX_DESCRIPTOR_ID_LEN 1023
 #define ZF_PRIVATE_KEY_LEN 32
 #define ZF_PUBLIC_KEY_LEN 32
@@ -174,8 +175,13 @@ typedef struct {
 } ZfAssertionQueue;
 
 typedef struct {
-    const uint8_t *data;
-    size_t size;
+    uint8_t credential_id[ZF_CREDENTIAL_ID_LEN];
+    uint8_t credential_id_digest[ZF_DESCRIPTOR_ID_DIGEST_LEN];
+    uint16_t credential_id_len;
+} ZfCredentialDescriptor;
+
+typedef struct {
+    ZfCredentialDescriptor entries[ZF_MAX_ALLOW_LIST];
     size_t count;
 } ZfCredentialDescriptorList;
 

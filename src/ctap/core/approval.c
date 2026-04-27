@@ -1,8 +1,8 @@
 #include "approval.h"
 
-#include "policy.h"
-#include "../zerofido_app_i.h"
-#include "../zerofido_ui.h"
+#include "../policy.h"
+#include "../../zerofido_app_i.h"
+#include "../../zerofido_ui.h"
 
 static uint8_t zf_ctap_status_from_interaction_state(ZfApprovalState state,
                                                      bool timeout_is_denied) {
