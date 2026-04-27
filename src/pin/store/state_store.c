@@ -1,11 +1,11 @@
 #include "state_store.h"
-#include "state_store_internal.h"
+#include "internal.h"
 
 #include <furi_hal.h>
 #include <furi_hal_random.h>
 #include <string.h>
 
-#include "../zerofido_crypto.h"
+#include "../../zerofido_crypto.h"
 
 static bool zf_pin_ensure_app_data_dir(Storage *storage) {
     if (!storage_dir_exists(storage, ZF_APP_DATA_ROOT) &&
@@ -63,6 +63,7 @@ static void zf_pin_compute_retry_state_digest(const uint8_t pin_hash[ZF_PIN_HASH
     material[ZF_PIN_HASH_LEN + 1] = pin_consecutive_mismatches;
     material[ZF_PIN_HASH_LEN + 2] = flags;
     zf_crypto_sha256(material, sizeof(material), digest);
+    zf_crypto_secure_zero(material, sizeof(material));
 }
 
 static bool zf_pin_seal_retry_state(const uint8_t pin_hash[ZF_PIN_HASH_LEN], uint8_t pin_retries,

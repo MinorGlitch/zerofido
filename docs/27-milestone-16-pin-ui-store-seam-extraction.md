@@ -76,9 +76,9 @@ ownership blobs.
 
 - Completed items:
   - PIN durable-state ownership now lives under:
-    - `src/pin/state_store.c`
-    - `src/pin/state_store.h`
-    - `src/pin/state_store_internal.h`
+    - `src/pin/store/state_store.c`
+    - `src/pin/store/state_store.h`
+    - `src/pin/store/internal.h`
   - PIN command routing and ClientPIN request/response ownership now live under:
     - `src/pin/command.c`
     - `src/pin/internal.h`
@@ -86,7 +86,7 @@ ownership blobs.
     - `src/pin/flow.c`
   - The previous flat `src/zerofido_pin.c` file is gone.
   - The native regression harness now includes the foldered PIN owners directly and uses
-    `src/pin/state_store_internal.h` plus `src/store/record_format_internal.h` for the
+    `src/pin/store/internal.h` plus `src/store/record_format_internal.h` for the
     intentionally tested file-format internals.
   - UI approval ownership now lives under:
     - `src/ui/approval_state.c`

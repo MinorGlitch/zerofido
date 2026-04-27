@@ -44,11 +44,14 @@ typedef struct {
 
 bool zf_pin_new_pin_enc_length_is_valid(size_t length);
 void zf_pin_refresh_pin_token(uint8_t pin_token[ZF_PIN_TOKEN_LEN]);
+void zf_pin_reset_token_metadata(ZfClientPinState *state);
 void zf_pin_invalidate_token_state(ZfClientPinState *state);
 void zf_pin_note_pin_token_issued(ZfClientPinState *state);
 void zf_pin_set_token_permissions(ZfClientPinState *state, uint64_t permissions,
                                   bool permission_scoped, const char *rp_id);
 bool zf_pin_token_is_expired(const ZfClientPinState *state);
+void zf_pin_clear_auth_block_state(ZfClientPinState *state);
+bool zf_pin_persist_state(Storage *storage, const ZfClientPinState *state);
 uint8_t zf_pin_note_pin_auth_mismatch(Storage *storage, ZfClientPinState *state);
 bool zf_pin_validate_plaintext_block(const uint8_t *data, size_t size, size_t *out_len);
 uint8_t zf_pin_apply_plaintext(Storage *storage, ZfClientPinState *state, const uint8_t *pin,

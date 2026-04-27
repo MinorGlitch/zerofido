@@ -4,7 +4,7 @@
 
 #include <storage/storage.h>
 
-#include "../zerofido_pin.h"
+#include "../../zerofido_pin.h"
 
 typedef enum {
     ZfPinLoadMissing = 0,

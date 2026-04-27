@@ -34,7 +34,7 @@ FIXTURE_PATHS = [
     "src/ctap/response.c",
     "src/pin/command.c",
     "src/pin/flow.c",
-    "src/pin/state_store.c",
+    "src/pin/store/state_store.c",
     "src/zerofido_store.c",
     "src/store/record_format.c",
     "src/store/recovery.c",

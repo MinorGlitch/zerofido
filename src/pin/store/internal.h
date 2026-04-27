@@ -2,7 +2,7 @@
 
 #include <stdint.h>
 
-#include "../zerofido_types.h"
+#include "../../zerofido_types.h"
 
 #define ZF_PIN_FILE_PATH ZF_APP_DATA_DIR "/client_pin.bin"
 #define ZF_PIN_FILE_TEMP_PATH ZF_APP_DATA_DIR "/client_pin.tmp"

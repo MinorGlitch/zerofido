@@ -105,9 +105,9 @@ Do not reorder these milestones. The campaign is broad, but the internal extract
   the same regression gates passed again after narrowing user-presence ownership behind
   `u2f_consume_user_present()` / `u2f_clear_user_present()`. The remaining repo-wide formatter and
   static-analysis debt was then cleared, and `uv run python tools/check_c.py all` passed. After
-  milestone 16 started, PIN durable-state ownership moved into `src/pin/state_store.c` and
-  `src/pin/state_store.h`, with file-format internals isolated in
-  `src/pin/state_store_internal.h` for the native regression harness. The native harness was
+  milestone 16 started, PIN durable-state ownership moved into `src/pin/store/state_store.c` and
+  `src/pin/store/state_store.h`, with file-format internals isolated in
+  `src/pin/store/internal.h` for the native regression harness. The native harness was
   rewired to include the new owner, and `uv run python tools/check_c.py all` passed again. The UI
   approval-state owner then moved from `src/zerofido_ui_approval.c` into `src/ui/approval_state.c`
   and the full `uv run python tools/check_c.py all` gate passed again on that tree. Milestone 16
