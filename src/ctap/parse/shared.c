@@ -144,14 +144,14 @@ bool zf_ctap_cbor_read_bytes_copy(ZfCborCursor *cursor, uint8_t *out, size_t out
     return true;
 }
 
-bool zf_ctap_parse_options_map(ZfCborCursor *cursor, bool *up, bool *has_up, bool *uv, bool *has_uv,
-                               bool *rk, bool *has_rk) {
+uint8_t zf_ctap_parse_options_map(ZfCborCursor *cursor, bool *up, bool *has_up, bool *uv,
+                                  bool *has_uv, bool *rk, bool *has_rk) {
     size_t pairs = 0;
     bool saw_up = false;
     bool saw_uv = false;
     bool saw_rk = false;
     if (!zf_cbor_read_map_start(cursor, &pairs)) {
-        return false;
+        return ZF_CTAP_ERR_INVALID_CBOR;
     }
 
     for (size_t i = 0; i < pairs; ++i) {
@@ -160,40 +160,45 @@ bool zf_ctap_parse_options_map(ZfCborCursor *cursor, bool *up, bool *has_up, boo
         bool value = false;
 
         if (!zf_cbor_read_text_ptr(cursor, &key, &key_size) || !zf_cbor_read_bool(cursor, &value)) {
-            return false;
+            return ZF_CTAP_ERR_INVALID_CBOR;
         }
 
         if (zf_ctap_text_equals(key, key_size, "up")) {
             if (saw_up) {
-                return false;
+                return ZF_CTAP_ERR_INVALID_CBOR;
             }
             *up = value;
             *has_up = true;
             saw_up = true;
         } else if (zf_ctap_text_equals(key, key_size, "uv")) {
             if (saw_uv) {
-                return false;
+                return ZF_CTAP_ERR_INVALID_CBOR;
             }
             *uv = value;
             *has_uv = true;
             saw_uv = true;
         } else if (zf_ctap_text_equals(key, key_size, "rk")) {
             if (saw_rk) {
-                return false;
+                return ZF_CTAP_ERR_INVALID_CBOR;
             }
             *rk = value;
             *has_rk = true;
             saw_rk = true;
+        } else if (value) {
+            return ZF_CTAP_ERR_UNSUPPORTED_OPTION;
         }
     }
 
-    return true;
+    return ZF_CTAP_SUCCESS;
 }
 
-uint8_t zf_ctap_parse_extensions_map(ZfCborCursor *cursor, bool *has_cred_protect,
-                                     uint8_t *cred_protect) {
+uint8_t zf_ctap_parse_make_credential_extensions_map(ZfCborCursor *cursor,
+                                                     bool *has_cred_protect,
+                                                     uint8_t *cred_protect,
+                                                     bool *hmac_secret_requested) {
     size_t pairs = 0;
     bool saw_cred_protect = false;
+    bool saw_hmac_secret = false;
 
     if (!zf_cbor_read_map_start(cursor, &pairs)) {
         return ZF_CTAP_ERR_INVALID_CBOR;
@@ -219,6 +224,16 @@ uint8_t zf_ctap_parse_extensions_map(ZfCborCursor *cursor, bool *has_cred_protec
             *has_cred_protect = true;
             *cred_protect = (uint8_t)raw;
             saw_cred_protect = true;
+            continue;
+        }
+
+        if (zf_ctap_text_equals(key, key_size, "hmac-secret")) {
+            bool requested = false;
+            if (saw_hmac_secret || !zf_cbor_read_bool(cursor, &requested)) {
+                return ZF_CTAP_ERR_INVALID_CBOR;
+            }
+            *hmac_secret_requested = requested;
+            saw_hmac_secret = true;
             continue;
         }
 
@@ -262,11 +277,7 @@ static bool zf_ctap_parse_credential_descriptor(ZfCborCursor *cursor,
                 id_size > UINT16_MAX) {
                 return false;
             }
-            memset(descriptor->credential_id, 0, sizeof(descriptor->credential_id));
             descriptor->credential_id_len = (uint16_t)id_size;
-            memcpy(descriptor->credential_id, id_ptr,
-                   id_size > sizeof(descriptor->credential_id) ? sizeof(descriptor->credential_id)
-                                                               : id_size);
             zf_crypto_sha256(id_ptr, id_size, descriptor->credential_id_digest);
             saw_id = true;
             continue;
@@ -363,6 +374,11 @@ uint8_t zf_ctap_parse_pubkey_cred_params(ZfCborCursor *cursor, bool *es256_suppo
     return ZF_CTAP_SUCCESS;
 }
 
+/*
+ * Descriptor IDs are stored as SHA-256 digests plus original length in
+ * caller-provided storage. Duplicate descriptors with the same length and
+ * digest are rejected.
+ */
 uint8_t zf_ctap_parse_descriptor_array(ZfCborCursor *cursor, ZfCredentialDescriptorList *list) {
     size_t items = 0;
 
@@ -370,7 +386,6 @@ uint8_t zf_ctap_parse_descriptor_array(ZfCborCursor *cursor, ZfCredentialDescrip
         return ZF_CTAP_ERR_INVALID_CBOR;
     }
 
-    memset(list, 0, sizeof(*list));
     list->count = 0;
 
     for (size_t j = 0; j < items; ++j) {
@@ -387,7 +402,7 @@ uint8_t zf_ctap_parse_descriptor_array(ZfCborCursor *cursor, ZfCredentialDescrip
         if (!include_entry) {
             continue;
         }
-        if (list->count >= ZF_MAX_ALLOW_LIST) {
+        if (!list->entries || list->count >= list->capacity) {
             return ZF_CTAP_ERR_INVALID_PARAMETER;
         }
         for (size_t i = 0; i < list->count; ++i) {
@@ -407,18 +422,24 @@ uint8_t zf_ctap_parse_descriptor_array(ZfCborCursor *cursor, ZfCredentialDescrip
 
 bool zf_ctap_descriptor_list_contains_id(const ZfCredentialDescriptorList *list,
                                          const uint8_t *credential_id, size_t credential_id_len) {
+    uint8_t credential_id_digest[ZF_DESCRIPTOR_ID_DIGEST_LEN];
+
     if (!list || !credential_id || list->count == 0 || credential_id_len == 0 ||
         credential_id_len > ZF_CREDENTIAL_ID_LEN) {
         return false;
     }
 
+    zf_crypto_sha256(credential_id, credential_id_len, credential_id_digest);
     for (size_t i = 0; i < list->count; ++i) {
         const ZfCredentialDescriptor *entry = &list->entries[i];
         if (entry->credential_id_len == credential_id_len &&
-            memcmp(entry->credential_id, credential_id, credential_id_len) == 0) {
+            memcmp(entry->credential_id_digest, credential_id_digest,
+                   sizeof(entry->credential_id_digest)) == 0) {
+            zf_crypto_secure_zero(credential_id_digest, sizeof(credential_id_digest));
             return true;
         }
     }
 
+    zf_crypto_secure_zero(credential_id_digest, sizeof(credential_id_digest));
     return false;
 }

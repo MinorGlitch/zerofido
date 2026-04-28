@@ -57,17 +57,28 @@ static bool zf_encode_cose_key(const ZfCredentialRecord *record, uint8_t *out, s
     return true;
 }
 
-static bool zf_encode_cred_protect_extension(uint8_t cred_protect, uint8_t *out,
-                                             size_t out_capacity, size_t *out_len) {
+static bool zf_encode_make_credential_extensions(uint8_t cred_protect, bool include_cred_protect,
+                                                 bool include_hmac_secret, bool hmac_secret_created,
+                                                 uint8_t *out, size_t out_capacity,
+                                                 size_t *out_len) {
     ZfCborEncoder enc;
     uint8_t effective_cred_protect = cred_protect == 0 ? ZF_CRED_PROTECT_UV_OPTIONAL : cred_protect;
+    size_t pairs = (include_cred_protect ? 1U : 0U) + (include_hmac_secret ? 1U : 0U);
 
     if (!zf_cbor_encoder_init(&enc, out, out_capacity)) {
         return false;
     }
-
-    if (!(zf_cbor_encode_map(&enc, 1) && zf_cbor_encode_text(&enc, "credProtect") &&
+    if (!zf_cbor_encode_map(&enc, pairs)) {
+        return false;
+    }
+    if (include_cred_protect &&
+        !(zf_cbor_encode_text(&enc, "credProtect") &&
           zf_cbor_encode_uint(&enc, effective_cred_protect))) {
+        return false;
+    }
+    if (include_hmac_secret &&
+        !(zf_cbor_encode_text(&enc, "hmac-secret") &&
+          zf_cbor_encode_bool(&enc, hmac_secret_created))) {
         return false;
     }
 
@@ -75,6 +86,13 @@ static bool zf_encode_cred_protect_extension(uint8_t cred_protect, uint8_t *out,
     return true;
 }
 
+/*
+ * Builds WebAuthn authenticatorData:
+ *   SHA256(rpId) || flags || signCount || attestedCredentialData? || extensions?
+ *
+ * Flags are derived from UP/UV plus AT/ED inclusion. The caller supplies the
+ * sign counter value that will be committed if the response succeeds.
+ */
 static size_t zf_build_auth_data(const char *rp_id, bool user_present, bool user_verified,
                                  bool include_attested_data, bool include_extension_data,
                                  const ZfCredentialRecord *record, uint32_t sign_count,
@@ -144,11 +162,19 @@ uint8_t zf_ctap_build_get_info_response(const ZfResolvedCapabilities *capabiliti
     size_t versions_count = 0;
     size_t options_count = 3;
     size_t transports_count = 0;
+    size_t pin_uv_auth_protocols_count = 1;
+    bool include_ctap21_info_fields = false;
+    size_t get_info_pairs = 6;
 
     if (!capabilities || !zf_cbor_encoder_init(&enc, out, out_capacity)) {
         return ZF_CTAP_ERR_OTHER;
     }
 
+    include_ctap21_info_fields = capabilities->advertise_fido_2_1;
+    if (include_ctap21_info_fields) {
+        get_info_pairs += 4;
+    }
+    pin_uv_auth_protocols_count = capabilities->pin_uv_auth_protocol_2_enabled ? 2 : 1;
     if (capabilities->advertise_fido_2_1) {
         versions_count++;
     }
@@ -161,6 +187,12 @@ uint8_t zf_ctap_build_get_info_response(const ZfResolvedCapabilities *capabiliti
     if (capabilities->client_pin_enabled) {
         options_count++;
     }
+    if (capabilities->pin_uv_auth_token_enabled) {
+        options_count++;
+    }
+    if (capabilities->make_cred_uv_not_required) {
+        options_count++;
+    }
     if (capabilities->advertise_usb_transport) {
         transports_count++;
     }
@@ -168,13 +200,14 @@ uint8_t zf_ctap_build_get_info_response(const ZfResolvedCapabilities *capabiliti
         transports_count++;
     }
 
-    bool ok = zf_cbor_encode_map(&enc, 10) && zf_cbor_encode_uint(&enc, 1) &&
+    bool ok = zf_cbor_encode_map(&enc, get_info_pairs) && zf_cbor_encode_uint(&enc, 1) &&
               zf_cbor_encode_array(&enc, versions_count) &&
               (!capabilities->advertise_fido_2_1 || zf_cbor_encode_text(&enc, "FIDO_2_1")) &&
               (!capabilities->advertise_fido_2_0 || zf_cbor_encode_text(&enc, "FIDO_2_0")) &&
               (!capabilities->advertise_u2f_v2 || zf_cbor_encode_text(&enc, "U2F_V2")) &&
-              zf_cbor_encode_uint(&enc, 2) && zf_cbor_encode_array(&enc, 1) &&
-              zf_cbor_encode_text(&enc, "credProtect") && zf_cbor_encode_uint(&enc, 3) &&
+              zf_cbor_encode_uint(&enc, 2) && zf_cbor_encode_array(&enc, 2) &&
+              zf_cbor_encode_text(&enc, "credProtect") &&
+              zf_cbor_encode_text(&enc, "hmac-secret") && zf_cbor_encode_uint(&enc, 3) &&
               zf_cbor_encode_bytes(&enc, aaguid, ZF_AAGUID_LEN) && zf_cbor_encode_uint(&enc, 4) &&
               zf_cbor_encode_map(&enc, options_count) && zf_cbor_encode_text(&enc, "rk") &&
               zf_cbor_encode_bool(&enc, true) && zf_cbor_encode_text(&enc, "up") &&
@@ -182,18 +215,28 @@ uint8_t zf_ctap_build_get_info_response(const ZfResolvedCapabilities *capabiliti
               zf_cbor_encode_bool(&enc, false) &&
               (!capabilities->client_pin_enabled || (zf_cbor_encode_text(&enc, "clientPin") &&
                                                      zf_cbor_encode_bool(&enc, client_pin_set))) &&
+              (!capabilities->pin_uv_auth_token_enabled ||
+               (zf_cbor_encode_text(&enc, "pinUvAuthToken") && zf_cbor_encode_bool(&enc, true))) &&
+              (!capabilities->make_cred_uv_not_required ||
+               (zf_cbor_encode_text(&enc, "makeCredUvNotRqd") &&
+                zf_cbor_encode_bool(&enc, true))) &&
               zf_cbor_encode_uint(&enc, 5) && zf_cbor_encode_uint(&enc, ZF_MAX_MSG_SIZE) &&
-              zf_cbor_encode_uint(&enc, 6) && zf_cbor_encode_array(&enc, 1) &&
-              zf_cbor_encode_uint(&enc, 1) && zf_cbor_encode_uint(&enc, 9) &&
-              zf_cbor_encode_array(&enc, transports_count) &&
-              (!capabilities->advertise_usb_transport || zf_cbor_encode_text(&enc, "usb")) &&
-              (!capabilities->advertise_nfc_transport || zf_cbor_encode_text(&enc, "nfc")) &&
-              zf_cbor_encode_uint(&enc, 10) && zf_cbor_encode_array(&enc, 1) &&
-              zf_cbor_encode_map(&enc, 2) && zf_cbor_encode_text(&enc, "alg") &&
-              zf_cbor_encode_int(&enc, -7) && zf_cbor_encode_text(&enc, "type") &&
-              zf_cbor_encode_text(&enc, "public-key") && zf_cbor_encode_uint(&enc, 13) &&
-              zf_cbor_encode_uint(&enc, ZF_MIN_PIN_LENGTH) && zf_cbor_encode_uint(&enc, 14) &&
-              zf_cbor_encode_uint(&enc, ZF_FIRMWARE_VERSION);
+              zf_cbor_encode_uint(&enc, 6) &&
+              zf_cbor_encode_array(&enc, pin_uv_auth_protocols_count) &&
+              (!capabilities->pin_uv_auth_protocol_2_enabled || zf_cbor_encode_uint(&enc, 2)) &&
+              zf_cbor_encode_uint(&enc, 1);
+
+    if (ok && include_ctap21_info_fields) {
+        ok = zf_cbor_encode_uint(&enc, 9) && zf_cbor_encode_array(&enc, transports_count) &&
+             (!capabilities->advertise_usb_transport || zf_cbor_encode_text(&enc, "usb")) &&
+             (!capabilities->advertise_nfc_transport || zf_cbor_encode_text(&enc, "nfc")) &&
+             zf_cbor_encode_uint(&enc, 10) && zf_cbor_encode_array(&enc, 1) &&
+             zf_cbor_encode_map(&enc, 2) && zf_cbor_encode_text(&enc, "alg") &&
+             zf_cbor_encode_int(&enc, -7) && zf_cbor_encode_text(&enc, "type") &&
+             zf_cbor_encode_text(&enc, "public-key") && zf_cbor_encode_uint(&enc, 13) &&
+             zf_cbor_encode_uint(&enc, ZF_MIN_PIN_LENGTH) && zf_cbor_encode_uint(&enc, 14) &&
+             zf_cbor_encode_uint(&enc, ZF_FIRMWARE_VERSION);
+    }
 
     if (!ok) {
         return ZF_CTAP_ERR_INVALID_CBOR;
@@ -207,41 +250,83 @@ uint8_t
 zf_ctap_build_make_credential_response_with_scratch(
     ZfMakeCredentialResponseScratch *scratch, const char *rp_id, const ZfCredentialRecord *record,
     const uint8_t client_data_hash[ZF_CLIENT_DATA_HASH_LEN], bool user_verified,
-    bool include_cred_protect, uint8_t *out, size_t out_capacity, size_t *out_len) {
+    bool include_cred_protect, bool include_hmac_secret, uint8_t *out, size_t out_capacity,
+    size_t *out_len) {
     uint8_t status = ZF_CTAP_ERR_OTHER;
     size_t extension_data_len = 0;
+    size_t attestation_input_len = 0;
+    bool wrote_attestation_input = false;
 
     if (!scratch) {
         return ZF_CTAP_ERR_OTHER;
     }
     memset(scratch, 0, sizeof(*scratch));
 
-    if (include_cred_protect &&
-        !zf_encode_cred_protect_extension(record->cred_protect, scratch->extension_data,
-                                          sizeof(scratch->extension_data), &extension_data_len)) {
+    if ((include_cred_protect || include_hmac_secret) &&
+        !zf_encode_make_credential_extensions(record->cred_protect, include_cred_protect,
+                                              include_hmac_secret, record->hmac_secret,
+                                              scratch->extension_data,
+                                              sizeof(scratch->extension_data),
+                                              &extension_data_len)) {
         goto cleanup;
     }
 
     size_t auth_data_len =
-        zf_build_auth_data(rp_id, true, user_verified, true, include_cred_protect, record,
-                           record->sign_count, scratch->extension_data, extension_data_len,
-                           scratch->cose, sizeof(scratch->cose), scratch->auth_data,
-                           sizeof(scratch->auth_data));
+        zf_build_auth_data(rp_id, true, user_verified, true,
+                           include_cred_protect || include_hmac_secret, record, record->sign_count,
+                           scratch->extension_data, extension_data_len, scratch->cose,
+                           sizeof(scratch->cose), scratch->auth_data, sizeof(scratch->auth_data));
     if (auth_data_len == 0) {
         goto cleanup;
     }
 
-    (void)client_data_hash;
+#if !ZF_FIDO2_NONE_ATTESTATION
+    /*
+     * Packed attestation signs authenticatorData || clientDataHash. Non-dev
+     * builds load per-install local attestation assets; the alternate build
+     * path emits "none" attestation for conformance/debug profiles.
+     */
+    attestation_input_len = auth_data_len + ZF_CLIENT_DATA_HASH_LEN;
+    if (!out || attestation_input_len > out_capacity) {
+        goto cleanup;
+    }
+    memcpy(out, scratch->auth_data, auth_data_len);
+    memcpy(out + auth_data_len, client_data_hash, ZF_CLIENT_DATA_HASH_LEN);
+    wrote_attestation_input = true;
+
+    size_t signature_len = 0;
+    size_t cert_len = 0;
+    if (!zf_attestation_ensure_ready() ||
+        !zf_attestation_load_leaf_cert_der(scratch->attestation_cert,
+                                           sizeof(scratch->attestation_cert), &cert_len) ||
+        !zf_attestation_sign_input(out, attestation_input_len, scratch->signature,
+                                   sizeof(scratch->signature), &signature_len)) {
+        goto cleanup;
+    }
+#endif
 
     ZfCborEncoder enc;
     if (!zf_cbor_encoder_init(&enc, out, out_capacity)) {
         goto cleanup;
     }
 
+#if !ZF_FIDO2_NONE_ATTESTATION
+    bool ok = zf_cbor_encode_map(&enc, 3) && zf_cbor_encode_uint(&enc, 1) &&
+              zf_cbor_encode_text(&enc, "packed") && zf_cbor_encode_uint(&enc, 2) &&
+              zf_cbor_encode_bytes(&enc, scratch->auth_data, auth_data_len) &&
+              zf_cbor_encode_uint(&enc, 3) && zf_cbor_encode_map(&enc, 3) &&
+              zf_cbor_encode_text(&enc, "alg") && zf_cbor_encode_int(&enc, -7) &&
+              zf_cbor_encode_text(&enc, "sig") &&
+              zf_cbor_encode_bytes(&enc, scratch->signature, signature_len) &&
+              zf_cbor_encode_text(&enc, "x5c") && zf_cbor_encode_array(&enc, 1) &&
+              zf_cbor_encode_bytes(&enc, scratch->attestation_cert, cert_len);
+#else
+    (void)client_data_hash;
     bool ok = zf_cbor_encode_map(&enc, 3) && zf_cbor_encode_uint(&enc, 1) &&
               zf_cbor_encode_text(&enc, "none") && zf_cbor_encode_uint(&enc, 2) &&
               zf_cbor_encode_bytes(&enc, scratch->auth_data, auth_data_len) &&
               zf_cbor_encode_uint(&enc, 3) && zf_cbor_encode_map(&enc, 0);
+#endif
     if (!ok) {
         goto cleanup;
     }
@@ -250,14 +335,23 @@ zf_ctap_build_make_credential_response_with_scratch(
     status = ZF_CTAP_SUCCESS;
 
 cleanup:
+    if (status != ZF_CTAP_SUCCESS && wrote_attestation_input) {
+        zf_crypto_secure_zero(out, attestation_input_len);
+    }
     zf_crypto_secure_zero(scratch, sizeof(*scratch));
     return status;
 }
 
+/*
+ * Assertion signatures cover SHA256(authenticatorData || clientDataHash). The
+ * optional user, numberOfCredentials, and userSelected fields are controlled by
+ * the getAssertion branch that selected the credential.
+ */
 uint8_t zf_ctap_build_assertion_response_with_scratch(
-    ZfAssertionResponseScratch *scratch, const ZfGetAssertionRequest *request,
+    ZfAssertionResponseScratch *scratch, const ZfAssertionRequestData *request,
     const ZfCredentialRecord *record, bool user_present, bool user_verified, uint32_t sign_count,
-    bool include_user_details, bool include_count, size_t match_count, bool user_selected,
+    bool include_user_details, bool include_count, size_t match_count, bool include_user_selected,
+    bool user_selected, const uint8_t *extension_data, size_t extension_data_len,
     uint8_t *out, size_t out_capacity, size_t *out_len) {
     uint8_t status = ZF_CTAP_ERR_OTHER;
     size_t signature_len = 0;
@@ -265,11 +359,10 @@ uint8_t zf_ctap_build_assertion_response_with_scratch(
     if (!scratch) {
         return ZF_CTAP_ERR_OTHER;
     }
-    memset(scratch, 0, sizeof(*scratch));
-
     size_t auth_data_len =
-        zf_build_auth_data(request->rp_id, user_present, user_verified, false, false, NULL,
-                           sign_count, NULL, 0, NULL, 0, scratch->auth_data,
+        zf_build_auth_data(request->rp_id, user_present, user_verified, false,
+                           extension_data_len > 0U, NULL, sign_count, extension_data,
+                           extension_data_len, NULL, 0, scratch->auth_data,
                            sizeof(scratch->auth_data));
     if (auth_data_len == 0) {
         goto cleanup;
@@ -290,6 +383,7 @@ uint8_t zf_ctap_build_assertion_response_with_scratch(
 
     bool include_user_name = include_user_details && record->user_name[0] != '\0';
     bool include_display_name = include_user_details && record->user_display_name[0] != '\0';
+    bool emit_user_selected = include_user_selected && user_selected;
     size_t user_pairs = 1;
     if (include_user_name) {
         user_pairs++;
@@ -302,7 +396,7 @@ uint8_t zf_ctap_build_assertion_response_with_scratch(
     if (include_count) {
         pairs++;
     }
-    if (user_selected) {
+    if (emit_user_selected) {
         pairs++;
     }
     bool ok = zf_cbor_encode_map(&enc, pairs) && zf_cbor_encode_uint(&enc, 1) &&
@@ -329,7 +423,7 @@ uint8_t zf_ctap_build_assertion_response_with_scratch(
     if (include_count) {
         ok = zf_cbor_encode_uint(&enc, 5) && zf_cbor_encode_uint(&enc, match_count);
     }
-    if (ok && user_selected) {
+    if (ok && emit_user_selected) {
         ok = zf_cbor_encode_uint(&enc, 6) && zf_cbor_encode_bool(&enc, true);
     }
     if (!ok) {

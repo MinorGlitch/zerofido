@@ -30,10 +30,22 @@
 #define ZF_RELEASE_DIAGNOSTICS 0
 #endif
 
+#ifndef ZF_DEV_ATTESTATION
+#define ZF_DEV_ATTESTATION 0
+#endif
+
+#ifndef ZF_FIDO2_NONE_ATTESTATION
+#define ZF_FIDO2_NONE_ATTESTATION 0
+#endif
+
 #define ZF_CTAPHID_PACKET_SIZE 64
 #define ZF_MAX_MSG_SIZE 1024
 #define ZF_TRANSPORT_ARENA_SIZE (ZF_MAX_MSG_SIZE + 2U)
+#ifdef ZF_HOST_TEST
 #define ZF_COMMAND_SCRATCH_SIZE 6144U
+#else
+#define ZF_COMMAND_SCRATCH_SIZE 5504U
+#endif
 #define ZF_UI_SCRATCH_SIZE 2048U
 #define ZF_APPROVAL_TIMEOUT_MS 30000
 #define ZF_ASSERTION_QUEUE_TIMEOUT_MS 30000
@@ -46,18 +58,34 @@
 #define ZF_MAX_DESCRIPTOR_ID_LEN 1023
 #define ZF_PRIVATE_KEY_LEN 32
 #define ZF_PUBLIC_KEY_LEN 32
+#define ZF_ATTESTATION_CERT_MAX_SIZE 768
 #define ZF_WRAP_IV_LEN 16
 #define ZF_CLIENT_DATA_HASH_LEN 32
+#define ZF_HMAC_SECRET_LEN 32
+#define ZF_HMAC_SECRET_SALT_MAX_LEN 64
+#define ZF_HMAC_SECRET_ENC_MAX_LEN (ZF_HMAC_SECRET_SALT_MAX_LEN + ZF_PIN_PROTOCOL2_IV_LEN)
+#define ZF_HMAC_SECRET_AUTH_MAX_LEN 32
+#define ZF_HMAC_SECRET_OUTPUT_MAX_LEN (64 + ZF_PIN_PROTOCOL2_IV_LEN)
 #define ZF_MAX_CREDENTIALS 32
 #define ZF_STORE_FORMAT_VERSION 3U
 #define ZF_MAX_RP_ID_LEN 256
 #define ZF_MAX_USER_ID_LEN 64
 #define ZF_MAX_USER_NAME_LEN 65
 #define ZF_MAX_DISPLAY_NAME_LEN 65
+#define ZF_INDEX_DISPLAY_NAME_LEN 24
+#define ZF_INDEX_RP_ID_LEN 32
 #define ZF_MAX_ALLOW_LIST 32
 #define ZF_PIN_AUTH_LEN 16
+#define ZF_PIN_AUTH_MAX_LEN 32
+#define ZF_PIN_PROTOCOL_V1 1U
+#define ZF_PIN_PROTOCOL_V2 2U
 #define ZF_PIN_HASH_LEN 16
 #define ZF_PIN_TOKEN_LEN 32
+#define ZF_PIN_PROTOCOL2_IV_LEN 16
+#define ZF_PIN_ENCRYPTED_HASH_MAX_LEN (ZF_PIN_HASH_LEN + ZF_PIN_PROTOCOL2_IV_LEN)
+#define ZF_PIN_ENCRYPTED_TOKEN_MAX_LEN (ZF_PIN_TOKEN_LEN + ZF_PIN_PROTOCOL2_IV_LEN)
+#define ZF_PIN_NEW_PIN_BLOCK_MAX_LEN 64
+#define ZF_PIN_ENCRYPTED_NEW_PIN_MAX_LEN (ZF_PIN_NEW_PIN_BLOCK_MAX_LEN + ZF_PIN_PROTOCOL2_IV_LEN)
 #define ZF_PIN_RETRIES_MAX 8
 #define ZF_MIN_PIN_LENGTH 4
 #define ZF_PIN_TOKEN_TIMEOUT_MS 30000
@@ -65,7 +93,11 @@
 
 #define ZF_PIN_PERMISSION_MC 0x01U
 #define ZF_PIN_PERMISSION_GA 0x02U
+/* Defined by CTAP; recognized only to reject unsupported feature permissions. */
+#define ZF_PIN_PERMISSION_CM 0x04U
 #define ZF_PIN_PERMISSION_BE 0x08U
+#define ZF_PIN_PERMISSION_LBW 0x10U
+#define ZF_PIN_PERMISSION_ACFG 0x20U
 
 #define ZF_FIRMWARE_VERSION 10000U
 
@@ -87,6 +119,7 @@ typedef union {
     uint8_t bytes[ZF_UI_SCRATCH_SIZE];
 } ZfUiScratchArena;
 
+/* CTAP command/status constants are kept local so protocol code avoids SDK coupling. */
 enum {
     ZfCtapeCmdMakeCredential = 0x01,
     ZfCtapeCmdGetAssertion = 0x02,
@@ -125,9 +158,15 @@ enum {
     ZF_CTAP_ERR_PIN_POLICY_VIOLATION = 0x37,
     ZF_CTAP_ERR_PIN_TOKEN_EXPIRED = 0x38,
     ZF_CTAP_ERR_INVALID_SUBCOMMAND = 0x3E,
+    ZF_CTAP_ERR_UNAUTHORIZED_PERMISSION = 0x40,
     ZF_CTAP_ERR_OTHER = 0x7F,
 };
 
+/*
+ * Full credential records are the durable signing objects. Index entries are a
+ * privacy-preserving, compact projection used for lookup and UI lists; production
+ * builds hash RP IDs and keep only short display labels in RAM.
+ */
 typedef struct {
     bool in_use;
     bool resident_key;
@@ -147,6 +186,9 @@ typedef struct {
     uint32_t sign_count;
     uint32_t created_at;
     uint8_t cred_protect;
+    bool hmac_secret;
+    uint8_t hmac_secret_without_uv[ZF_HMAC_SECRET_LEN];
+    uint8_t hmac_secret_with_uv[ZF_HMAC_SECRET_LEN];
 } ZfCredentialRecord;
 
 typedef struct {
@@ -166,6 +208,8 @@ typedef struct {
 #else
     uint8_t credential_id_len;
     uint8_t rp_id_hash[32];
+    char display_name[ZF_INDEX_DISPLAY_NAME_LEN];
+    char rp_id_display[ZF_INDEX_RP_ID_LEN];
 #endif
     uint32_t sign_count;
     uint32_t counter_high_water;
@@ -176,7 +220,24 @@ typedef struct {
 typedef struct {
     ZfCredentialIndexEntry *records;
     size_t count;
+    size_t capacity;
 } ZfCredentialStore;
+
+/* Assertion request data is shared by getAssertion and getNextAssertion replay. */
+typedef struct {
+    uint8_t client_data_hash[ZF_CLIENT_DATA_HASH_LEN];
+    bool has_client_data_hash;
+    char rp_id[ZF_MAX_RP_ID_LEN];
+    bool has_hmac_secret;
+    bool hmac_secret_has_pin_protocol;
+    uint64_t hmac_secret_pin_protocol;
+    uint8_t hmac_secret_platform_x[ZF_PUBLIC_KEY_LEN];
+    uint8_t hmac_secret_platform_y[ZF_PUBLIC_KEY_LEN];
+    uint8_t hmac_secret_salt_enc[ZF_HMAC_SECRET_ENC_MAX_LEN];
+    size_t hmac_secret_salt_enc_len;
+    uint8_t hmac_secret_salt_auth[ZF_HMAC_SECRET_AUTH_MAX_LEN];
+    size_t hmac_secret_salt_auth_len;
+} ZfAssertionRequestData;
 
 typedef struct {
     bool active;
@@ -184,24 +245,25 @@ typedef struct {
     bool uv_verified;
     bool user_present;
     uint16_t record_indices[ZF_MAX_CREDENTIALS];
-    size_t count;
-    size_t index;
+    uint8_t count;
+    uint8_t index;
     uint32_t expires_at;
-    char rp_id[ZF_MAX_RP_ID_LEN];
-    uint8_t client_data_hash[ZF_CLIENT_DATA_HASH_LEN];
+    ZfAssertionRequestData request;
 } ZfAssertionQueue;
 
+/* Descriptor lists reference caller-owned scratch storage for parsed ID hashes. */
 typedef struct {
-    uint8_t credential_id[ZF_CREDENTIAL_ID_LEN];
     uint8_t credential_id_digest[ZF_DESCRIPTOR_ID_DIGEST_LEN];
     uint16_t credential_id_len;
 } ZfCredentialDescriptor;
 
 typedef struct {
-    ZfCredentialDescriptor entries[ZF_MAX_ALLOW_LIST];
+    ZfCredentialDescriptor *entries;
     size_t count;
+    size_t capacity;
 } ZfCredentialDescriptorList;
 
+/* Parsed makeCredential request with presence flags for CTAP optional fields. */
 typedef struct {
     uint8_t client_data_hash[ZF_CLIENT_DATA_HASH_LEN];
     bool has_client_data_hash;
@@ -222,17 +284,17 @@ typedef struct {
     bool es256_supported;
     bool has_cred_protect;
     uint8_t cred_protect;
-    uint8_t pin_auth[ZF_PIN_AUTH_LEN];
+    uint8_t pin_auth[ZF_PIN_AUTH_MAX_LEN];
     size_t pin_auth_len;
     uint64_t pin_protocol;
     bool has_pin_auth;
     bool has_pin_protocol;
+    bool hmac_secret_requested;
 } ZfMakeCredentialRequest;
 
+/* Parsed getAssertion request plus allow-list/options/PIN metadata. */
 typedef struct {
-    uint8_t client_data_hash[ZF_CLIENT_DATA_HASH_LEN];
-    bool has_client_data_hash;
-    char rp_id[ZF_MAX_RP_ID_LEN];
+    ZfAssertionRequestData assertion;
     ZfCredentialDescriptorList allow_list;
     bool up;
     bool has_up;
@@ -240,7 +302,7 @@ typedef struct {
     bool has_uv;
     bool rk;
     bool has_rk;
-    uint8_t pin_auth[ZF_PIN_AUTH_LEN];
+    uint8_t pin_auth[ZF_PIN_AUTH_MAX_LEN];
     size_t pin_auth_len;
     uint64_t pin_protocol;
     bool has_pin_auth;

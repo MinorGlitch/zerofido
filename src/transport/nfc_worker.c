@@ -61,6 +61,44 @@ static ZfNfcTransportState *zf_transport_nfc_state(ZerofidoApp *app) {
     return app ? (ZfNfcTransportState *)app->transport_state : NULL;
 }
 
+static ZfNfcTransportState *zf_transport_nfc_worker_state_alloc(ZerofidoApp *app) {
+#ifdef ZF_HOST_TEST
+    ZfNfcTransportState *state = zf_app_nfc_transport_state(app);
+#else
+    ZfNfcTransportState *state = malloc(sizeof(*state));
+#endif
+
+    if (!state) {
+        return NULL;
+    }
+
+    memset(state, 0, sizeof(*state));
+#ifndef ZF_HOST_TEST
+    furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
+    zf_app_set_nfc_transport_state(app, state);
+    furi_mutex_release(app->ui_mutex);
+#endif
+    return state;
+}
+
+static void zf_transport_nfc_worker_state_free(ZerofidoApp *app, ZfNfcTransportState *state) {
+    if (!state) {
+        return;
+    }
+
+    zf_crypto_secure_zero(state, sizeof(*state));
+#ifndef ZF_HOST_TEST
+    furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
+    if (zf_app_nfc_transport_state(app) == state) {
+        zf_app_set_nfc_transport_state(app, NULL);
+    }
+    furi_mutex_release(app->ui_mutex);
+    free(state);
+#else
+    (void)app;
+#endif
+}
+
 static void zf_transport_nfc_signal_worker(ZerofidoApp *app, uint32_t flags) {
     FuriThreadId id = 0;
 
@@ -101,12 +139,13 @@ static void zf_transport_nfc_set_frame_status(ZerofidoApp *app, const char *pref
                                               const uint8_t *payload, size_t payload_len) {
     char text[64];
 
-    if (!app || !zf_transport_nfc_format_frame_status(text, sizeof(text), prefix, pcb, payload,
-                                                      payload_len)) {
+    (void)app;
+    if (!zf_transport_nfc_format_frame_status(text, sizeof(text), prefix, pcb, payload,
+                                              payload_len)) {
         return;
     }
 
-    zerofido_ui_set_status(app, text);
+    zf_transport_nfc_trace_event(text);
 }
 
 static void zf_transport_nfc_set_frame_status_locked(ZerofidoApp *app, const char *prefix,
@@ -114,12 +153,13 @@ static void zf_transport_nfc_set_frame_status_locked(ZerofidoApp *app, const cha
                                                      size_t payload_len) {
     char text[64];
 
-    if (!app || !zf_transport_nfc_format_frame_status(text, sizeof(text), prefix, pcb, payload,
-                                                      payload_len)) {
+    (void)app;
+    if (!zf_transport_nfc_format_frame_status(text, sizeof(text), prefix, pcb, payload,
+                                              payload_len)) {
         return;
     }
 
-    zerofido_ui_set_status_locked(app, text);
+    zf_transport_nfc_trace_event(text);
 }
 #else
 static inline void zf_transport_nfc_set_frame_status(ZerofidoApp *app, const char *prefix,
@@ -253,6 +293,7 @@ static bool zf_transport_nfc_post_success_cooldown_active_locked(ZfNfcTransportS
 
     if ((int32_t)(furi_get_tick() - state->post_success_cooldown_until_tick) >= 0) {
         state->post_success_cooldown_active = false;
+        state->post_success_probe_sleep_active = false;
         state->post_success_cooldown_until_tick = 0U;
         return false;
     }
@@ -282,18 +323,13 @@ static NfcCommand zf_transport_nfc_sleep_probe_locked(ZerofidoApp *app,
 
     if (app) {
 #if ZF_RELEASE_DIAGNOSTICS
-        zerofido_ui_set_status_locked(app, status ? status : "NFC sleep");
+        zf_transport_nfc_trace_event(status ? status : "NFC sleep");
+#else
+        (void)status;
 #endif
         furi_mutex_release(app->ui_mutex);
     }
     return NfcCommandSleep;
-}
-
-static bool zf_transport_nfc_is_post_success_probe_payload(const uint8_t *payload,
-                                                           size_t payload_len) {
-    return zf_transport_nfc_is_native_desfire_get_version_payload(payload, payload_len) ||
-           zf_transport_nfc_is_native_desfire_additional_frame(payload, payload_len) ||
-           zf_transport_nfc_is_ndef_select_apdu(payload, payload_len);
 }
 
 static bool zf_transport_nfc_should_sleep_post_success_probe_locked(ZfNfcTransportState *state,
@@ -304,11 +340,24 @@ static bool zf_transport_nfc_should_sleep_post_success_probe_locked(ZfNfcTranspo
     }
 
     if (zf_transport_nfc_post_success_cooldown_active_locked(state)) {
-        return zf_transport_nfc_is_post_success_probe_payload(payload, payload_len);
+        if (zf_transport_nfc_is_native_desfire_get_version_payload(payload, payload_len) ||
+            zf_transport_nfc_is_native_desfire_additional_frame(payload, payload_len)) {
+            return true;
+        }
+
+        if (zf_transport_nfc_is_ndef_select_apdu(payload, payload_len)) {
+            if (state->post_success_probe_sleep_active) {
+                state->post_success_probe_sleep_active = false;
+                return false;
+            }
+
+            return true;
+        }
+
+        return false;
     }
 
-    return state->post_success_probe_sleep_active && !state->applet_selected &&
-           zf_transport_nfc_is_ndef_select_apdu(payload, payload_len);
+    return false;
 }
 
 static void zf_transport_nfc_reset_s_deselect_locked(ZfNfcTransportState *state) {
@@ -340,7 +389,7 @@ static NfcCommand zf_transport_nfc_handle_empty_i_block_locked(ZerofidoApp *app,
     zf_u2f_adapter_set_connected(app, true);
     zerofido_ui_set_transport_connected(app, true);
     if (refresh_status) {
-        zerofido_ui_refresh_status(app);
+        zerofido_ui_refresh_status_line(app);
     }
     return NfcCommandContinue;
 }
@@ -359,7 +408,7 @@ static NfcCommand zf_transport_nfc_handle_recovery_r_nak_locked(ZerofidoApp *app
     zerofido_ui_set_transport_connected(app, true);
     zf_u2f_adapter_set_connected(app, true);
     if (refresh_status) {
-        zerofido_ui_refresh_status(app);
+        zerofido_ui_refresh_status_line(app);
     }
     return NfcCommandContinue;
 }
@@ -419,12 +468,14 @@ static bool zf_transport_nfc_handle_native_desfire_get_version_locked(ZerofidoAp
     zf_transport_nfc_note_ui_stage_locked(
         state, state->applet_selected ? ZfNfcUiStageAppletSelected : ZfNfcUiStageAppletWaiting);
 #if ZF_RELEASE_DIAGNOSTICS
-    zerofido_ui_set_status_locked(app, "DESFire native version");
+    zf_transport_nfc_trace_event("DESFire native version");
 #else
     (void)app;
 #endif
+    /* Shim-local discovery progress only; do not touch FIDO applet/session state. */
     state->desfire_probe_frame = 1U;
-    return zf_transport_nfc_send_iso_response(state, version_part1, sizeof(version_part1), false);
+    return zf_transport_nfc_send_iso_response_preserving_replay(state, version_part1,
+                                                                sizeof(version_part1), false);
 }
 
 static bool zf_transport_nfc_handle_native_desfire_additional_frame_locked(
@@ -446,18 +497,21 @@ static bool zf_transport_nfc_handle_native_desfire_additional_frame_locked(
     zf_transport_nfc_note_ui_stage_locked(
         state, state->applet_selected ? ZfNfcUiStageAppletSelected : ZfNfcUiStageAppletWaiting);
 #if ZF_RELEASE_DIAGNOSTICS
-    zerofido_ui_set_status_locked(app, final_frame ? "DESFire native done" : "DESFire native more");
+    zf_transport_nfc_trace_event(final_frame ? "DESFire native done" : "DESFire native more");
 #else
     (void)app;
 #endif
     if (final_frame) {
+        /* Shim-local discovery progress only; do not touch FIDO applet/session state. */
         state->desfire_probe_frame = 0U;
-        return zf_transport_nfc_send_iso_response(state, version_part3, sizeof(version_part3),
-                                                  false);
+        return zf_transport_nfc_send_iso_response_preserving_replay(
+            state, version_part3, sizeof(version_part3), false);
     }
 
+    /* Shim-local discovery progress only; do not touch FIDO applet/session state. */
     state->desfire_probe_frame = 2U;
-    return zf_transport_nfc_send_iso_response(state, version_part2, sizeof(version_part2), false);
+    return zf_transport_nfc_send_iso_response_preserving_replay(state, version_part2,
+                                                                sizeof(version_part2), false);
 }
 
 static bool zf_transport_nfc_send_ats(ZfNfcTransportState *state) {
@@ -521,7 +575,7 @@ static NfcCommand zf_transport_nfc_handle_rats_locked(ZerofidoApp *app, ZfNfcTra
                                       frame_len - 1U);
     zerofido_ui_set_transport_connected(app, true);
     zf_u2f_adapter_set_connected(app, true);
-    zerofido_ui_refresh_status(app);
+    zerofido_ui_refresh_status_line(app);
     return NfcCommandContinue;
 }
 
@@ -544,7 +598,7 @@ static NfcCommand zf_transport_nfc_handle_poll_restart_locked(
     zf_transport_nfc_set_frame_status(app, "NFC poll restart", frame[0], NULL, 0U);
     zerofido_ui_set_transport_connected(app, true);
     zf_u2f_adapter_set_connected(app, true);
-    zerofido_ui_refresh_status(app);
+    zerofido_ui_refresh_status_line(app);
     return NfcCommandReset;
 }
 
@@ -580,7 +634,7 @@ static NfcCommand zf_transport_nfc_handle_iso4_payload_locked(
         zf_u2f_adapter_set_connected(app, true);
         zerofido_ui_set_transport_connected(app, true);
         if (refresh_status) {
-            zerofido_ui_refresh_status(app);
+            zerofido_ui_refresh_status_line(app);
         }
         return NfcCommandContinue;
     }
@@ -593,7 +647,7 @@ static NfcCommand zf_transport_nfc_handle_iso4_payload_locked(
         zf_u2f_adapter_set_connected(app, true);
         zerofido_ui_set_transport_connected(app, true);
         if (refresh_status) {
-            zerofido_ui_refresh_status(app);
+            zerofido_ui_refresh_status_line(app);
         }
         return NfcCommandContinue;
     }
@@ -607,7 +661,7 @@ static NfcCommand zf_transport_nfc_handle_iso4_payload_locked(
             zerofido_ui_set_transport_connected(app, true);
             zf_u2f_adapter_set_connected(app, true);
             if (refresh_status) {
-                zerofido_ui_refresh_status(app);
+                zerofido_ui_refresh_status_line(app);
             }
             return NfcCommandContinue;
         }
@@ -623,7 +677,7 @@ static NfcCommand zf_transport_nfc_handle_iso4_payload_locked(
         zerofido_ui_set_transport_connected(app, true);
         zf_u2f_adapter_set_connected(app, true);
         if (refresh_status) {
-            zerofido_ui_refresh_status(app);
+            zerofido_ui_refresh_status_line(app);
         }
         return NfcCommandContinue;
     }
@@ -640,7 +694,7 @@ static NfcCommand zf_transport_nfc_handle_iso4_payload_locked(
             zerofido_ui_set_transport_connected(app, true);
             zf_u2f_adapter_set_connected(app, true);
             if (refresh_status) {
-                zerofido_ui_refresh_status(app);
+                zerofido_ui_refresh_status_line(app);
             }
             return NfcCommandContinue;
         }
@@ -656,28 +710,33 @@ static NfcCommand zf_transport_nfc_handle_iso4_payload_locked(
 
         zf_transport_nfc_set_frame_status_locked(app, "NFC I-block", request_pcb, assembled_frame,
                                                  assembled_len);
-        zf_transport_nfc_handle_apdu(app, state, assembled_frame, assembled_len);
+        zf_transport_nfc_handle_apdu_locked(app, state, assembled_frame, assembled_len);
         zf_transport_nfc_trace_apdu_after_response(assembled_frame, assembled_len);
         furi_mutex_release(app->ui_mutex);
         zf_u2f_adapter_set_connected(app, true);
         zerofido_ui_set_transport_connected(app, true);
-        zerofido_ui_refresh_status(app);
+        zerofido_ui_refresh_status_line(app);
         return NfcCommandContinue;
     }
 
     zf_transport_nfc_set_frame_status_locked(app, "NFC I-block", request_pcb, payload, payload_len);
-    zf_transport_nfc_handle_apdu(app, state, payload, payload_len);
+    zf_transport_nfc_handle_apdu_locked(app, state, payload, payload_len);
     zf_transport_nfc_trace_apdu_after_response(payload, payload_len);
     furi_mutex_release(app->ui_mutex);
     zf_u2f_adapter_set_connected(app, true);
     zerofido_ui_set_transport_connected(app, true);
-    zerofido_ui_refresh_status(app);
+    zerofido_ui_refresh_status_line(app);
     return NfcCommandContinue;
 }
 
+/*
+ * Main NFC listener state machine. It interleaves ISO14443-3A discovery, RATS
+ * and ATS setup, ISO14443-4A I/R/S block handling, bare APDU fallback, replay
+ * recovery, and UI connection state updates.
+ */
 static NfcCommand zf_transport_nfc_event_callback(NfcGenericEvent event, void *context) {
     ZerofidoApp *app = context;
-    ZfNfcTransportState *state = app ? &app->transport_nfc_state_storage : NULL;
+    ZfNfcTransportState *state = zf_app_nfc_transport_state(app);
     const Iso14443_3aListenerEvent *iso3_event = NULL;
     const Iso14443_4aListenerEvent *iso4_event = NULL;
     const BitBuffer *rx_buffer = NULL;
@@ -813,7 +872,7 @@ static NfcCommand zf_transport_nfc_event_callback(NfcGenericEvent event, void *c
         furi_mutex_release(app->ui_mutex);
         zf_u2f_adapter_set_connected(app, true);
         zerofido_ui_set_transport_connected(app, true);
-        zerofido_ui_refresh_status(app);
+        zerofido_ui_refresh_status_line(app);
         return NfcCommandContinue;
     }
 
@@ -823,7 +882,7 @@ static NfcCommand zf_transport_nfc_event_callback(NfcGenericEvent event, void *c
         furi_mutex_release(app->ui_mutex);
         zf_u2f_adapter_set_connected(app, true);
         zerofido_ui_set_transport_connected(app, true);
-        zerofido_ui_refresh_status(app);
+        zerofido_ui_refresh_status_line(app);
         return NfcCommandContinue;
     }
 
@@ -838,13 +897,13 @@ static NfcCommand zf_transport_nfc_event_callback(NfcGenericEvent event, void *c
             return zf_transport_nfc_sleep_probe_locked(app, state, "NFC probe sleep");
         }
         state->iso_cid_present = false;
-        zf_transport_nfc_handle_apdu(app, state, frame, frame_len);
+        zf_transport_nfc_handle_apdu_locked(app, state, frame, frame_len);
         zf_transport_nfc_trace_bytes("iso-rx", frame, frame_len);
         zf_transport_nfc_trace_apdu_after_response(frame, frame_len);
         furi_mutex_release(app->ui_mutex);
         zf_u2f_adapter_set_connected(app, true);
         zerofido_ui_set_transport_connected(app, true);
-        zerofido_ui_refresh_status(app);
+        zerofido_ui_refresh_status_line(app);
         return NfcCommandContinue;
     }
 
@@ -868,7 +927,7 @@ static NfcCommand zf_transport_nfc_event_callback(NfcGenericEvent event, void *c
         zerofido_ui_set_transport_connected(app, true);
         zf_u2f_adapter_set_connected(app, true);
         if (refresh_status) {
-            zerofido_ui_refresh_status(app);
+            zerofido_ui_refresh_status_line(app);
         }
         return NfcCommandContinue;
     }
@@ -903,7 +962,7 @@ static NfcCommand zf_transport_nfc_event_callback(NfcGenericEvent event, void *c
             zerofido_ui_cancel_pending_interaction(app);
             zerofido_ui_set_transport_connected(app, false);
             zf_u2f_adapter_set_connected(app, false);
-            zerofido_ui_refresh_status(app);
+            zerofido_ui_refresh_status_line(app);
             return NfcCommandSleep;
         }
 
@@ -925,7 +984,7 @@ static NfcCommand zf_transport_nfc_event_callback(NfcGenericEvent event, void *c
             zerofido_ui_set_transport_connected(app, true);
             zf_u2f_adapter_set_connected(app, true);
             if (refresh_status) {
-                zerofido_ui_refresh_status(app);
+                zerofido_ui_refresh_status_line(app);
             }
             return NfcCommandContinue;
         }
@@ -951,7 +1010,7 @@ static NfcCommand zf_transport_nfc_event_callback(NfcGenericEvent event, void *c
         if (refresh_status) {
             zerofido_ui_set_transport_connected(app, true);
             zf_u2f_adapter_set_connected(app, true);
-            zerofido_ui_refresh_status(app);
+            zerofido_ui_refresh_status_line(app);
         }
         return NfcCommandContinue;
     }
@@ -973,7 +1032,7 @@ static NfcCommand zf_transport_nfc_event_callback(NfcGenericEvent event, void *c
         }
         zerofido_ui_set_transport_connected(app, true);
         zf_u2f_adapter_set_connected(app, true);
-        zerofido_ui_refresh_status(app);
+        zerofido_ui_refresh_status_line(app);
         return NfcCommandContinue;
     }
 
@@ -984,7 +1043,7 @@ static NfcCommand zf_transport_nfc_event_callback(NfcGenericEvent event, void *c
         if (refresh_status) {
             zerofido_ui_set_transport_connected(app, true);
             zf_u2f_adapter_set_connected(app, true);
-            zerofido_ui_refresh_status(app);
+            zerofido_ui_refresh_status_line(app);
         }
         return NfcCommandContinue;
     }
@@ -1001,15 +1060,29 @@ static NfcCommand zf_transport_nfc_event_callback(NfcGenericEvent event, void *c
         (frame[0] & ZF_NFC_PCB_CHAIN) != 0U, refresh_status);
 }
 
+/*
+ * Worker-side processing for queued NFC CTAP2/U2F requests. Responses are stored
+ * only if the generation/session still match, preventing late completions from
+ * answering a newer applet selection or exchange.
+ */
 static void zf_transport_nfc_process_request(ZerofidoApp *app) {
-    ZfNfcTransportState *state = &app->transport_nfc_state_storage;
+    ZfNfcTransportState *state = zf_app_nfc_transport_state(app);
     size_t request_len = 0;
     size_t response_len = 0;
     ZfTransportSessionId session_id = 0;
     ZfNfcRequestKind request_kind = ZfNfcRequestKindNone;
+    uint32_t request_generation = 0U;
+    bool old_auto_accept = false;
+    uint8_t *request = NULL;
+    uint8_t *response = NULL;
+    size_t response_capacity = 0U;
 
     furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
-    if (!state->request_pending) {
+    request = zf_transport_nfc_arena(state);
+    response = request;
+    response_capacity = zf_transport_nfc_arena_capacity(state);
+    if (!state->request_pending || !request || response_capacity <= 1U ||
+        state->request_len > ZF_MAX_MSG_SIZE) {
         furi_mutex_release(app->ui_mutex);
         return;
     }
@@ -1017,47 +1090,80 @@ static void zf_transport_nfc_process_request(ZerofidoApp *app) {
     request_len = state->request_len;
     session_id = state->processing_session_id;
     request_kind = state->request_kind;
+    request_generation = state->processing_generation;
+    state->request_pending = false;
     furi_mutex_release(app->ui_mutex);
 
     switch (request_kind) {
     case ZfNfcRequestKindCtap2:
-        response_len = zerofido_handle_ctap2(app, session_id, app->transport_arena, request_len,
-                                             app->transport_arena, ZF_MAX_MSG_SIZE);
+        zf_transport_nfc_trace_event("CTAP2 worker start");
+        furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
+        old_auto_accept = app->transport_auto_accept_transaction;
+        app->transport_auto_accept_transaction = true;
+        furi_mutex_release(app->ui_mutex);
+        response_len = zerofido_handle_ctap2(
+            app, session_id, request, request_len, response,
+            response_capacity > ZF_MAX_MSG_SIZE ? ZF_MAX_MSG_SIZE : response_capacity);
+        zerofido_ui_refresh_status(app);
+        furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
+        app->transport_auto_accept_transaction = old_auto_accept;
+        furi_mutex_release(app->ui_mutex);
+        zf_transport_nfc_trace_event(response_len == 0U ? "CTAP2 worker empty" :
+                                                         "CTAP2 worker done");
         zf_transport_nfc_store_response(
-            app, state, session_id, app->transport_arena, response_len, false, response_len == 0,
-            response_len == 0 ? ZF_NFC_SW_INTERNAL_ERROR : ZF_NFC_SW_SUCCESS);
+            app, state, session_id, request_generation, response, response_len, false,
+            response_len == 0, response_len == 0 ? ZF_NFC_SW_INTERNAL_ERROR : ZF_NFC_SW_SUCCESS);
         break;
     case ZfNfcRequestKindU2f:
-        response_len = zf_u2f_adapter_handle_msg(app, session_id, app->transport_arena, request_len,
-                                                 app->transport_arena, ZF_TRANSPORT_ARENA_SIZE);
+        response_len =
+            zf_u2f_adapter_handle_msg(app, session_id, request, request_len, response,
+                                      response_capacity);
         zf_transport_nfc_store_response(
-            app, state, session_id, app->transport_arena, response_len, true, response_len == 0,
-            response_len == 0 ? ZF_NFC_SW_INTERNAL_ERROR : ZF_NFC_SW_SUCCESS);
+            app, state, session_id, request_generation, response, response_len, true,
+            response_len == 0, response_len == 0 ? ZF_NFC_SW_INTERNAL_ERROR : ZF_NFC_SW_SUCCESS);
         break;
     case ZfNfcRequestKindNone:
     default:
-        zf_transport_nfc_store_response(app, state, session_id, NULL, 0, false, true,
+        zf_transport_nfc_store_response(app, state, session_id, request_generation, NULL, 0, false,
+                                        true,
                                         ZF_NFC_SW_INTERNAL_ERROR);
         break;
     }
     (void)request_len;
 }
 
+bool zf_transport_nfc_wake_request_worker(ZerofidoApp *app, ZfNfcTransportState *state) {
+    if (!app || !state) {
+        return false;
+    }
+
+    zf_transport_nfc_signal_worker(app, ZF_NFC_WORKER_EVT_REQUEST);
+    return true;
+}
+
 int32_t zf_transport_nfc_worker(void *context) {
     ZerofidoApp *app = context;
-    ZfNfcTransportState *state = &app->transport_nfc_state_storage;
+    ZfNfcTransportState *state = NULL;
 
-    memset(state, 0, sizeof(*state));
+    if (!app) {
+        return 0;
+    }
+
+    state = zf_transport_nfc_worker_state_alloc(app);
+    if (!state) {
+        zerofido_ui_set_status(app, "NFC init failed");
+        return 0;
+    }
+
     zf_transport_nfc_attach_arena(state, app->transport_arena, ZF_TRANSPORT_ARENA_SIZE);
     state->nfc = nfc_alloc();
     state->tx_buffer = bit_buffer_alloc(320U);
     state->iso4_rx_buffer = bit_buffer_alloc(320U);
     state->iso4_frame_buffer = bit_buffer_alloc(320U);
-    state->iso4_last_tx_buffer = bit_buffer_alloc(320U);
     state->iso4_layer = zf_nfc_iso4_layer_alloc();
     state->iso14443_4a_data = iso14443_4a_alloc();
     if (!state->nfc || !state->tx_buffer || !state->iso4_rx_buffer || !state->iso4_frame_buffer ||
-        !state->iso4_last_tx_buffer || !state->iso4_layer || !state->iso14443_4a_data) {
+        !state->iso4_layer || !state->iso14443_4a_data) {
         zerofido_ui_set_status(app, "NFC init failed");
         if (state->iso14443_4a_data) {
             iso14443_4a_free(state->iso14443_4a_data);
@@ -1068,9 +1174,6 @@ int32_t zf_transport_nfc_worker(void *context) {
         if (state->iso4_frame_buffer) {
             bit_buffer_free(state->iso4_frame_buffer);
         }
-        if (state->iso4_last_tx_buffer) {
-            bit_buffer_free(state->iso4_last_tx_buffer);
-        }
         if (state->iso4_rx_buffer) {
             bit_buffer_free(state->iso4_rx_buffer);
         }
@@ -1080,7 +1183,7 @@ int32_t zf_transport_nfc_worker(void *context) {
         if (state->nfc) {
             nfc_free(state->nfc);
         }
-        memset(state, 0, sizeof(*state));
+        zf_transport_nfc_worker_state_free(app, state);
         return 0;
     }
 
@@ -1092,16 +1195,15 @@ int32_t zf_transport_nfc_worker(void *context) {
         iso14443_4a_free(state->iso14443_4a_data);
         zf_nfc_iso4_layer_free(state->iso4_layer);
         bit_buffer_free(state->iso4_frame_buffer);
-        bit_buffer_free(state->iso4_last_tx_buffer);
         bit_buffer_free(state->iso4_rx_buffer);
         bit_buffer_free(state->tx_buffer);
         nfc_free(state->nfc);
-        memset(state, 0, sizeof(*state));
+        zf_transport_nfc_worker_state_free(app, state);
         return 0;
     }
 
-    app->transport_state = state;
     furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
+    app->transport_state = state;
     state->listener_active = true;
     state->field_active = false;
     state->iso4_active = false;
@@ -1111,7 +1213,7 @@ int32_t zf_transport_nfc_worker(void *context) {
     state->last_visible_stage_tick = furi_get_tick();
     furi_mutex_release(app->ui_mutex);
     nfc_listener_start(state->listener, zf_transport_nfc_event_callback, app);
-    zerofido_ui_refresh_status(app);
+    zerofido_ui_refresh_status_line(app);
 
     while (true) {
         uint32_t flags = furi_thread_flags_wait(ZF_NFC_WORKER_EVT_STOP | ZF_NFC_WORKER_EVT_REQUEST,
@@ -1143,22 +1245,23 @@ int32_t zf_transport_nfc_worker(void *context) {
     iso14443_4a_free(state->iso14443_4a_data);
     zf_nfc_iso4_layer_free(state->iso4_layer);
     bit_buffer_free(state->iso4_frame_buffer);
-    bit_buffer_free(state->iso4_last_tx_buffer);
     bit_buffer_free(state->iso4_rx_buffer);
     bit_buffer_free(state->tx_buffer);
     nfc_free(state->nfc);
     zf_crypto_secure_zero(app->transport_arena, sizeof(app->transport_arena));
-    memset(state, 0, sizeof(*state));
+    zf_transport_nfc_worker_state_free(app, state);
     return 0;
 }
 
 void zf_transport_nfc_stop(ZerofidoApp *app) {
     if (app) {
-        ZfNfcTransportState *state = &app->transport_nfc_state_storage;
+        ZfNfcTransportState *state = zf_app_nfc_transport_state(app);
 
         furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
-        state->stopping = true;
-        zf_transport_nfc_cancel_current_request_locked(state);
+        if (state) {
+            state->stopping = true;
+            zf_transport_nfc_cancel_current_request_locked(state);
+        }
         furi_mutex_release(app->ui_mutex);
         if (app->approval.done) {
             furi_semaphore_release(app->approval.done);
@@ -1192,7 +1295,8 @@ void zf_transport_nfc_send_dispatch_result(ZerofidoApp *app,
         break;
     }
 
-    zf_transport_nfc_store_response(app, state, request->session_id, result->response,
+    zf_transport_nfc_store_response(app, state, request->session_id, state->processing_generation,
+                                    result->response,
                                     result->response_len,
                                     request->protocol == ZfTransportProtocolKindU2f,
                                     result->send_transport_error, error_status_word);

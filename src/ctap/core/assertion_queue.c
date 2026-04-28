@@ -19,6 +19,7 @@
 
 #include <string.h>
 
+#include "../extensions/hmac_secret.h"
 #include "../response.h"
 #include "../../transport/adapter.h"
 #include "../../zerofido_app_i.h"
@@ -74,6 +75,11 @@ void zerofido_ctap_invalidate_assertion_queue(ZerofidoApp *app) {
     furi_mutex_release(app->ui_mutex);
 }
 
+/*
+ * getNextAssertion state is a continuation of one getAssertion request. It is
+ * bound to the original transport session, RP ID, match ordering, current queue
+ * index, expiry window, and still-current credential index entries.
+ */
 void zf_ctap_assertion_queue_seed(ZerofidoApp *app, ZfTransportSessionId session_id,
                                   const ZfGetAssertionRequest *request, bool uv_verified,
                                   const uint16_t *match_indices, size_t match_count) {
@@ -89,9 +95,7 @@ void zf_ctap_assertion_queue_seed(ZerofidoApp *app, ZfTransportSessionId session
     app->assertion_queue.count = match_count;
     app->assertion_queue.index = 1;
     app->assertion_queue.expires_at = furi_get_tick() + ZF_ASSERTION_QUEUE_TIMEOUT_MS;
-    strncpy(app->assertion_queue.rp_id, request->rp_id, sizeof(app->assertion_queue.rp_id) - 1);
-    memcpy(app->assertion_queue.client_data_hash, request->client_data_hash,
-           sizeof(app->assertion_queue.client_data_hash));
+    app->assertion_queue.request = request->assertion;
 
     memcpy(app->assertion_queue.record_indices, match_indices,
            sizeof(app->assertion_queue.record_indices[0]) * match_count);
@@ -116,7 +120,7 @@ static bool zf_ctap_assertion_queue_still_current_locked(ZerofidoApp *app,
            queue_index == app->assertion_queue.index && count == app->assertion_queue.count &&
            queue_index < app->assertion_queue.count &&
            app->assertion_queue.record_indices[queue_index] == record_index &&
-           strcmp(app->assertion_queue.rp_id, rp_id) == 0;
+           strcmp(app->assertion_queue.request.rp_id, rp_id) == 0;
 }
 
 static void zf_ctap_assertion_queue_clear_if_current(ZerofidoApp *app,
@@ -131,15 +135,22 @@ static void zf_ctap_assertion_queue_clear_if_current(ZerofidoApp *app,
     furi_mutex_release(app->ui_mutex);
 }
 
+/*
+ * Serves one queued continuation response. The record is loaded from the queued
+ * index snapshot, then the queue and credential identity are checked again under
+ * ui_mutex immediately before publishing the counter and advancing the queue.
+ */
 uint8_t zf_ctap_assertion_queue_handle_next(ZerofidoApp *app, ZfTransportSessionId session_id,
                                             uint8_t *out, size_t out_capacity, size_t *out_len) {
     typedef struct {
-        ZfGetAssertionRequest request;
+        ZfAssertionRequestData request;
+        ZfClientPinState pin_state;
         ZfCredentialIndexEntry entry;
         ZfCredentialRecord record;
-        ZfCredentialRecord updated_record;
-        ZfAssertionResponseScratch response;
-        uint8_t store_io[ZF_STORE_RECORD_IO_SIZE];
+        union {
+            ZfAssertionResponseScratch response;
+            uint8_t store_io[ZF_STORE_RECORD_IO_SIZE];
+        } work;
     } ZfAssertionQueueScratch;
 
     _Static_assert(sizeof(ZfAssertionQueueScratch) <= ZF_COMMAND_SCRATCH_SIZE,
@@ -193,10 +204,8 @@ uint8_t zf_ctap_assertion_queue_handle_next(ZerofidoApp *app, ZfTransportSession
         goto cleanup;
     }
 
-    memcpy(scratch->request.client_data_hash, app->assertion_queue.client_data_hash,
-           sizeof(scratch->request.client_data_hash));
-    strncpy(scratch->request.rp_id, app->assertion_queue.rp_id,
-            sizeof(scratch->request.rp_id) - 1);
+    scratch->request = app->assertion_queue.request;
+    scratch->pin_state = app->pin_state;
 
     queue_index = app->assertion_queue.index;
     record_index = app->assertion_queue.record_indices[queue_index];
@@ -212,7 +221,8 @@ uint8_t zf_ctap_assertion_queue_handle_next(ZerofidoApp *app, ZfTransportSession
     furi_mutex_release(app->ui_mutex);
 
     if (!zf_store_load_record_with_buffer(app->storage, &scratch->entry, &scratch->record,
-                                          scratch->store_io, sizeof(scratch->store_io)) ||
+                                          scratch->work.store_io,
+                                          sizeof(scratch->work.store_io)) ||
         strcmp(scratch->record.rp_id, scratch->request.rp_id) != 0 ||
         !zf_ctap_queue_entry_matches_record(&scratch->entry, &scratch->record)) {
         status = ZF_CTAP_ERR_NOT_ALLOWED;
@@ -220,7 +230,6 @@ uint8_t zf_ctap_assertion_queue_handle_next(ZerofidoApp *app, ZfTransportSession
                                                  match_count, scratch->request.rp_id);
         goto cleanup;
     }
-    scratch->updated_record = scratch->record;
 
     if (!zf_get_next_sign_count(&scratch->record, &next_sign_count)) {
         status = ZF_CTAP_ERR_OTHER;
@@ -229,9 +238,19 @@ uint8_t zf_ctap_assertion_queue_handle_next(ZerofidoApp *app, ZfTransportSession
         goto cleanup;
     }
 
+    size_t extension_data_len = 0;
+    status = zf_ctap_hmac_secret_build_extension(
+        &scratch->pin_state, &scratch->request, &scratch->record, uv_verified,
+        &scratch->work.response.hmac_secret, scratch->work.response.extension_data,
+        sizeof(scratch->work.response.extension_data), &extension_data_len);
+    if (status != ZF_CTAP_SUCCESS) {
+        goto cleanup;
+    }
+
     status = zf_ctap_build_assertion_response_with_scratch(
-        &scratch->response, &scratch->request, &scratch->record, user_present, uv_verified,
-        next_sign_count, uv_verified, false, match_count, false, out, out_capacity, out_len);
+        &scratch->work.response, &scratch->request, &scratch->record, user_present, uv_verified,
+        next_sign_count, uv_verified, false, match_count, false, false,
+        scratch->work.response.extension_data, extension_data_len, out, out_capacity, out_len);
     if (status != ZF_CTAP_SUCCESS) {
         goto cleanup;
     }
@@ -242,9 +261,8 @@ uint8_t zf_ctap_assertion_queue_handle_next(ZerofidoApp *app, ZfTransportSession
                                                  match_count, scratch->request.rp_id);
         goto cleanup;
     }
-    scratch->updated_record.sign_count = next_sign_count;
-    if (!zf_store_prepare_counter_advance(app->storage, &scratch->entry,
-                                          &scratch->updated_record,
+    scratch->record.sign_count = next_sign_count;
+    if (!zf_store_prepare_counter_advance(app->storage, &scratch->entry, &scratch->record,
                                           &prepared_counter_high_water)) {
         zf_ctap_assertion_queue_clear_if_current(app, session_id, queue_index, record_index,
                                                  match_count, scratch->request.rp_id);
@@ -266,7 +284,7 @@ uint8_t zf_ctap_assertion_queue_handle_next(ZerofidoApp *app, ZfTransportSession
         furi_mutex_release(app->ui_mutex);
         goto cleanup;
     }
-    if (!zf_store_publish_counter_advance(&app->store, &scratch->updated_record,
+    if (!zf_store_publish_counter_advance(&app->store, &scratch->record,
                                           prepared_counter_high_water)) {
         zf_ctap_assertion_queue_clear(app);
         status = ZF_CTAP_ERR_OTHER;

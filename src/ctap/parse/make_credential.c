@@ -178,17 +178,15 @@ static uint8_t zf_parse_make_credential_exclude_list(ZfCborCursor *cursor,
 
 static uint8_t zf_parse_make_credential_extensions(ZfCborCursor *cursor,
                                                    ZfMakeCredentialRequest *request) {
-    return zf_ctap_parse_extensions_map(cursor, &request->has_cred_protect, &request->cred_protect);
+    return zf_ctap_parse_make_credential_extensions_map(
+        cursor, &request->has_cred_protect, &request->cred_protect,
+        &request->hmac_secret_requested);
 }
 
 static uint8_t zf_parse_make_credential_options(ZfCborCursor *cursor,
                                                 ZfMakeCredentialRequest *request) {
-    if (!zf_ctap_parse_options_map(cursor, &request->up, &request->has_up, &request->uv,
-                                   &request->has_uv, &request->rk, &request->has_rk)) {
-        return ZF_CTAP_ERR_INVALID_CBOR;
-    }
-
-    return ZF_CTAP_SUCCESS;
+    return zf_ctap_parse_options_map(cursor, &request->up, &request->has_up, &request->uv,
+                                     &request->has_uv, &request->rk, &request->has_rk);
 }
 
 static uint8_t zf_parse_make_credential_pin_auth(ZfCborCursor *cursor,
@@ -265,13 +263,20 @@ static uint8_t zf_validate_make_credential_request(const ZfCborCursor *cursor,
     return ZF_CTAP_SUCCESS;
 }
 
+/*
+ * Parses the CTAP makeCredential map into bounded internal storage. Known
+ * numeric keys below 16 are duplicate-checked, required fields are enforced,
+ * unsupported true options fail fast, and trailing CBOR bytes are rejected.
+ */
 uint8_t zf_ctap_parse_make_credential(const uint8_t *data, size_t size,
                                       ZfMakeCredentialRequest *request) {
     ZfCborCursor cursor;
     size_t pairs = 0;
     uint16_t seen_keys = 0;
+    ZfCredentialDescriptorList exclude_list = request->exclude_list;
 
     memset(request, 0, sizeof(*request));
+    request->exclude_list = exclude_list;
     request->up = true;
 
     zf_cbor_cursor_init(&cursor, data, size);

@@ -21,13 +21,198 @@
 
 #include "internal.h"
 
+static bool zf_parse_hmac_secret_key_agreement(ZfCborCursor *cursor,
+                                               ZfGetAssertionRequest *request) {
+    size_t pairs = 0;
+    bool saw_kty = false;
+    bool saw_alg = false;
+    bool saw_crv = false;
+    bool saw_x = false;
+    bool saw_y = false;
+
+    if (!zf_cbor_read_map_start(cursor, &pairs)) {
+        return false;
+    }
+
+    for (size_t i = 0; i < pairs; ++i) {
+        int64_t key = 0;
+        if (!zf_cbor_read_int(cursor, &key)) {
+            return false;
+        }
+
+        switch (key) {
+        case 1: {
+            int64_t kty = 0;
+            if (saw_kty || !zf_cbor_read_int(cursor, &kty) || kty != 2) {
+                return false;
+            }
+            saw_kty = true;
+            break;
+        }
+        case 3: {
+            int64_t alg = 0;
+            if (saw_alg || !zf_cbor_read_int(cursor, &alg) || alg != -25) {
+                return false;
+            }
+            saw_alg = true;
+            break;
+        }
+        case -1: {
+            int64_t crv = 0;
+            if (saw_crv || !zf_cbor_read_int(cursor, &crv) || crv != 1) {
+                return false;
+            }
+            saw_crv = true;
+            break;
+        }
+        case -2: {
+            size_t size = 0;
+            if (saw_x ||
+                !zf_ctap_cbor_read_bytes_copy(cursor, request->assertion.hmac_secret_platform_x,
+                                              sizeof(request->assertion.hmac_secret_platform_x),
+                                              &size) ||
+                size != sizeof(request->assertion.hmac_secret_platform_x)) {
+                return false;
+            }
+            saw_x = true;
+            break;
+        }
+        case -3: {
+            size_t size = 0;
+            if (saw_y ||
+                !zf_ctap_cbor_read_bytes_copy(cursor, request->assertion.hmac_secret_platform_y,
+                                              sizeof(request->assertion.hmac_secret_platform_y),
+                                              &size) ||
+                size != sizeof(request->assertion.hmac_secret_platform_y)) {
+                return false;
+            }
+            saw_y = true;
+            break;
+        }
+        default:
+            return false;
+        }
+    }
+
+    return saw_kty && saw_alg && saw_crv && saw_x && saw_y;
+}
+
+static uint8_t zf_parse_hmac_secret_input(ZfCborCursor *cursor,
+                                          ZfGetAssertionRequest *request) {
+    size_t pairs = 0;
+    uint16_t seen_keys = 0;
+    bool saw_key_agreement = false;
+    bool saw_salt_enc = false;
+    bool saw_salt_auth = false;
+
+    if (!zf_cbor_read_map_start(cursor, &pairs)) {
+        return ZF_CTAP_ERR_INVALID_CBOR;
+    }
+
+    request->assertion.hmac_secret_pin_protocol = ZF_PIN_PROTOCOL_V1;
+    for (size_t i = 0; i < pairs; ++i) {
+        uint64_t key = 0;
+        if (!zf_cbor_read_uint(cursor, &key) || !zf_ctap_mark_seen_key(&seen_keys, key)) {
+            return ZF_CTAP_ERR_INVALID_CBOR;
+        }
+
+        switch (key) {
+        case 1:
+            if (!zf_parse_hmac_secret_key_agreement(cursor, request)) {
+                return ZF_CTAP_ERR_INVALID_CBOR;
+            }
+            saw_key_agreement = true;
+            break;
+        case 2:
+            if (!zf_ctap_cbor_read_bytes_copy(cursor, request->assertion.hmac_secret_salt_enc,
+                                              sizeof(request->assertion.hmac_secret_salt_enc),
+                                              &request->assertion.hmac_secret_salt_enc_len)) {
+                return ZF_CTAP_ERR_INVALID_CBOR;
+            }
+            saw_salt_enc = true;
+            break;
+        case 3:
+            if (!zf_ctap_cbor_read_bytes_copy(cursor, request->assertion.hmac_secret_salt_auth,
+                                              sizeof(request->assertion.hmac_secret_salt_auth),
+                                              &request->assertion.hmac_secret_salt_auth_len)) {
+                return ZF_CTAP_ERR_INVALID_CBOR;
+            }
+            saw_salt_auth = true;
+            break;
+        case 4:
+            if (!zf_cbor_read_uint(cursor, &request->assertion.hmac_secret_pin_protocol)) {
+                return ZF_CTAP_ERR_INVALID_CBOR;
+            }
+            request->assertion.hmac_secret_has_pin_protocol = true;
+            break;
+        default:
+            if (!zf_cbor_skip(cursor)) {
+                return ZF_CTAP_ERR_INVALID_CBOR;
+            }
+            break;
+        }
+    }
+
+    if (!saw_key_agreement || !saw_salt_enc || !saw_salt_auth) {
+        return ZF_CTAP_ERR_MISSING_PARAMETER;
+    }
+
+    request->assertion.has_hmac_secret = true;
+    return ZF_CTAP_SUCCESS;
+}
+
+static uint8_t zf_parse_get_assertion_extensions(ZfCborCursor *cursor,
+                                                 ZfGetAssertionRequest *request) {
+    size_t pairs = 0;
+    bool saw_hmac_secret = false;
+
+    if (!zf_cbor_read_map_start(cursor, &pairs)) {
+        return ZF_CTAP_ERR_INVALID_CBOR;
+    }
+
+    for (size_t i = 0; i < pairs; ++i) {
+        const uint8_t *key = NULL;
+        size_t key_size = 0;
+
+        if (!zf_cbor_read_text_ptr(cursor, &key, &key_size)) {
+            return ZF_CTAP_ERR_INVALID_CBOR;
+        }
+
+        if (zf_ctap_text_equals(key, key_size, "hmac-secret")) {
+            if (saw_hmac_secret) {
+                return ZF_CTAP_ERR_INVALID_CBOR;
+            }
+            uint8_t status = zf_parse_hmac_secret_input(cursor, request);
+            if (status != ZF_CTAP_SUCCESS) {
+                return status;
+            }
+            saw_hmac_secret = true;
+            continue;
+        }
+
+        if (!zf_cbor_skip(cursor)) {
+            return ZF_CTAP_ERR_INVALID_CBOR;
+        }
+    }
+
+    return ZF_CTAP_SUCCESS;
+}
+
+/*
+ * Parses CTAP getAssertion. User presence defaults to true unless the options
+ * map explicitly sets up=false; duplicate known keys, missing required fields,
+ * malformed extensions, and trailing CBOR all fail before the handler sees the
+ * request.
+ */
 uint8_t zf_ctap_parse_get_assertion(const uint8_t *data, size_t size,
                                     ZfGetAssertionRequest *request) {
     ZfCborCursor cursor;
     size_t pairs = 0;
     uint16_t seen_keys = 0;
+    ZfCredentialDescriptorList allow_list = request->allow_list;
 
     memset(request, 0, sizeof(*request));
+    request->allow_list = allow_list;
     request->up = true;
 
     zf_cbor_cursor_init(&cursor, data, size);
@@ -46,18 +231,20 @@ uint8_t zf_ctap_parse_get_assertion(const uint8_t *data, size_t size,
 
         switch (key) {
         case 1:
-            if (!zf_ctap_cbor_read_text_copy(&cursor, request->rp_id, sizeof(request->rp_id))) {
+            if (!zf_ctap_cbor_read_text_copy(&cursor, request->assertion.rp_id,
+                                             sizeof(request->assertion.rp_id))) {
                 return ZF_CTAP_ERR_INVALID_CBOR;
             }
             break;
         case 2: {
             size_t hash_len = 0;
-            if (!zf_ctap_cbor_read_bytes_copy(&cursor, request->client_data_hash,
-                                              sizeof(request->client_data_hash), &hash_len) ||
-                hash_len != sizeof(request->client_data_hash)) {
+            if (!zf_ctap_cbor_read_bytes_copy(&cursor, request->assertion.client_data_hash,
+                                              sizeof(request->assertion.client_data_hash),
+                                              &hash_len) ||
+                hash_len != sizeof(request->assertion.client_data_hash)) {
                 return ZF_CTAP_ERR_INVALID_CBOR;
             }
-            request->has_client_data_hash = true;
+            request->assertion.has_client_data_hash = true;
             break;
         }
         case 3: {
@@ -67,12 +254,22 @@ uint8_t zf_ctap_parse_get_assertion(const uint8_t *data, size_t size,
             }
             break;
         }
-        case 5:
-            if (!zf_ctap_parse_options_map(&cursor, &request->up, &request->has_up, &request->uv,
-                                           &request->has_uv, &request->rk, &request->has_rk)) {
-                return ZF_CTAP_ERR_INVALID_CBOR;
+        case 4: {
+            uint8_t status = zf_parse_get_assertion_extensions(&cursor, request);
+            if (status != ZF_CTAP_SUCCESS) {
+                return status;
             }
             break;
+        }
+        case 5: {
+            uint8_t status =
+                zf_ctap_parse_options_map(&cursor, &request->up, &request->has_up, &request->uv,
+                                          &request->has_uv, &request->rk, &request->has_rk);
+            if (status != ZF_CTAP_SUCCESS) {
+                return status;
+            }
+            break;
+        }
         case 6:
             if (!zf_ctap_cbor_read_bytes_copy(&cursor, request->pin_auth, sizeof(request->pin_auth),
                                               &request->pin_auth_len)) {
@@ -94,10 +291,10 @@ uint8_t zf_ctap_parse_get_assertion(const uint8_t *data, size_t size,
         }
     }
 
-    if (request->rp_id[0] == '\0' || !request->has_client_data_hash) {
+    if (request->assertion.rp_id[0] == '\0' || !request->assertion.has_client_data_hash) {
         return ZF_CTAP_ERR_MISSING_PARAMETER;
     }
-    if (request->has_rk) {
+    if (request->has_rk && request->rk) {
         return ZF_CTAP_ERR_UNSUPPORTED_OPTION;
     }
     if (cursor.ptr != cursor.end) {

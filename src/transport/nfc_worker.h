@@ -21,6 +21,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <furi.h>
 #include <nfc/nfc.h>
 #include <nfc/nfc_listener.h>
 #include <nfc/protocols/iso14443_3a/iso14443_3a_listener.h>
@@ -50,6 +51,11 @@ typedef enum {
     ZfNfcUiStageAppletSelected = 2,
 } ZfNfcUiStage;
 
+/*
+ * NFC worker state tracks both RF-layer state and asynchronous protocol
+ * processing. request_generation/session_id guards prevent late worker results
+ * from overwriting a newer APDU exchange.
+ */
 typedef struct {
     Nfc *nfc;
     NfcListener *listener;
@@ -58,7 +64,6 @@ typedef struct {
     BitBuffer *tx_buffer;
     BitBuffer *iso4_rx_buffer;
     BitBuffer *iso4_frame_buffer;
-    BitBuffer *iso4_last_tx_buffer;
     Iso14443_4aData *iso14443_4a_data;
     bool listener_active;
     bool stopping;
@@ -72,6 +77,7 @@ typedef struct {
     bool response_is_u2f;
     bool response_is_error;
     bool command_chain_active;
+    bool ctap_get_response_supported;
     bool iso4_last_tx_valid;
     bool iso4_tx_chain_active;
     bool iso4_tx_chain_completed;
@@ -79,7 +85,7 @@ typedef struct {
     bool post_success_probe_sleep_active;
     bool iso_cid_present;
     uint8_t iso4_last_tx[ZF_NFC_LAST_TX_CAPACITY];
-    uint8_t iso4_tx_chain[ZF_TRANSPORT_ARENA_SIZE];
+    const uint8_t *iso4_tx_chain_data;
     uint8_t iso_pcb;
     uint8_t iso_cid;
     uint8_t desfire_probe_frame;
@@ -90,19 +96,24 @@ typedef struct {
     size_t response_len;
     size_t response_offset;
     uint16_t error_status_word;
+    uint16_t iso4_tx_chain_status_word;
     uint8_t pending_status;
     uint8_t last_visible_stage;
     ZfTransportSessionId session_id;
     ZfTransportSessionId processing_session_id;
     ZfTransportSessionId canceled_session_id;
     ZfNfcRequestKind request_kind;
+    uint32_t request_generation;
+    uint32_t processing_generation;
     uint32_t last_visible_stage_tick;
     uint32_t post_success_cooldown_until_tick;
     uint8_t *arena;
     size_t arena_capacity;
 } ZfNfcTransportState;
 
+/* Adapter entry points for the NFC transport implementation. */
 int32_t zf_transport_nfc_worker(void *context);
+bool zf_transport_nfc_wake_request_worker(ZerofidoApp *app, ZfNfcTransportState *state);
 void zf_transport_nfc_stop(ZerofidoApp *app);
 void zf_transport_nfc_send_dispatch_result(ZerofidoApp *app,
                                            const ZfProtocolDispatchRequest *request,
