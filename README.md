@@ -181,3 +181,10 @@ not depend on fragile hidden firmware state to approximate literal CTAP power-cy
 
 It should be kept in sync with runtime behavior when CTAP, CTAPHID, U2F, ClientPIN, or metadata
 surfaces change.
+
+## License
+
+ZeroFIDO is licensed under the GNU General Public License, version 3 only. See [LICENSE](LICENSE).
+
+Third-party dependency and provenance notes are tracked in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
