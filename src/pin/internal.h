@@ -24,8 +24,6 @@
 #include "../zerofido_app_i.h"
 #include "../zerofido_pin.h"
 
-#define ZF_PIN_PROTOCOL_V1 1U
-
 enum {
     ZF_CLIENT_PIN_SUBCMD_GET_RETRIES = 0x01,
     ZF_CLIENT_PIN_SUBCMD_GET_KEY_AGREEMENT = 0x02,
@@ -36,6 +34,10 @@ enum {
     ZF_CLIENT_PIN_SUBCMD_GET_PIN_UV_AUTH_TOKEN_USING_PIN_WITH_PERMISSIONS = 0x09,
 };
 
+/*
+ * Parsed ClientPIN request. Boolean presence flags are kept separate from
+ * values because zero is a valid protocol value for several fields.
+ */
 typedef struct {
     uint64_t pin_protocol;
     uint64_t subcommand;
@@ -51,21 +53,23 @@ typedef struct {
     bool has_pin_hash_enc;
     bool has_permissions;
     bool has_rp_id;
-    uint8_t pin_auth[ZF_PIN_AUTH_LEN];
+    uint8_t pin_auth[ZF_PIN_AUTH_MAX_LEN];
     uint8_t platform_x[ZF_PUBLIC_KEY_LEN];
     uint8_t platform_y[ZF_PUBLIC_KEY_LEN];
-    uint8_t pin_hash_enc[32];
-    uint8_t new_pin_enc[256];
+    uint8_t pin_hash_enc[ZF_PIN_ENCRYPTED_HASH_MAX_LEN];
+    uint8_t new_pin_enc[ZF_PIN_ENCRYPTED_NEW_PIN_MAX_LEN];
     char rp_id[ZF_MAX_RP_ID_LEN];
 } ZfClientPinRequest;
 
+/* Shared PIN state helpers used by ClientPIN operation handlers and CTAP UV checks. */
 bool zf_pin_new_pin_enc_length_is_valid(size_t length);
 void zf_pin_refresh_pin_token(uint8_t pin_token[ZF_PIN_TOKEN_LEN]);
 void zf_pin_reset_token_metadata(ZfClientPinState *state);
 void zf_pin_invalidate_token_state(ZfClientPinState *state);
 void zf_pin_note_pin_token_issued(ZfClientPinState *state);
 void zf_pin_set_token_permissions(ZfClientPinState *state, uint64_t permissions,
-                                  bool permission_scoped, const char *rp_id);
+                                  bool permission_scoped, bool permission_managed,
+                                  const char *rp_id);
 bool zf_pin_token_is_expired(const ZfClientPinState *state);
 void zf_pin_clear_auth_block_state(ZfClientPinState *state);
 bool zf_pin_persist_state(Storage *storage, const ZfClientPinState *state);

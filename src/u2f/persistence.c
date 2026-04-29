@@ -24,9 +24,11 @@
 #include <storage/storage.h>
 #include <furi_hal_random.h>
 #include <flipper_format/flipper_format.h>
-#include <mbedtls/ecp.h>
 #include <stdlib.h>
+#include "common.h"
+#include "../attestation/local.h"
 #include "../zerofido_crypto.h"
+#include "../zerofido_storage.h"
 #include "../zerofido_types.h"
 
 #define TAG "U2f"
@@ -49,31 +51,65 @@
 #define U2F_CNT_FILE U2F_DATA_FOLDER "/cnt.u2f"
 #define U2F_CNT_FILE_TMP U2F_DATA_FOLDER "/cnt.u2f.tmp"
 
-#define U2F_DATA_FILE_ENCRYPTION_KEY_SLOT_FACTORY 2
+/*
+ * U2F persistence uses FlipperFormat wrappers with encrypted binary payloads.
+ * key.u2f is additionally authenticated with an HMAC derived from the plaintext
+ * device key to detect file tampering after decryption.
+ */
+
 #define U2F_DATA_FILE_ENCRYPTION_KEY_SLOT_UNIQUE FURI_HAL_CRYPTO_ENCLAVE_UNIQUE_KEY_SLOT
 
-#define U2F_CERT_STOCK 0 // Stock certificate, private key is encrypted with factory key
-#define U2F_CERT_USER 1  // User certificate, private key is encrypted with unique key
-#define U2F_CERT_USER_UNENCRYPTED                                                                  \
-    2 // Unencrypted user certificate, will be encrypted after first load
+#define U2F_CERT_USER 1
 
 #define U2F_CERT_KEY_FILE_TYPE "Flipper U2F Certificate Key File"
 #define U2F_CERT_KEY_VERSION 1
 
 #define U2F_DEVICE_KEY_FILE_TYPE "Flipper U2F Device Key File"
 #define U2F_DEVICE_KEY_VERSION 1
+#define U2F_DEVICE_KEY_MAC_DOMAIN "ZeroFIDO U2F device key file v1"
 
 #define U2F_COUNTER_FILE_TYPE "Flipper U2F Counter File"
-#define U2F_COUNTER_VERSION 1
+#define U2F_COUNTER_VERSION 2
 #define U2F_CERT_MAX_SIZE 1024
 
 #define U2F_COUNTER_CONTROL_VAL 0xAA5500FF
-
 typedef struct {
     uint32_t counter;
     uint8_t random_salt[24];
     uint32_t control;
 } FURI_PACKED U2fCounterData;
+
+static const uint8_t u2f_generated_attestation_subject[] = {
+    0x30, 0x49, 0x31, 0x0B, 0x30, 0x09, 0x06, 0x03, 0x55, 0x04, 0x06, 0x13, 0x02, 'B',  'G',
+    0x31, 0x11, 0x30, 0x0F, 0x06, 0x03, 0x55, 0x04, 0x0A, 0x0C, 0x08, 'Z',  'e',  'r',  'o',
+    'F',  'I',  'D',  'O',  0x31, 0x27, 0x30, 0x25, 0x06, 0x03, 0x55, 0x04, 0x03, 0x0C, 0x1E,
+    'Z',  'e',  'r',  'o',  'F',  'I',  'D',  'O',  ' ',  'L',  'o',  'c',  'a',  'l',  ' ',
+    'U',  '2',  'F',  ' ',  'A',  't',  't',  'e',  's',  't',  'a',  't',  'i',  'o',  'n',
+};
+
+static const uint8_t u2f_generated_attestation_extensions[] = {
+    0x30, 0x33, 0x30, 0x0C, 0x06, 0x03, 0x55, 0x1D, 0x13, 0x01, 0x01, 0xFF, 0x04,
+    0x02, 0x30, 0x00, 0x30, 0x0E, 0x06, 0x03, 0x55, 0x1D, 0x0F, 0x01, 0x01, 0xFF,
+    0x04, 0x04, 0x03, 0x02, 0x07, 0x80, 0x30, 0x13, 0x06, 0x0B, 0x2B, 0x06, 0x01,
+    0x04, 0x01, 0x82, 0xE5, 0x1C, 0x02, 0x01, 0x01, 0x04, 0x04, 0x03, 0x02, 0x05,
+    0x20,
+};
+
+static const ZfLocalAttestationProfile u2f_generated_attestation_profile = {
+    .data_dir = U2F_DATA_FOLDER,
+    .assets_dir = U2F_ASSETS_FOLDER,
+    .cert_file = U2F_CERT_FILE,
+    .cert_temp_file = U2F_CERT_FILE_TMP,
+    .key_file = U2F_CERT_KEY_FILE,
+    .key_temp_file = U2F_CERT_KEY_FILE_TMP,
+    .key_file_type = U2F_CERT_KEY_FILE_TYPE,
+    .subject_der = u2f_generated_attestation_subject,
+    .subject_der_len = sizeof(u2f_generated_attestation_subject),
+    .extensions_der = u2f_generated_attestation_extensions,
+    .extensions_der_len = sizeof(u2f_generated_attestation_extensions),
+    .identity = NULL,
+    .identity_len = 0,
+};
 
 static uint32_t u2f_data_counter_high_water(uint32_t counter) {
     uint32_t available = UINT32_MAX - counter;
@@ -84,157 +120,7 @@ static uint32_t u2f_data_counter_high_water(uint32_t counter) {
     return counter + ZF_COUNTER_RESERVATION_WINDOW;
 }
 
-static int u2f_data_random_cb(void *context, unsigned char *output, size_t output_len) {
-    UNUSED(context);
-    furi_hal_random_fill_buf(output, output_len);
-    return 0;
-}
-
-static bool u2f_data_parse_der_length(const uint8_t *input, size_t input_len, size_t *header_len,
-                                      size_t *value_len) {
-    if (!input || input_len < 2 || !header_len || !value_len) {
-        return false;
-    }
-
-    if ((input[1] & 0x80U) == 0) {
-        *header_len = 2;
-        *value_len = input[1];
-        return *value_len <= input_len - *header_len;
-    }
-
-    size_t length_octets = input[1] & 0x7FU;
-    if (length_octets == 0 || length_octets > sizeof(size_t) || 2 + length_octets > input_len) {
-        return false;
-    }
-
-    size_t length = 0;
-    for (size_t i = 0; i < length_octets; ++i) {
-        length = (length << 8) | input[2 + i];
-    }
-
-    *header_len = 2 + length_octets;
-    *value_len = length;
-    return *value_len <= input_len - *header_len;
-}
-
-static bool u2f_data_read_der_element(const uint8_t *input, size_t input_len, uint8_t expected_tag,
-                                      const uint8_t **value, size_t *value_len,
-                                      size_t *element_len) {
-    size_t header_len = 0;
-
-    if (!input || input_len < 2 || !value || !value_len || !element_len ||
-        input[0] != expected_tag) {
-        return false;
-    }
-    if (!u2f_data_parse_der_length(input, input_len, &header_len, value_len)) {
-        return false;
-    }
-
-    *value = input + header_len;
-    if (*value_len > SIZE_MAX - header_len) {
-        return false;
-    }
-    *element_len = header_len + *value_len;
-    return true;
-}
-
-static bool u2f_data_extract_cert_public_key(const uint8_t *cert, size_t cert_len,
-                                             uint8_t public_key[65]) {
-    const uint8_t *certificate_value = NULL;
-    const uint8_t *tbs_value = NULL;
-    const uint8_t *spki_value = NULL;
-    const uint8_t *element_value = NULL;
-    const uint8_t *bit_string_value = NULL;
-    size_t certificate_value_len = 0;
-    size_t tbs_value_len = 0;
-    size_t spki_value_len = 0;
-    size_t element_value_len = 0;
-    size_t bit_string_value_len = 0;
-    size_t element_len = 0;
-    size_t offset = 0;
-
-    if (!u2f_data_read_der_element(cert, cert_len, 0x30, &certificate_value, &certificate_value_len,
-                                   &element_len) ||
-        element_len != cert_len) {
-        return false;
-    }
-    if (!u2f_data_read_der_element(certificate_value, certificate_value_len, 0x30, &tbs_value,
-                                   &tbs_value_len, &element_len)) {
-        return false;
-    }
-    offset += element_len;
-    if (!u2f_data_read_der_element(certificate_value + offset, certificate_value_len - offset, 0x30,
-                                   &element_value, &element_value_len, &element_len)) {
-        return false;
-    }
-    offset += element_len;
-    if (!u2f_data_read_der_element(certificate_value + offset, certificate_value_len - offset, 0x03,
-                                   &bit_string_value, &bit_string_value_len, &element_len)) {
-        return false;
-    }
-    offset += element_len;
-    if (offset != certificate_value_len) {
-        return false;
-    }
-
-    offset = 0;
-    if (offset < tbs_value_len && tbs_value[offset] == 0xA0) {
-        if (!u2f_data_read_der_element(tbs_value + offset, tbs_value_len - offset, 0xA0,
-                                       &element_value, &element_value_len, &element_len)) {
-            return false;
-        }
-        offset += element_len;
-    }
-    if (!u2f_data_read_der_element(tbs_value + offset, tbs_value_len - offset, 0x02, &element_value,
-                                   &element_value_len, &element_len)) {
-        return false;
-    }
-    offset += element_len;
-    if (!u2f_data_read_der_element(tbs_value + offset, tbs_value_len - offset, 0x30, &element_value,
-                                   &element_value_len, &element_len)) {
-        return false;
-    }
-    offset += element_len;
-    if (!u2f_data_read_der_element(tbs_value + offset, tbs_value_len - offset, 0x30, &element_value,
-                                   &element_value_len, &element_len)) {
-        return false;
-    }
-    offset += element_len;
-    if (!u2f_data_read_der_element(tbs_value + offset, tbs_value_len - offset, 0x30, &element_value,
-                                   &element_value_len, &element_len)) {
-        return false;
-    }
-    offset += element_len;
-    if (!u2f_data_read_der_element(tbs_value + offset, tbs_value_len - offset, 0x30, &element_value,
-                                   &element_value_len, &element_len)) {
-        return false;
-    }
-    offset += element_len;
-    if (!u2f_data_read_der_element(tbs_value + offset, tbs_value_len - offset, 0x30, &spki_value,
-                                   &spki_value_len, &element_len)) {
-        return false;
-    }
-
-    offset = 0;
-    if (!u2f_data_read_der_element(spki_value, spki_value_len, 0x30, &element_value,
-                                   &element_value_len, &element_len)) {
-        return false;
-    }
-    offset += element_len;
-    if (!u2f_data_read_der_element(spki_value + offset, spki_value_len - offset, 0x03,
-                                   &bit_string_value, &bit_string_value_len, &element_len)) {
-        return false;
-    }
-    offset += element_len;
-    if (offset != spki_value_len || bit_string_value_len != 66 || bit_string_value[0] != 0x00 ||
-        bit_string_value[1] != 0x04) {
-        return false;
-    }
-
-    memcpy(public_key, bit_string_value + 1, 65);
-    return true;
-}
-
+/* Shared file existence probe used to distinguish missing bootstrap files from parse failures. */
 static bool u2f_data_file_exists(const char *path) {
     bool exists = false;
     Storage *storage = furi_record_open(RECORD_STORAGE);
@@ -251,52 +137,21 @@ static bool u2f_data_file_exists(const char *path) {
     return exists;
 }
 
+/* Creates the app and U2F asset directories before any atomic file publication. */
 static bool u2f_data_ensure_directories(Storage *storage) {
     if (!storage) {
         return false;
     }
-    if (!storage_dir_exists(storage, ZF_APP_DATA_ROOT) &&
-        !storage_simply_mkdir(storage, ZF_APP_DATA_ROOT)) {
+    if (!zf_storage_ensure_app_data_dir(storage)) {
         return false;
     }
-    if (!storage_dir_exists(storage, ZF_APP_DATA_DIR) &&
-        !storage_simply_mkdir(storage, ZF_APP_DATA_DIR)) {
+    if (!zf_storage_ensure_dir(storage, U2F_DATA_FOLDER)) {
         return false;
     }
-    if (!storage_dir_exists(storage, U2F_DATA_FOLDER) &&
-        !storage_simply_mkdir(storage, U2F_DATA_FOLDER)) {
-        return false;
-    }
-    if (!storage_dir_exists(storage, U2F_ASSETS_FOLDER) &&
-        !storage_simply_mkdir(storage, U2F_ASSETS_FOLDER)) {
+    if (!zf_storage_ensure_dir(storage, U2F_ASSETS_FOLDER)) {
         return false;
     }
     return true;
-}
-
-static bool u2f_data_write_file_atomic(Storage *storage, const char *path, const char *temp_path,
-                                       const uint8_t *data, size_t size) {
-    bool ok = false;
-    File *file = NULL;
-
-    if (!storage || !path || !temp_path || !data || size == 0) {
-        return false;
-    }
-
-    file = storage_file_alloc(storage);
-    if (!file) {
-        return false;
-    }
-
-    storage_common_remove(storage, temp_path);
-    if (storage_file_open(file, temp_path, FSAM_WRITE, FSOM_CREATE_ALWAYS)) {
-        size_t written = storage_file_write(file, data, size);
-        storage_file_close(file);
-        ok = written == size && (storage_common_rename(storage, temp_path, path) == FSE_OK);
-    }
-    storage_common_remove(storage, temp_path);
-    storage_file_free(file);
-    return ok;
 }
 
 bool u2f_data_key_exists(void) {
@@ -354,7 +209,7 @@ static bool u2f_data_cert_public_key_load(uint8_t public_key[65]) {
 
     cert_len = u2f_data_cert_load(cert, U2F_CERT_MAX_SIZE);
     if (cert_len > 0) {
-        ok = u2f_data_extract_cert_public_key(cert, cert_len, public_key);
+        ok = zf_local_attestation_extract_cert_public_key(cert, cert_len, public_key);
     }
 
     zf_crypto_secure_zero(cert, U2F_CERT_MAX_SIZE);
@@ -362,12 +217,14 @@ static bool u2f_data_cert_public_key_load(uint8_t public_key[65]) {
     return ok;
 }
 
+/* Loads the certificate and verifies it contains a parseable P-256 public key. */
 bool u2f_data_cert_check(void) {
     uint8_t public_key[65];
 
     return u2f_data_cert_public_key_load(public_key);
 }
 
+/* Returns the stored DER certificate bytes used in U2F register responses. */
 uint32_t u2f_data_cert_load(uint8_t *cert, size_t capacity) {
     furi_assert(cert);
 
@@ -396,253 +253,94 @@ uint32_t u2f_data_cert_load(uint8_t *cert, size_t capacity) {
     return len_cur;
 }
 
+/* Encrypts imported/generated U2F attestation private keys under the device unique key. */
 static bool u2f_data_cert_key_encrypt(uint8_t *cert_key) {
     furi_assert(cert_key);
 
     bool state = false;
-    bool key_loaded = false;
-    bool wrote_temp = false;
-    uint8_t iv[16];
-    uint8_t key[48];
-    uint32_t cert_type = U2F_CERT_USER;
+    Storage *storage = NULL;
 
     FURI_LOG_I(TAG, "Encrypting user cert key");
 
-    if (!furi_hal_crypto_enclave_ensure_key(U2F_DATA_FILE_ENCRYPTION_KEY_SLOT_UNIQUE)) {
-        FURI_LOG_E(TAG, "Unable to ensure encryption key");
+    storage = furi_record_open(RECORD_STORAGE);
+    if (!storage) {
         return false;
     }
-
-    // Generate random IV
-    furi_hal_random_fill_buf(iv, 16);
-
-    if (!furi_hal_crypto_enclave_load_key(U2F_DATA_FILE_ENCRYPTION_KEY_SLOT_UNIQUE, iv)) {
-        FURI_LOG_E(TAG, "Unable to load encryption key");
-        return false;
+    if (u2f_data_ensure_directories(storage)) {
+        const ZfStorageEncryptedBlobWriteSpec spec = {
+            .file_type = U2F_CERT_KEY_FILE_TYPE,
+            .version = U2F_CERT_KEY_VERSION,
+            .has_type = true,
+            .type = U2F_CERT_USER,
+            .key_slot = U2F_DATA_FILE_ENCRYPTION_KEY_SLOT_UNIQUE,
+            .plaintext = cert_key,
+            .plaintext_len = 32U,
+            .encrypted_len = 48U,
+        };
+        state = zf_storage_write_encrypted_blob_atomic(storage, U2F_CERT_KEY_FILE,
+                                                       U2F_CERT_KEY_FILE_TMP, &spec);
     }
-    key_loaded = true;
-
-    if (!furi_hal_crypto_encrypt(cert_key, key, 32)) {
-        FURI_LOG_E(TAG, "Encryption failed");
-        goto cleanup;
-    }
-    furi_hal_crypto_enclave_unload_key(U2F_DATA_FILE_ENCRYPTION_KEY_SLOT_UNIQUE);
-    key_loaded = false;
-
-    Storage *storage = furi_record_open(RECORD_STORAGE);
-    FlipperFormat *flipper_format = flipper_format_file_alloc(storage);
-
-    if (!flipper_format || !u2f_data_ensure_directories(storage)) {
-        if (flipper_format) {
-            flipper_format_free(flipper_format);
-        }
-        furi_record_close(RECORD_STORAGE);
-        goto cleanup;
-    }
-    zf_crypto_secure_zero(key + 32, sizeof(key) - 32);
-    storage_common_remove(storage, U2F_CERT_KEY_FILE_TMP);
-    if (flipper_format_file_open_always(flipper_format, U2F_CERT_KEY_FILE_TMP)) {
-        do {
-            if (!flipper_format_write_header_cstr(flipper_format, U2F_CERT_KEY_FILE_TYPE,
-                                                  U2F_CERT_KEY_VERSION))
-                break;
-            if (!flipper_format_write_uint32(flipper_format, "Type", &cert_type, 1))
-                break;
-            if (!flipper_format_write_hex(flipper_format, "IV", iv, 16))
-                break;
-            if (!flipper_format_write_hex(flipper_format, "Data", key, 48))
-                break;
-            wrote_temp = true;
-        } while (0);
-    }
-    flipper_format_free(flipper_format);
-    if (wrote_temp) {
-        state = storage_common_rename(storage, U2F_CERT_KEY_FILE_TMP, U2F_CERT_KEY_FILE) == FSE_OK;
-    }
-    storage_common_remove(storage, U2F_CERT_KEY_FILE_TMP);
     furi_record_close(RECORD_STORAGE);
-
-cleanup:
-    zf_crypto_secure_zero(iv, sizeof(iv));
-    zf_crypto_secure_zero(key, sizeof(key));
-    if (key_loaded) {
-        furi_hal_crypto_enclave_unload_key(U2F_DATA_FILE_ENCRYPTION_KEY_SLOT_UNIQUE);
-    }
     return state;
 }
 
+/* Loads the encrypted user U2F attestation key. Legacy stock/plaintext key files are rejected. */
 bool u2f_data_cert_key_load(uint8_t *cert_key) {
     furi_assert(cert_key);
 
     bool state = false;
-    bool key_loaded = false;
-    uint8_t iv[16];
-    uint8_t key[48];
-    uint32_t cert_type = 0;
-    uint8_t key_slot = 0;
-    uint32_t version = 0;
-
-    // Check if unique key exists in secure eclave and generate it if missing
-    if (!furi_hal_crypto_enclave_ensure_key(U2F_DATA_FILE_ENCRYPTION_KEY_SLOT_UNIQUE))
-        return false;
+    Storage *storage = NULL;
+    const uint32_t accepted_versions[] = {U2F_CERT_KEY_VERSION};
 
     zf_crypto_secure_zero(cert_key, 32);
 
-    FuriString *filetype;
-    filetype = furi_string_alloc();
-
-    Storage *storage = furi_record_open(RECORD_STORAGE);
-    FlipperFormat *flipper_format = flipper_format_file_alloc(storage);
-
-    if (!filetype || !flipper_format) {
-        if (flipper_format) {
-            flipper_format_free(flipper_format);
-        }
-        furi_record_close(RECORD_STORAGE);
-        if (filetype) {
-            furi_string_free(filetype);
-        }
+    storage = furi_record_open(RECORD_STORAGE);
+    if (!storage) {
         return false;
     }
 
-    if (flipper_format_file_open_existing(flipper_format, U2F_CERT_KEY_FILE)) {
-        do {
-            if (!flipper_format_read_header(flipper_format, filetype, &version)) {
-                FURI_LOG_E(TAG, "Missing or incorrect header");
-                break;
-            }
-
-            if (strcmp(furi_string_get_cstr(filetype), U2F_CERT_KEY_FILE_TYPE) != 0 ||
-                version != U2F_CERT_KEY_VERSION) {
-                FURI_LOG_E(TAG, "Type or version mismatch");
-                break;
-            }
-
-            if (!flipper_format_read_uint32(flipper_format, "Type", &cert_type, 1)) {
-                FURI_LOG_E(TAG, "Missing cert type");
-                break;
-            }
-
-            if (cert_type == U2F_CERT_STOCK) {
-                key_slot = U2F_DATA_FILE_ENCRYPTION_KEY_SLOT_FACTORY;
-            } else if (cert_type == U2F_CERT_USER) {
-                key_slot = U2F_DATA_FILE_ENCRYPTION_KEY_SLOT_UNIQUE;
-            } else if (cert_type == U2F_CERT_USER_UNENCRYPTED) {
-                key_slot = 0;
-            } else {
-                FURI_LOG_E(TAG, "Unknown cert type");
-                break;
-            }
-            if (key_slot != 0) {
-                if (!flipper_format_read_hex(flipper_format, "IV", iv, 16)) {
-                    FURI_LOG_E(TAG, "Missing IV");
-                    break;
-                }
-
-                if (!flipper_format_read_hex(flipper_format, "Data", key, 48)) {
-                    FURI_LOG_E(TAG, "Missing data");
-                    break;
-                }
-
-                if (!furi_hal_crypto_enclave_load_key(key_slot, iv)) {
-                    FURI_LOG_E(TAG, "Unable to load encryption key");
-                    break;
-                }
-                key_loaded = true;
-                zf_crypto_secure_zero(cert_key, 32);
-
-                if (!furi_hal_crypto_decrypt(key, cert_key, 32)) {
-                    zf_crypto_secure_zero(cert_key, 32);
-                    FURI_LOG_E(TAG, "Decryption failed");
-                    break;
-                }
-                furi_hal_crypto_enclave_unload_key(key_slot);
-                key_loaded = false;
-            } else {
-                if (!flipper_format_read_hex(flipper_format, "Data", cert_key, 32)) {
-                    FURI_LOG_E(TAG, "Missing data");
-                    break;
-                }
-            }
-            state = true;
-        } while (0);
-    }
-
-    flipper_format_free(flipper_format);
+    const ZfStorageEncryptedBlobReadSpec spec = {
+        .file_type = U2F_CERT_KEY_FILE_TYPE,
+        .accepted_versions = accepted_versions,
+        .accepted_version_count = 1U,
+        .has_type = true,
+        .expected_type = U2F_CERT_USER,
+        .key_slot = U2F_DATA_FILE_ENCRYPTION_KEY_SLOT_UNIQUE,
+        .plaintext = cert_key,
+        .plaintext_len = 32U,
+        .encrypted_len = 48U,
+    };
+    state = zf_storage_read_encrypted_blob(storage, U2F_CERT_KEY_FILE, &spec);
     furi_record_close(RECORD_STORAGE);
-    furi_string_free(filetype);
-
-    if (key_loaded) {
-        furi_hal_crypto_enclave_unload_key(key_slot);
-    }
-
-    if (state && cert_type == U2F_CERT_USER_UNENCRYPTED) {
-        state = u2f_data_cert_key_encrypt(cert_key);
-    }
     if (!state) {
         zf_crypto_secure_zero(cert_key, 32);
     }
-
-    zf_crypto_secure_zero(iv, sizeof(iv));
-    zf_crypto_secure_zero(key, sizeof(key));
     return state;
 }
 
+/* Derives the cert public key from the private key and compares it to the stored cert. */
 bool u2f_data_cert_key_matches(const uint8_t *cert_key) {
     bool state = false;
-    uint8_t cert_public_key[65];
-    uint8_t derived_public_key[65];
-    mbedtls_ecp_group group;
-    mbedtls_ecp_point derived;
-    mbedtls_mpi private_key;
-    size_t derived_public_key_len = 0;
+    uint8_t *cert = malloc(U2F_CERT_MAX_SIZE);
+    uint32_t cert_len = 0;
 
-    if (!cert_key || !u2f_data_cert_public_key_load(cert_public_key)) {
+    if (!cert_key || !cert) {
         return false;
     }
 
-    mbedtls_ecp_group_init(&group);
-    mbedtls_ecp_point_init(&derived);
-    mbedtls_mpi_init(&private_key);
+    cert_len = u2f_data_cert_load(cert, U2F_CERT_MAX_SIZE);
+    state = cert_len > 0U && zf_local_attestation_private_key_matches_cert(
+                                cert_key, cert, cert_len, NULL, 0U);
+    if (!state) {
+        FURI_LOG_E(TAG, "Certificate/public key mismatch");
+    }
 
-    do {
-        if (mbedtls_ecp_group_load(&group, MBEDTLS_ECP_DP_SECP256R1) != 0) {
-            FURI_LOG_E(TAG, "Unable to load P-256 group");
-            break;
-        }
-        if (mbedtls_mpi_read_binary(&private_key, cert_key, 32) != 0) {
-            FURI_LOG_E(TAG, "Unable to read attestation private key");
-            break;
-        }
-        if (mbedtls_ecp_mul(&group, &derived, &private_key, &group.G, u2f_data_random_cb, NULL) !=
-            0) {
-            FURI_LOG_E(TAG, "Unable to derive attestation public key");
-            break;
-        }
-        if (mbedtls_ecp_point_write_binary(&group, &derived, MBEDTLS_ECP_PF_UNCOMPRESSED,
-                                           &derived_public_key_len, derived_public_key,
-                                           sizeof(derived_public_key)) != 0) {
-            FURI_LOG_E(TAG, "Unable to encode attestation public key");
-            break;
-        }
-        if (derived_public_key_len != sizeof(derived_public_key)) {
-            FURI_LOG_E(TAG, "Unexpected attestation public key length");
-            break;
-        }
-        if (memcmp(derived_public_key, cert_public_key, sizeof(derived_public_key)) != 0) {
-            FURI_LOG_E(TAG, "Certificate/public key mismatch");
-            break;
-        }
-
-        state = true;
-    } while (0);
-
-    mbedtls_mpi_free(&private_key);
-    mbedtls_ecp_point_free(&derived);
-    mbedtls_ecp_group_free(&group);
+    zf_crypto_secure_zero(cert, U2F_CERT_MAX_SIZE);
+    free(cert);
     return state;
 }
 
+/* Imports explicit attestation assets, publishing the cert only if the key encrypts. */
 bool u2f_data_bootstrap_attestation_assets(const uint8_t *cert, size_t cert_len,
                                            const uint8_t *cert_key, size_t cert_key_len) {
     bool ok = false;
@@ -662,14 +360,14 @@ bool u2f_data_bootstrap_attestation_assets(const uint8_t *cert, size_t cert_len,
         if (!u2f_data_ensure_directories(storage)) {
             break;
         }
-        if (!u2f_data_write_file_atomic(storage, U2F_CERT_FILE, U2F_CERT_FILE_TMP, cert,
-                                        cert_len)) {
+        if (!zf_storage_write_file_atomic(storage, U2F_CERT_FILE, U2F_CERT_FILE_TMP, cert,
+                                          cert_len)) {
             break;
         }
         memcpy(cert_key_copy, cert_key, sizeof(cert_key_copy));
         if (!u2f_data_cert_key_encrypt(cert_key_copy)) {
             zf_crypto_secure_zero(cert_key_copy, sizeof(cert_key_copy));
-            storage_common_remove(storage, U2F_CERT_FILE);
+            zf_storage_remove_optional(storage, U2F_CERT_FILE);
             break;
         }
         zf_crypto_secure_zero(cert_key_copy, sizeof(cert_key_copy));
@@ -680,316 +378,214 @@ bool u2f_data_bootstrap_attestation_assets(const uint8_t *cert, size_t cert_len,
     return ok;
 }
 
+/* Generates local U2F attestation assets through the shared local-attestation writer. */
+bool u2f_data_generate_attestation_assets(void) {
+    return zf_local_attestation_ensure_assets(&u2f_generated_attestation_profile);
+}
+
+/* MACs the encrypted device-key file using the plaintext key as the HMAC secret. */
+static bool u2f_data_device_key_compute_mac(const uint8_t device_key[32], const uint8_t iv[16],
+                                            const uint8_t key_encrypted[48], uint8_t mac[32]) {
+    uint8_t material[64];
+    bool ok = false;
+
+    if (!device_key || !iv || !key_encrypted || !mac) {
+        return false;
+    }
+
+    memcpy(material, iv, 16);
+    memcpy(material + 16, key_encrypted, 48);
+    ok = zf_crypto_hmac_sha256_parts(
+        device_key, 32, (const uint8_t *)U2F_DEVICE_KEY_MAC_DOMAIN,
+        sizeof(U2F_DEVICE_KEY_MAC_DOMAIN) - 1U, material, sizeof(material), mac);
+    zf_crypto_secure_zero(material, sizeof(material));
+    return ok;
+}
+
+static bool u2f_data_device_key_write_mac(const uint8_t *plaintext, size_t plaintext_len,
+                                          const uint8_t iv[16], const uint8_t *encrypted,
+                                          size_t encrypted_len, uint8_t *mac, size_t mac_capacity,
+                                          size_t *mac_len, void *context) {
+    UNUSED(context);
+    if (plaintext_len != 32U || encrypted_len != 48U || mac_capacity < 32U) {
+        return false;
+    }
+    if (!u2f_data_device_key_compute_mac(plaintext, iv, encrypted, mac)) {
+        return false;
+    }
+    *mac_len = 32U;
+    return true;
+}
+
+static bool u2f_data_device_key_verify_mac(const uint8_t *plaintext, size_t plaintext_len,
+                                           const uint8_t iv[16], const uint8_t *encrypted,
+                                           size_t encrypted_len, const uint8_t *mac,
+                                           size_t mac_len, void *context) {
+    uint8_t expected_mac[32];
+    bool ok = false;
+
+    UNUSED(context);
+    if (plaintext_len != 32U || encrypted_len != 48U || !mac || mac_len != 32U) {
+        return false;
+    }
+    ok = u2f_data_device_key_compute_mac(plaintext, iv, encrypted, expected_mac) &&
+         zf_crypto_constant_time_equal(mac, expected_mac, sizeof(expected_mac));
+    zf_crypto_secure_zero(expected_mac, sizeof(expected_mac));
+    return ok;
+}
+
+/* Persists the U2F device key encrypted and authenticated under the unique key. */
+static bool u2f_data_key_store_plaintext(const uint8_t key[32]) {
+    bool state = false;
+    Storage *storage = NULL;
+
+    if (!key) {
+        return false;
+    }
+
+    storage = furi_record_open(RECORD_STORAGE);
+    if (!storage) {
+        return false;
+    }
+    if (u2f_data_ensure_directories(storage)) {
+        const ZfStorageEncryptedBlobWriteSpec spec = {
+            .file_type = U2F_DEVICE_KEY_FILE_TYPE,
+            .version = U2F_DEVICE_KEY_VERSION,
+            .key_slot = U2F_DATA_FILE_ENCRYPTION_KEY_SLOT_UNIQUE,
+            .plaintext = key,
+            .plaintext_len = 32U,
+            .encrypted_len = 48U,
+            .write_mac = u2f_data_device_key_write_mac,
+        };
+        state = zf_storage_write_encrypted_blob_atomic(storage, U2F_KEY_FILE, U2F_KEY_FILE_TMP,
+                                                       &spec);
+    }
+    furi_record_close(RECORD_STORAGE);
+    return state;
+}
+
+/* Loads the U2F device key and verifies the file MAC before accepting it. */
 bool u2f_data_key_load(uint8_t *device_key) {
     furi_assert(device_key);
 
     bool state = false;
-    bool key_loaded = false;
-    uint8_t iv[16];
-    uint8_t key[48];
-    uint32_t version = 0;
-
-    if (!furi_hal_crypto_enclave_ensure_key(U2F_DATA_FILE_ENCRYPTION_KEY_SLOT_UNIQUE)) {
-        return false;
-    }
-
-    FuriString *filetype;
-    filetype = furi_string_alloc();
-
     Storage *storage = furi_record_open(RECORD_STORAGE);
-    FlipperFormat *flipper_format = flipper_format_file_alloc(storage);
+    const uint32_t accepted_versions[] = {U2F_DEVICE_KEY_VERSION};
 
-    if (!filetype || !flipper_format) {
-        if (flipper_format) {
-            flipper_format_free(flipper_format);
-        }
-        furi_record_close(RECORD_STORAGE);
-        if (filetype) {
-            furi_string_free(filetype);
-        }
+    if (!storage) {
         return false;
     }
 
-    if (flipper_format_file_open_existing(flipper_format, U2F_KEY_FILE)) {
-        do {
-            if (!flipper_format_read_header(flipper_format, filetype, &version)) {
-                FURI_LOG_E(TAG, "Missing or incorrect header");
-                break;
-            }
-            if (strcmp(furi_string_get_cstr(filetype), U2F_DEVICE_KEY_FILE_TYPE) != 0 ||
-                version != U2F_DEVICE_KEY_VERSION) {
-                FURI_LOG_E(TAG, "Type or version mismatch");
-                break;
-            }
-            if (!flipper_format_read_hex(flipper_format, "IV", iv, 16)) {
-                FURI_LOG_E(TAG, "Missing IV");
-                break;
-            }
-            if (!flipper_format_read_hex(flipper_format, "Data", key, 48)) {
-                FURI_LOG_E(TAG, "Missing data");
-                break;
-            }
-            if (!furi_hal_crypto_enclave_load_key(U2F_DATA_FILE_ENCRYPTION_KEY_SLOT_UNIQUE, iv)) {
-                FURI_LOG_E(TAG, "Unable to load encryption key");
-                break;
-            }
-            key_loaded = true;
-            zf_crypto_secure_zero(device_key, 32);
-            if (!furi_hal_crypto_decrypt(key, device_key, 32)) {
-                zf_crypto_secure_zero(device_key, 32);
-                FURI_LOG_E(TAG, "Decryption failed");
-                break;
-            }
-            furi_hal_crypto_enclave_unload_key(U2F_DATA_FILE_ENCRYPTION_KEY_SLOT_UNIQUE);
-            key_loaded = false;
-            state = true;
-        } while (0);
-    }
-    if (key_loaded) {
-        furi_hal_crypto_enclave_unload_key(U2F_DATA_FILE_ENCRYPTION_KEY_SLOT_UNIQUE);
-    }
-    flipper_format_free(flipper_format);
+    const ZfStorageEncryptedBlobReadSpec spec = {
+        .file_type = U2F_DEVICE_KEY_FILE_TYPE,
+        .accepted_versions = accepted_versions,
+        .accepted_version_count = 1U,
+        .key_slot = U2F_DATA_FILE_ENCRYPTION_KEY_SLOT_UNIQUE,
+        .plaintext = device_key,
+        .plaintext_len = 32U,
+        .encrypted_len = 48U,
+        .has_mac = true,
+        .mac_len = 32U,
+        .verify_mac = u2f_data_device_key_verify_mac,
+    };
+    state = zf_storage_read_encrypted_blob(storage, U2F_KEY_FILE, &spec);
     furi_record_close(RECORD_STORAGE);
-    furi_string_free(filetype);
-    zf_crypto_secure_zero(iv, sizeof(iv));
-    zf_crypto_secure_zero(key, sizeof(key));
     return state;
 }
 
+/* Generates the device secret from which U2F credential private keys are derived. */
 bool u2f_data_key_generate(uint8_t *device_key) {
     furi_assert(device_key);
 
     bool state = false;
-    bool key_loaded = false;
-    bool wrote_temp = false;
-    uint8_t iv[16];
     uint8_t key[32];
-    uint8_t key_encrypted[48];
 
     if (!furi_hal_crypto_enclave_ensure_key(U2F_DATA_FILE_ENCRYPTION_KEY_SLOT_UNIQUE)) {
         FURI_LOG_E(TAG, "Unable to ensure encryption key");
         return false;
     }
 
-    // Generate random IV and key
-    furi_hal_random_fill_buf(iv, 16);
+    // Generate random device secret used to derive U2F credential keys.
     furi_hal_random_fill_buf(key, 32);
 
-    if (!furi_hal_crypto_enclave_load_key(U2F_DATA_FILE_ENCRYPTION_KEY_SLOT_UNIQUE, iv)) {
-        FURI_LOG_E(TAG, "Unable to load encryption key");
-        goto cleanup;
-    }
-    key_loaded = true;
-
-    if (!furi_hal_crypto_encrypt(key, key_encrypted, 32)) {
-        FURI_LOG_E(TAG, "Encryption failed");
-        goto cleanup;
-    }
-    furi_hal_crypto_enclave_unload_key(U2F_DATA_FILE_ENCRYPTION_KEY_SLOT_UNIQUE);
-    key_loaded = false;
-
-    Storage *storage = furi_record_open(RECORD_STORAGE);
-    FlipperFormat *flipper_format = flipper_format_file_alloc(storage);
-
-    if (!flipper_format || !u2f_data_ensure_directories(storage)) {
-        if (flipper_format) {
-            flipper_format_free(flipper_format);
-        }
-        furi_record_close(RECORD_STORAGE);
-        goto cleanup;
-    }
-    zf_crypto_secure_zero(key_encrypted + 32, sizeof(key_encrypted) - 32);
-    storage_common_remove(storage, U2F_KEY_FILE_TMP);
-    if (flipper_format_file_open_always(flipper_format, U2F_KEY_FILE_TMP)) {
-        do {
-            if (!flipper_format_write_header_cstr(flipper_format, U2F_DEVICE_KEY_FILE_TYPE,
-                                                  U2F_DEVICE_KEY_VERSION))
-                break;
-            if (!flipper_format_write_hex(flipper_format, "IV", iv, 16))
-                break;
-            if (!flipper_format_write_hex(flipper_format, "Data", key_encrypted, 48))
-                break;
-            wrote_temp = true;
-        } while (0);
-    }
-    flipper_format_free(flipper_format);
-    if (wrote_temp) {
-        state = storage_common_rename(storage, U2F_KEY_FILE_TMP, U2F_KEY_FILE) == FSE_OK;
-    }
+    state = u2f_data_key_store_plaintext(key);
     if (state) {
         memcpy(device_key, key, 32);
     }
-    storage_common_remove(storage, U2F_KEY_FILE_TMP);
-    furi_record_close(RECORD_STORAGE);
 
-cleanup:
-    zf_crypto_secure_zero(iv, sizeof(iv));
     zf_crypto_secure_zero(key, sizeof(key));
-    zf_crypto_secure_zero(key_encrypted, sizeof(key_encrypted));
-    if (key_loaded) {
-        furi_hal_crypto_enclave_unload_key(U2F_DATA_FILE_ENCRYPTION_KEY_SLOT_UNIQUE);
-    }
     return state;
 }
 
+/* Reads the encrypted U2F counter. Legacy counter versions are rejected. */
 bool u2f_data_cnt_read(uint32_t *cnt_val) {
     furi_assert(cnt_val);
 
     bool state = false;
-    bool key_loaded = false;
-    uint8_t iv[16];
     U2fCounterData cnt;
-    uint8_t cnt_encr[48];
-    uint32_t version = 0;
-
-    if (!furi_hal_crypto_enclave_ensure_key(U2F_DATA_FILE_ENCRYPTION_KEY_SLOT_UNIQUE)) {
-        return false;
-    }
-
-    FuriString *filetype;
-    filetype = furi_string_alloc();
-
     Storage *storage = furi_record_open(RECORD_STORAGE);
-    FlipperFormat *flipper_format = flipper_format_file_alloc(storage);
+    const uint32_t accepted_versions[] = {U2F_COUNTER_VERSION};
 
-    if (!filetype || !flipper_format) {
-        if (flipper_format) {
-            flipper_format_free(flipper_format);
-        }
-        furi_record_close(RECORD_STORAGE);
-        if (filetype) {
-            furi_string_free(filetype);
-        }
+    if (!storage) {
         return false;
     }
 
-    if (flipper_format_file_open_existing(flipper_format, U2F_CNT_FILE)) {
-        do {
-            if (!flipper_format_read_header(flipper_format, filetype, &version)) {
-                FURI_LOG_E(TAG, "Missing or incorrect header");
-                break;
-            }
-            if (strcmp(furi_string_get_cstr(filetype), U2F_COUNTER_FILE_TYPE) != 0) {
-                FURI_LOG_E(TAG, "Type mismatch");
-                break;
-            }
-            if (version != U2F_COUNTER_VERSION) {
-                FURI_LOG_E(TAG, "Version mismatch");
-                break;
-            }
-            if (!flipper_format_read_hex(flipper_format, "IV", iv, 16)) {
-                FURI_LOG_E(TAG, "Missing IV");
-                break;
-            }
-            if (!flipper_format_read_hex(flipper_format, "Data", cnt_encr, 48)) {
-                FURI_LOG_E(TAG, "Missing data");
-                break;
-            }
-            if (!furi_hal_crypto_enclave_load_key(U2F_DATA_FILE_ENCRYPTION_KEY_SLOT_UNIQUE, iv)) {
-                FURI_LOG_E(TAG, "Unable to load encryption key");
-                break;
-            }
-            key_loaded = true;
-            zf_crypto_secure_zero(&cnt, sizeof(cnt));
-            if (!furi_hal_crypto_decrypt(cnt_encr, (uint8_t *)&cnt, sizeof(U2fCounterData))) {
-                zf_crypto_secure_zero(&cnt, sizeof(cnt));
-                FURI_LOG_E(TAG, "Decryption failed");
-                break;
-            }
-            furi_hal_crypto_enclave_unload_key(U2F_DATA_FILE_ENCRYPTION_KEY_SLOT_UNIQUE);
-            key_loaded = false;
-            if (cnt.control == U2F_COUNTER_CONTROL_VAL) {
-                *cnt_val = cnt.counter;
-                state = true;
-            }
-        } while (0);
+    const ZfStorageEncryptedBlobReadSpec spec = {
+        .file_type = U2F_COUNTER_FILE_TYPE,
+        .accepted_versions = accepted_versions,
+        .accepted_version_count = 1U,
+        .key_slot = U2F_DATA_FILE_ENCRYPTION_KEY_SLOT_UNIQUE,
+        .plaintext = (uint8_t *)&cnt,
+        .plaintext_len = sizeof(cnt),
+        .encrypted_len = 48U,
+    };
+    if (zf_storage_read_encrypted_blob(storage, U2F_CNT_FILE, &spec) &&
+        cnt.control == U2F_COUNTER_CONTROL_VAL) {
+        *cnt_val = cnt.counter;
+        state = true;
     }
-    if (key_loaded) {
-        furi_hal_crypto_enclave_unload_key(U2F_DATA_FILE_ENCRYPTION_KEY_SLOT_UNIQUE);
-    }
-    flipper_format_free(flipper_format);
     furi_record_close(RECORD_STORAGE);
-    furi_string_free(filetype);
-    zf_crypto_secure_zero(iv, sizeof(iv));
     zf_crypto_secure_zero(&cnt, sizeof(cnt));
-    zf_crypto_secure_zero(cnt_encr, sizeof(cnt_encr));
-
     return state;
 }
 
 bool u2f_data_cnt_write(uint32_t cnt_val) {
     bool state = false;
-    bool key_loaded = false;
-    bool wrote_temp = false;
-    uint8_t iv[16];
     U2fCounterData cnt;
-    uint8_t cnt_encr[48];
-
-    if (!furi_hal_crypto_enclave_ensure_key(U2F_DATA_FILE_ENCRYPTION_KEY_SLOT_UNIQUE)) {
-        FURI_LOG_E(TAG, "Unable to ensure encryption key");
-        return false;
-    }
+    Storage *storage = NULL;
 
     // Generate random IV and key
-    furi_hal_random_fill_buf(iv, 16);
     furi_hal_random_fill_buf(cnt.random_salt, 24);
     cnt.control = U2F_COUNTER_CONTROL_VAL;
     cnt.counter = cnt_val;
 
-    if (!furi_hal_crypto_enclave_load_key(U2F_DATA_FILE_ENCRYPTION_KEY_SLOT_UNIQUE, iv)) {
-        FURI_LOG_E(TAG, "Unable to load encryption key");
-        goto cleanup;
+    storage = furi_record_open(RECORD_STORAGE);
+    if (!storage) {
+        zf_crypto_secure_zero(&cnt, sizeof(cnt));
+        return false;
     }
-    key_loaded = true;
-
-    if (!furi_hal_crypto_encrypt((uint8_t *)&cnt, cnt_encr, 32)) {
-        FURI_LOG_E(TAG, "Encryption failed");
-        goto cleanup;
+    if (u2f_data_ensure_directories(storage)) {
+        const ZfStorageEncryptedBlobWriteSpec spec = {
+            .file_type = U2F_COUNTER_FILE_TYPE,
+            .version = U2F_COUNTER_VERSION,
+            .key_slot = U2F_DATA_FILE_ENCRYPTION_KEY_SLOT_UNIQUE,
+            .plaintext = (const uint8_t *)&cnt,
+            .plaintext_len = sizeof(cnt),
+            .encrypted_len = 48U,
+        };
+        state = zf_storage_write_encrypted_blob_atomic(storage, U2F_CNT_FILE, U2F_CNT_FILE_TMP,
+                                                       &spec);
     }
-    furi_hal_crypto_enclave_unload_key(U2F_DATA_FILE_ENCRYPTION_KEY_SLOT_UNIQUE);
-    key_loaded = false;
-
-    Storage *storage = furi_record_open(RECORD_STORAGE);
-    FlipperFormat *flipper_format = flipper_format_file_alloc(storage);
-
-    if (!flipper_format || !u2f_data_ensure_directories(storage)) {
-        if (flipper_format) {
-            flipper_format_free(flipper_format);
-        }
-        furi_record_close(RECORD_STORAGE);
-        goto cleanup;
-    }
-    zf_crypto_secure_zero(cnt_encr + 32, sizeof(cnt_encr) - 32);
-    storage_common_remove(storage, U2F_CNT_FILE_TMP);
-    if (flipper_format_file_open_always(flipper_format, U2F_CNT_FILE_TMP)) {
-        do {
-            if (!flipper_format_write_header_cstr(flipper_format, U2F_COUNTER_FILE_TYPE,
-                                                  U2F_COUNTER_VERSION))
-                break;
-            if (!flipper_format_write_hex(flipper_format, "IV", iv, 16))
-                break;
-            if (!flipper_format_write_hex(flipper_format, "Data", cnt_encr, 48))
-                break;
-            wrote_temp = true;
-        } while (0);
-    }
-    flipper_format_free(flipper_format);
-    if (wrote_temp) {
-        state = storage_common_rename(storage, U2F_CNT_FILE_TMP, U2F_CNT_FILE) == FSE_OK;
-    }
-    storage_common_remove(storage, U2F_CNT_FILE_TMP);
     furi_record_close(RECORD_STORAGE);
-
-cleanup:
-    zf_crypto_secure_zero(iv, sizeof(iv));
     zf_crypto_secure_zero(&cnt, sizeof(cnt));
-    zf_crypto_secure_zero(cnt_encr, sizeof(cnt_encr));
-    if (key_loaded) {
-        furi_hal_crypto_enclave_unload_key(U2F_DATA_FILE_ENCRYPTION_KEY_SLOT_UNIQUE);
-    }
     return state;
 }
 
+/*
+ * Reserves a durable future counter before an authentication response commits
+ * its in-memory value. This mirrors the CTAP credential counter high-water
+ * pattern and protects against rollback after interrupted writes.
+ */
 bool u2f_data_cnt_reserve(uint32_t cnt_val, uint32_t *reserved_cnt) {
     uint32_t high_water = u2f_data_counter_high_water(cnt_val);
 
@@ -1002,22 +598,21 @@ bool u2f_data_cnt_reserve(uint32_t cnt_val, uint32_t *reserved_cnt) {
     return true;
 }
 
-static bool u2f_data_remove_optional(Storage *storage, const char *path) {
-    FS_Error result = storage_common_remove(storage, path);
-    return result == FSE_OK || result == FSE_NOT_EXIST;
-}
-
 bool u2f_data_wipe(Storage *storage) {
+    const char *const paths[] = {
+        U2F_CERT_FILE,
+        U2F_CERT_FILE_TMP,
+        U2F_CERT_KEY_FILE,
+        U2F_CERT_KEY_FILE_TMP,
+        U2F_KEY_FILE,
+        U2F_KEY_FILE_TMP,
+        U2F_CNT_FILE,
+        U2F_CNT_FILE_TMP,
+    };
+
     if (!storage) {
         return false;
     }
 
-    return u2f_data_remove_optional(storage, U2F_CERT_FILE) &&
-           u2f_data_remove_optional(storage, U2F_CERT_FILE_TMP) &&
-           u2f_data_remove_optional(storage, U2F_CERT_KEY_FILE) &&
-           u2f_data_remove_optional(storage, U2F_CERT_KEY_FILE_TMP) &&
-           u2f_data_remove_optional(storage, U2F_KEY_FILE) &&
-           u2f_data_remove_optional(storage, U2F_KEY_FILE_TMP) &&
-           u2f_data_remove_optional(storage, U2F_CNT_FILE) &&
-           u2f_data_remove_optional(storage, U2F_CNT_FILE_TMP);
+    return zf_storage_remove_optional_paths(storage, paths, sizeof(paths) / sizeof(paths[0]));
 }

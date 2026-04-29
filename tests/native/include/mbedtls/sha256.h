@@ -4,7 +4,8 @@
 #include <stdint.h>
 
 typedef struct {
-    int placeholder;
+    unsigned char digest[32];
+    size_t offset;
 } mbedtls_sha256_context;
 
 void mbedtls_sha256_init(mbedtls_sha256_context *ctx);

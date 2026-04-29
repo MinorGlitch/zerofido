@@ -21,84 +21,7 @@
 
 #include "internal.h"
 
-static bool zf_parse_hmac_secret_key_agreement(ZfCborCursor *cursor,
-                                               ZfGetAssertionRequest *request) {
-    size_t pairs = 0;
-    bool saw_kty = false;
-    bool saw_alg = false;
-    bool saw_crv = false;
-    bool saw_x = false;
-    bool saw_y = false;
-
-    if (!zf_cbor_read_map_start(cursor, &pairs)) {
-        return false;
-    }
-
-    for (size_t i = 0; i < pairs; ++i) {
-        int64_t key = 0;
-        if (!zf_cbor_read_int(cursor, &key)) {
-            return false;
-        }
-
-        switch (key) {
-        case 1: {
-            int64_t kty = 0;
-            if (saw_kty || !zf_cbor_read_int(cursor, &kty) || kty != 2) {
-                return false;
-            }
-            saw_kty = true;
-            break;
-        }
-        case 3: {
-            int64_t alg = 0;
-            if (saw_alg || !zf_cbor_read_int(cursor, &alg) || alg != -25) {
-                return false;
-            }
-            saw_alg = true;
-            break;
-        }
-        case -1: {
-            int64_t crv = 0;
-            if (saw_crv || !zf_cbor_read_int(cursor, &crv) || crv != 1) {
-                return false;
-            }
-            saw_crv = true;
-            break;
-        }
-        case -2: {
-            size_t size = 0;
-            if (saw_x ||
-                !zf_ctap_cbor_read_bytes_copy(cursor, request->assertion.hmac_secret_platform_x,
-                                              sizeof(request->assertion.hmac_secret_platform_x),
-                                              &size) ||
-                size != sizeof(request->assertion.hmac_secret_platform_x)) {
-                return false;
-            }
-            saw_x = true;
-            break;
-        }
-        case -3: {
-            size_t size = 0;
-            if (saw_y ||
-                !zf_ctap_cbor_read_bytes_copy(cursor, request->assertion.hmac_secret_platform_y,
-                                              sizeof(request->assertion.hmac_secret_platform_y),
-                                              &size) ||
-                size != sizeof(request->assertion.hmac_secret_platform_y)) {
-                return false;
-            }
-            saw_y = true;
-            break;
-        }
-        default:
-            return false;
-        }
-    }
-
-    return saw_kty && saw_alg && saw_crv && saw_x && saw_y;
-}
-
-static uint8_t zf_parse_hmac_secret_input(ZfCborCursor *cursor,
-                                          ZfGetAssertionRequest *request) {
+static uint8_t zf_parse_hmac_secret_input(ZfCborCursor *cursor, ZfGetAssertionRequest *request) {
     size_t pairs = 0;
     uint16_t seen_keys = 0;
     bool saw_key_agreement = false;
@@ -118,7 +41,9 @@ static uint8_t zf_parse_hmac_secret_input(ZfCborCursor *cursor,
 
         switch (key) {
         case 1:
-            if (!zf_parse_hmac_secret_key_agreement(cursor, request)) {
+            if (!zf_ctap_parse_cose_p256_key_agreement(
+                    cursor, request->assertion.hmac_secret_platform_x,
+                    request->assertion.hmac_secret_platform_y)) {
                 return ZF_CTAP_ERR_INVALID_CBOR;
             }
             saw_key_agreement = true;
@@ -178,7 +103,7 @@ static uint8_t zf_parse_get_assertion_extensions(ZfCborCursor *cursor,
             return ZF_CTAP_ERR_INVALID_CBOR;
         }
 
-        if (zf_ctap_text_equals(key, key_size, "hmac-secret")) {
+        if (zf_ctap_classify_text_key(key, key_size) == ZfCtapTextKeyHmacSecret) {
             if (saw_hmac_secret) {
                 return ZF_CTAP_ERR_INVALID_CBOR;
             }

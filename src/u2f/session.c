@@ -38,37 +38,32 @@
 
 static const uint8_t ver_str[] = {"U2F_V2"};
 
+/* Allocates U2F state. */
 U2fData *u2f_alloc(void) {
-    U2fData *U2F = calloc(1, sizeof(U2fData));
-    if (!U2F) {
-        return NULL;
-    }
-
-    mbedtls_ecp_group_init(&U2F->group);
-    return U2F;
+    return calloc(1, sizeof(U2fData));
 }
 
 void u2f_free(U2fData *U2F) {
     furi_assert(U2F);
-    mbedtls_ecp_group_free(&U2F->group);
     zf_crypto_secure_zero(U2F, sizeof(*U2F));
     free(U2F);
 }
 
+/*
+ * Loads or creates U2F attestation, device key, and counter state. Missing
+ * device key/counter files are initialized, but malformed existing files fail
+ * closed so credential derivation cannot silently change.
+ */
 bool u2f_init(U2fData *U2F) {
     furi_assert(U2F);
 
-    if (u2f_data_cert_check() == false) {
-        FURI_LOG_E(TAG, "Certificate load error");
-        return false;
-    }
-    if (u2f_data_cert_key_load(U2F->cert_key) == false) {
-        FURI_LOG_E(TAG, "Certificate key load error");
-        return false;
-    }
-    if (!u2f_data_cert_key_matches(U2F->cert_key)) {
-        FURI_LOG_E(TAG, "Certificate/key consistency check failed");
-        return false;
+    U2F->cert_ready = false;
+    if (u2f_data_cert_check() && u2f_data_cert_key_load(U2F->cert_key) &&
+        u2f_data_cert_key_matches(U2F->cert_key)) {
+        U2F->cert_ready = true;
+    } else {
+        FURI_LOG_W(TAG, "U2F attestation assets unavailable; U2F register disabled");
+        zf_crypto_secure_zero(U2F->cert_key, sizeof(U2F->cert_key));
     }
     if (u2f_data_key_load(U2F->device_key) == false) {
         if (u2f_data_key_exists()) {
@@ -95,11 +90,6 @@ bool u2f_init(U2fData *U2F) {
     }
     U2F->counter_high_water = U2F->counter;
 
-    if (mbedtls_ecp_group_load(&U2F->group, MBEDTLS_ECP_DP_SECP256R1) != 0) {
-        FURI_LOG_E(TAG, "Unable to load P-256 group");
-        return false;
-    }
-
     U2F->ready = true;
     return true;
 }
@@ -111,6 +101,7 @@ void u2f_set_event_callback(U2fData *U2F, U2fEvtCallback callback, void *context
     U2F->context = context;
 }
 
+/* User presence is intentionally one-shot to match U2F authenticate/register semantics. */
 void u2f_confirm_user_present(U2fData *U2F) {
     U2F->user_present = true;
 }
@@ -125,6 +116,10 @@ void u2f_clear_user_present(U2fData *U2F) {
     U2F->user_present = false;
 }
 
+/*
+ * Validates the APDU, dispatches register/authenticate/version, and writes the
+ * response back into the caller buffer used by USB HID MSG or NFC APDU paths.
+ */
 uint16_t u2f_msg_parse(U2fData *U2F, uint8_t *buf, uint16_t request_len,
                        uint16_t response_capacity) {
     furi_assert(U2F);

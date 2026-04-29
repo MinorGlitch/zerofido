@@ -17,6 +17,7 @@
 
 #include "make_credential.h"
 
+#include <furi.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -31,6 +32,15 @@
 #include "../../zerofido_crypto.h"
 #include "../../zerofido_notify.h"
 #include "../../zerofido_store.h"
+
+#if defined(ZF_RELEASE_DIAGNOSTICS) && ZF_RELEASE_DIAGNOSTICS
+#define ZF_CTAP_MC_DIAG(text) FURI_LOG_I("ZeroFIDO:CTAP", "MC %s", (text))
+#else
+#define ZF_CTAP_MC_DIAG(text) \
+    do {                      \
+        (void)(text);         \
+    } while(false)
+#endif
 
 /*
  * makeCredential is deliberately staged:
@@ -69,12 +79,15 @@ uint8_t zf_ctap_handle_make_credential(ZerofidoApp *app, ZfTransportSessionId se
     bool resident_key = false;
     bool maintenance_acquired = false;
     size_t deleted_count = 0;
+    ZfResolvedCapabilities capabilities;
     uint8_t status = ZF_CTAP_ERR_OTHER;
 
+    ZF_CTAP_MC_DIAG("entry");
     if (!scratch) {
         return ZF_CTAP_ERR_OTHER;
     }
 
+    ZF_CTAP_MC_DIAG("scratch");
     scratch->request.exclude_list.entries = scratch->work.descriptors;
     scratch->request.exclude_list.capacity =
         sizeof(scratch->work.descriptors) / sizeof(scratch->work.descriptors[0]);
@@ -82,6 +95,7 @@ uint8_t zf_ctap_handle_make_credential(ZerofidoApp *app, ZfTransportSessionId se
     if (status != ZF_CTAP_SUCCESS) {
         goto cleanup;
     }
+    ZF_CTAP_MC_DIAG("parsed");
     status = zf_ctap_validate_pin_auth_protocol(scratch->request.has_pin_auth,
                                                 scratch->request.has_pin_protocol,
                                                 scratch->request.pin_protocol,
@@ -115,10 +129,12 @@ uint8_t zf_ctap_handle_make_credential(ZerofidoApp *app, ZfTransportSessionId se
     if (status != ZF_CTAP_SUCCESS) {
         goto cleanup;
     }
+    ZF_CTAP_MC_DIAG("pin ok");
     status = zf_transport_poll_cbor_control(app, session_id);
     if (status != ZF_CTAP_SUCCESS) {
         goto cleanup;
     }
+    ZF_CTAP_MC_DIAG("exclude check");
     if (!zf_ctap_begin_maintenance(app)) {
         status = ZF_CTAP_ERR_NOT_ALLOWED;
         goto cleanup;
@@ -140,31 +156,49 @@ uint8_t zf_ctap_handle_make_credential(ZerofidoApp *app, ZfTransportSessionId se
         status = ZF_CTAP_ERR_INVALID_PARAMETER;
         goto cleanup;
     }
+    ZF_CTAP_MC_DIAG("prepared");
     if (scratch->request.has_cred_protect) {
         scratch->record.cred_protect = scratch->request.cred_protect;
     }
 
+    ZF_CTAP_MC_DIAG("approval");
     status = zf_ctap_request_approval(app, "Register", scratch->request.rp_id,
                                       scratch->user_line, session_id);
     if (status != ZF_CTAP_SUCCESS) {
         goto cleanup;
     }
+    ZF_CTAP_MC_DIAG("approved");
     status = zf_transport_poll_cbor_control(app, session_id);
     if (status != ZF_CTAP_SUCCESS) {
         goto cleanup;
     }
 
+    ZF_CTAP_MC_DIAG("keygen");
     if (!zf_crypto_generate_credential_keypair(&scratch->record)) {
         status = ZF_CTAP_ERR_KEY_STORE_FULL;
         goto cleanup;
     }
-    status = zf_ctap_build_make_credential_response_with_scratch(
-        &scratch->work.response, scratch->request.rp_id, &scratch->record,
-        scratch->request.client_data_hash, uv_verified, scratch->request.has_cred_protect,
-        scratch->request.hmac_secret_requested, out, out_capacity, out_len);
+    ZF_CTAP_MC_DIAG("keygen done");
+    ZF_CTAP_MC_DIAG("response");
+    zf_runtime_get_effective_capabilities(app, &capabilities);
+    ZfAttestationMode attestation_mode = scratch->request.has_attestation_format_preference
+                                             ? scratch->request.preferred_attestation_mode
+                                             : capabilities.attestation_mode;
+    if (attestation_mode == ZfAttestationModeNone) {
+        status = zf_ctap_build_none_make_credential_response_with_scratch(
+            &scratch->work.response, scratch->request.rp_id, &scratch->record, uv_verified,
+            scratch->request.has_cred_protect, scratch->request.hmac_secret_requested, out,
+            out_capacity, out_len);
+    } else {
+        status = zf_ctap_build_packed_make_credential_response_with_scratch(
+            &scratch->work.response, scratch->request.rp_id, &scratch->record,
+            scratch->request.client_data_hash, uv_verified, scratch->request.has_cred_protect,
+            scratch->request.hmac_secret_requested, out, out_capacity, out_len);
+    }
     if (status != ZF_CTAP_SUCCESS) {
         goto cleanup;
     }
+    ZF_CTAP_MC_DIAG("response done");
     status = zf_transport_poll_cbor_control(app, session_id);
     if (status != ZF_CTAP_SUCCESS) {
         goto cleanup;
@@ -198,6 +232,7 @@ uint8_t zf_ctap_handle_make_credential(ZerofidoApp *app, ZfTransportSessionId se
         goto cleanup;
     }
 
+    ZF_CTAP_MC_DIAG("store write");
     bool wrote = zf_store_write_record_file_with_buffer(app->storage, &scratch->record,
                                                         scratch->work.io.store_io,
                                                         sizeof(scratch->work.io.store_io));
@@ -227,6 +262,7 @@ uint8_t zf_ctap_handle_make_credential(ZerofidoApp *app, ZfTransportSessionId se
         deleted_count = removed_count;
     }
 
+    ZF_CTAP_MC_DIAG("store publish");
     furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
     if (deleted_count > 0) {
         zf_store_publish_deleted_indices(&app->store, scratch->work.io.deleted_indices,
@@ -247,8 +283,14 @@ uint8_t zf_ctap_handle_make_credential(ZerofidoApp *app, ZfTransportSessionId se
     }
     zerofido_notify_success(app);
     status = ZF_CTAP_SUCCESS;
+    ZF_CTAP_MC_DIAG("success");
 
 cleanup:
+#if defined(ZF_RELEASE_DIAGNOSTICS) && ZF_RELEASE_DIAGNOSTICS
+    if (status != ZF_CTAP_SUCCESS) {
+        FURI_LOG_I("ZeroFIDO:CTAP", "MC error=%02X", status);
+    }
+#endif
     if (maintenance_acquired) {
         zf_ctap_end_maintenance(app);
     }

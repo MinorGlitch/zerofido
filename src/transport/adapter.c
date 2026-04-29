@@ -17,7 +17,9 @@
 
 #include "adapter.h"
 
+#if !defined(ZF_USB_ONLY)
 #include "nfc_worker.h"
+#endif
 #ifndef ZF_NFC_ONLY
 #include "usb_hid_session.h"
 #include "usb_hid_worker.h"
@@ -32,6 +34,7 @@ static const ZfTransportAdapterOps *zf_transport_get_adapter(const ZerofidoApp *
     return app->transport_adapter;
 }
 
+/* USB HID adapter publishes CTAPHID frames and handles CTAPHID cancellation. */
 #ifndef ZF_NFC_ONLY
 const ZfTransportAdapterOps zf_transport_usb_hid_adapter = {
     .worker = zf_transport_usb_hid_worker,
@@ -44,16 +47,20 @@ const ZfTransportAdapterOps zf_transport_usb_hid_adapter = {
 };
 #endif
 
+/* NFC adapter publishes ISO7816 responses and handles GET RESPONSE polling. */
+#if !defined(ZF_USB_ONLY)
 const ZfTransportAdapterOps zf_transport_nfc_adapter = {
     .worker = zf_transport_nfc_worker,
-    .worker_stack_size = 5 * 1024,
+    .worker_stack_size = 4 * 1024,
     .stop = zf_transport_nfc_stop,
     .send_dispatch_result = zf_transport_nfc_send_dispatch_result,
     .wait_for_interaction = zf_transport_nfc_wait_for_interaction,
     .notify_interaction_changed = zf_transport_nfc_notify_interaction_changed,
     .poll_cbor_control = zf_transport_nfc_poll_cbor_control,
 };
+#endif
 
+/* The remaining functions are null-safe trampolines used by app/UI/CTAP code. */
 void zf_transport_stop(ZerofidoApp *app) {
     const ZfTransportAdapterOps *adapter = zf_transport_get_adapter(app);
 

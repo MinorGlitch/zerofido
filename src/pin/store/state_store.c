@@ -23,25 +23,9 @@
 #include <string.h>
 
 #include "../../zerofido_crypto.h"
+#include "../../zerofido_storage.h"
 
-static bool zf_pin_ensure_app_data_dir(Storage *storage) {
-    if (!storage_dir_exists(storage, ZF_APP_DATA_ROOT) &&
-        !storage_simply_mkdir(storage, ZF_APP_DATA_ROOT)) {
-        return false;
-    }
-
-    if (!storage_dir_exists(storage, ZF_APP_DATA_DIR) &&
-        !storage_simply_mkdir(storage, ZF_APP_DATA_DIR)) {
-        return false;
-    }
-
-    return true;
-}
-
-static bool zf_pin_is_remove_ok(FS_Error error) {
-    return error == FSE_OK || error == FSE_NOT_EXIST;
-}
-
+/* Writes an invalid-version record when retry state persistence must fail closed. */
 static bool zf_pin_invalidate_persisted_state(Storage *storage) {
     const ZfPinFileRecord invalid_record = {
         .base =
@@ -56,10 +40,6 @@ static bool zf_pin_invalidate_persisted_state(Storage *storage) {
     if (!file) {
         return false;
     }
-    if (!zf_pin_ensure_app_data_dir(storage)) {
-        storage_file_free(file);
-        return false;
-    }
     if (storage_file_open(file, ZF_PIN_FILE_PATH, FSAM_WRITE, FSOM_CREATE_ALWAYS)) {
         ok = storage_file_write(file, &invalid_record, sizeof(invalid_record)) ==
              sizeof(invalid_record);
@@ -69,6 +49,7 @@ static bool zf_pin_invalidate_persisted_state(Storage *storage) {
     return ok;
 }
 
+/* Digest binds retry counters and auth-blocked flag to the encrypted PIN hash. */
 static void zf_pin_compute_retry_state_digest(const uint8_t pin_hash[ZF_PIN_HASH_LEN],
                                               uint8_t pin_retries,
                                               uint8_t pin_consecutive_mismatches, uint8_t flags,
@@ -83,6 +64,7 @@ static void zf_pin_compute_retry_state_digest(const uint8_t pin_hash[ZF_PIN_HASH
     zf_crypto_secure_zero(material, sizeof(material));
 }
 
+/* Encrypts retry counters separately so partial tampering blocks PIN use. */
 static bool zf_pin_seal_retry_state(const uint8_t pin_hash[ZF_PIN_HASH_LEN], uint8_t pin_retries,
                                     uint8_t pin_consecutive_mismatches, uint8_t flags,
                                     uint8_t iv[ZF_WRAP_IV_LEN],
@@ -112,6 +94,7 @@ static bool zf_pin_seal_retry_state(const uint8_t pin_hash[ZF_PIN_HASH_LEN], uin
     return ok;
 }
 
+/* Verifies the retry seal before accepting persisted PIN state. */
 static bool zf_pin_verify_retry_state(const uint8_t pin_hash[ZF_PIN_HASH_LEN], uint8_t pin_retries,
                                       uint8_t pin_consecutive_mismatches, uint8_t flags,
                                       const uint8_t iv[ZF_WRAP_IV_LEN],
@@ -140,10 +123,12 @@ static bool zf_pin_verify_retry_state(const uint8_t pin_hash[ZF_PIN_HASH_LEN], u
     return ok;
 }
 
+/* Removes stale temp files left by interrupted PIN persistence. */
 void zf_pin_state_store_cleanup_temp(Storage *storage) {
-    storage_common_remove(storage, ZF_PIN_FILE_TEMP_PATH);
+    zf_storage_remove_optional(storage, ZF_PIN_FILE_TEMP_PATH);
 }
 
+/* Loads and authenticates persisted PIN hash/retry state. */
 ZfPinLoadStatus zf_pin_state_store_load(Storage *storage, uint8_t pin_hash[ZF_PIN_HASH_LEN],
                                         uint8_t *pin_retries, uint8_t *pin_consecutive_mismatches,
                                         bool *pin_auth_blocked) {
@@ -206,6 +191,7 @@ ZfPinLoadStatus zf_pin_state_store_load(Storage *storage, uint8_t pin_hash[ZF_PI
     return ZfPinLoadOk;
 }
 
+/* Publishes a fresh encrypted PIN state file through temp-file rename. */
 bool zf_pin_state_store_persist(Storage *storage, const ZfClientPinState *state) {
     ZfPinFileRecord record = {
         .base =
@@ -218,12 +204,11 @@ bool zf_pin_state_store_persist(Storage *storage, const ZfClientPinState *state)
             },
     };
     bool ok = false;
-    File *file = NULL;
 
     if (!state->pin_set) {
         return true;
     }
-    if (!zf_pin_ensure_app_data_dir(storage)) {
+    if (!zf_storage_ensure_app_data_dir(storage)) {
         return false;
     }
 
@@ -244,27 +229,8 @@ bool zf_pin_state_store_persist(Storage *storage, const ZfClientPinState *state)
         return false;
     }
 
-    storage_common_remove(storage, ZF_PIN_FILE_TEMP_PATH);
-    file = storage_file_alloc(storage);
-    if (!file) {
-        return false;
-    }
-    if (!storage_file_open(file, ZF_PIN_FILE_TEMP_PATH, FSAM_WRITE, FSOM_CREATE_ALWAYS)) {
-        storage_file_free(file);
-        return false;
-    }
-
-    ok = storage_file_write(file, &record, sizeof(record)) == sizeof(record);
-    storage_file_close(file);
-    storage_file_free(file);
-    if (!ok) {
-        storage_common_remove(storage, ZF_PIN_FILE_TEMP_PATH);
-        return false;
-    }
-
-    ok = storage_common_rename(storage, ZF_PIN_FILE_TEMP_PATH, ZF_PIN_FILE_PATH) == FSE_OK;
-    storage_common_remove(storage, ZF_PIN_FILE_TEMP_PATH);
-    return ok;
+    return zf_storage_write_file_atomic(storage, ZF_PIN_FILE_PATH, ZF_PIN_FILE_TEMP_PATH,
+                                        (const uint8_t *)&record, sizeof(record));
 }
 
 bool zf_pin_state_store_fail_closed(Storage *storage, const ZfClientPinState *state) {
@@ -276,11 +242,11 @@ bool zf_pin_state_store_fail_closed(Storage *storage, const ZfClientPinState *st
         return true;
     }
 
-    storage_common_remove(storage, ZF_PIN_FILE_TEMP_PATH);
-    return zf_pin_is_remove_ok(storage_common_remove(storage, ZF_PIN_FILE_PATH));
+    zf_storage_remove_optional(storage, ZF_PIN_FILE_TEMP_PATH);
+    return zf_storage_remove_optional(storage, ZF_PIN_FILE_PATH);
 }
 
 bool zf_pin_state_store_clear(Storage *storage) {
-    storage_common_remove(storage, ZF_PIN_FILE_TEMP_PATH);
-    return zf_pin_is_remove_ok(storage_common_remove(storage, ZF_PIN_FILE_PATH));
+    zf_storage_remove_optional(storage, ZF_PIN_FILE_TEMP_PATH);
+    return zf_storage_remove_optional(storage, ZF_PIN_FILE_PATH);
 }

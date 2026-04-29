@@ -1,3 +1,5 @@
+"""Tests for CTAPHID frame construction, parsing, and response decoding helpers."""
+
 from __future__ import annotations
 
 import io
@@ -111,6 +113,22 @@ class CtaphidProbeTests(unittest.TestCase):
             bytes([0x00, ctaphid_probe.U2F_VERSION, 0x00, 0x00, 0x00, 0x00, 0x00]),
         )
 
+    def test_build_u2f_invalid_cla_version_apdu(self) -> None:
+        self.assertEqual(
+            ctaphid_probe.build_u2f_invalid_cla_version_apdu(),
+            bytes([0x6D, ctaphid_probe.U2F_VERSION, 0x00, 0x00, 0x00, 0x00, 0x00]),
+        )
+        self.assertEqual(
+            ctaphid_probe.build_u2f_invalid_cla_version_apdu(0xC3),
+            bytes([0xC3, ctaphid_probe.U2F_VERSION, 0x00, 0x00, 0x00, 0x00, 0x00]),
+        )
+
+    def test_build_u2f_version_with_data_apdu(self) -> None:
+        self.assertEqual(
+            ctaphid_probe.build_u2f_version_with_data_apdu(b"\x12\x34"),
+            bytes([0x00, ctaphid_probe.U2F_VERSION, 0x00, 0x00, 0x00, 0x00, 0x02, 0x12, 0x34]),
+        )
+
     def test_decode_u2f_response_payload_exposes_status_word_metadata(self) -> None:
         parsed = ctaphid_probe.decode_u2f_response_payload(b"U2F_V2\x90\x00")
 
@@ -126,6 +144,31 @@ class CtaphidProbeTests(unittest.TestCase):
         self.assertEqual(parsed["status_words_hex"], "6e00")
         self.assertEqual(parsed["status_word"], 0x6E00)
         self.assertEqual(parsed["status_word_name"], "SW_CLA_NOT_SUPPORTED")
+
+    def test_decode_u2f_response_payload_names_wrong_data(self) -> None:
+        parsed = ctaphid_probe.decode_u2f_response_payload(bytes.fromhex("6a80"))
+
+        self.assertEqual(parsed["status_word"], 0x6A80)
+        self.assertEqual(parsed["status_word_name"], "SW_WRONG_DATA")
+
+    def test_extract_make_credential_attestation_certificate_reads_x5c_leaf(self) -> None:
+        cert_der = bytes.fromhex("3003020101")
+        response_payload = b"\x00" + cbor2.dumps(
+            {
+                1: "packed",
+                2: b"auth-data",
+                3: {
+                    "alg": -7,
+                    "sig": b"signature",
+                    "x5c": [cert_der],
+                },
+            }
+        )
+
+        self.assertEqual(
+            ctaphid_probe.extract_make_credential_attestation_certificate(response_payload),
+            cert_der,
+        )
 
     def test_build_u2f_authenticate_apdu_sets_length(self) -> None:
         challenge = bytes(range(32))

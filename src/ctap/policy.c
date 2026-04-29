@@ -30,14 +30,15 @@ bool zf_ctap_request_uses_allow_list(const ZfGetAssertionRequest *request) {
 }
 
 uint8_t zf_ctap_validate_pin_auth_protocol(bool has_pin_auth, bool has_pin_protocol,
-                                           uint64_t pin_protocol) {
+                                           uint64_t pin_protocol, bool allow_protocol2) {
     if (!has_pin_auth) {
         return ZF_CTAP_SUCCESS;
     }
     if (!has_pin_protocol) {
         return ZF_CTAP_ERR_MISSING_PARAMETER;
     }
-    if (pin_protocol != 1U) {
+    if (pin_protocol != ZF_PIN_PROTOCOL_V1 &&
+        (pin_protocol != ZF_PIN_PROTOCOL_V2 || !allow_protocol2)) {
         return ZF_CTAP_ERR_INVALID_PARAMETER;
     }
     return ZF_CTAP_SUCCESS;
@@ -77,6 +78,11 @@ bool zf_ctap_store_entry_matches_descriptor_list(const ZfCredentialIndexEntry *e
                                                         entry->credential_id_len);
 }
 
+/*
+ * Exclude-list checks obey credProtect visibility. A matching UV_REQUIRED
+ * credential is hidden from makeCredential exclusion unless UV has already been
+ * verified, so the authenticator does not leak protected credential existence.
+ */
 bool zf_ctap_exclude_list_has_visible_match(Storage *storage, const ZfCredentialStore *store,
                                             const char *rp_id,
                                             const ZfCredentialDescriptorList *exclude_list,
@@ -136,6 +142,11 @@ static bool zf_ctap_credential_is_allowed_by_cred_protect(const ZfGetAssertionRe
     }
 }
 
+/*
+ * Resolve candidate credentials, then apply credProtect visibility. allowList
+ * narrows candidates by descriptor digest; otherwise all RP matches are
+ * considered. UV_REQUIRED credentials are hidden unless UV is verified.
+ */
 size_t zf_ctap_resolve_assertion_matches(Storage *storage, ZfCredentialStore *store,
                                          const ZfGetAssertionRequest *request, bool uv_verified,
                                          uint16_t *match_indices) {
@@ -145,11 +156,12 @@ size_t zf_ctap_resolve_assertion_matches(Storage *storage, ZfCredentialStore *st
 
     if (zf_ctap_request_uses_allow_list(request)) {
         resolved_count = zf_store_find_by_rp_filtered(
-            storage, store, request->rp_id, zf_ctap_store_entry_matches_descriptor_list,
+            storage, store, request->assertion.rp_id, zf_ctap_store_entry_matches_descriptor_list,
             &request->allow_list, resolved, ZF_MAX_CREDENTIALS);
     } else {
         resolved_count =
-            zf_store_find_by_rp(storage, store, request->rp_id, resolved, ZF_MAX_CREDENTIALS);
+            zf_store_find_by_rp(storage, store, request->assertion.rp_id, resolved,
+                                ZF_MAX_CREDENTIALS);
     }
 
     for (size_t i = 0; i < resolved_count; ++i) {

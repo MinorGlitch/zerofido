@@ -44,6 +44,11 @@ typedef enum {
 #define U2F_EC_POINT_SIZE 65
 #define U2F_DER_SIGNATURE_MAX_LEN 72
 
+/*
+ * Packed U2F wire structs mirror the legacy APDU payload layout. Multi-byte
+ * fields are encoded exactly as the U2F spec expects, so response code copies
+ * them directly into transport buffers.
+ */
 typedef struct {
     uint8_t format;
     uint8_t xy[64];

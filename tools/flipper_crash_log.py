@@ -1,3 +1,5 @@
+"""Continuously capture Flipper CDC console output for crash diagnostics."""
+
 from __future__ import annotations
 
 import argparse
@@ -15,6 +17,7 @@ def timestamp() -> str:
 
 
 def write_line(handle, line: str) -> None:
+    """Write already-decoded console text to an open log handle."""
     handle.write(line)
     handle.flush()
 
@@ -39,6 +42,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def resolve_port(port_arg: str) -> str | None:
+    """Return an explicit CDC port or choose the first likely Flipper port."""
     if port_arg != "auto":
         return port_arg
 
@@ -54,6 +58,7 @@ def resolve_port(port_arg: str) -> str | None:
 
 
 def main() -> int:
+    """Reconnect forever until interrupted, mirroring console output to a file if requested."""
     args = parse_args()
     log_path = Path(args.output).expanduser() if args.output else None
     file_handle = log_path.open("a", encoding="utf-8") if log_path else None

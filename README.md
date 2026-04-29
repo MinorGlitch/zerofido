@@ -1,62 +1,102 @@
-# Zerofido
+# ZeroFIDO
 
-`zerofido` is a Flipper Zero external app that exposes a USB CTAP2 authenticator over
-`usb_hid_u2f`.
+![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue)
+![Platform: Flipper Zero](https://img.shields.io/badge/platform-Flipper%20Zero-orange)
+![Protocols: FIDO2 + U2F](https://img.shields.io/badge/protocols-FIDO2%20%2B%20U2F-green)
 
-Current target:
+ZeroFIDO turns a Flipper Zero into a passkey and security-key app. Install the `.fap`, open the app,
+and approve sign-ins on services that support FIDO2/WebAuthn or legacy U2F.
 
-- official stock firmware `1.4.3`
-- external `.fap`
-- USB only
-- CTAP2 + U2F compatibility
-- ES256 only
-- discoverable credentials
-- `ClientPIN`
-- packed attestation with a stable ZeroFIDO software-attestation certificate
+The app stores credentials on the Flipper, asks for local approval, supports `ClientPIN`, and speaks
+the CTAP2/FIDO2 protocol used by browsers and security keys. USB HID works as the main transport.
+NFC remains in development, with working iOS flows.
 
-## Layout
+ZeroFIDO runs on general-purpose Flipper hardware. Treat it as a useful authenticator app with
+software-stored credentials, local approval, and local software attestation. For certified
+hardware-backed security, use a certified security key.
 
-- [docs](docs): implementation and release plan
-- [src](<repo>/src): app sources
-- [host_tools](<repo>/host_tools): host-side verification helpers
+## Supported
 
-## Runtime architecture
+| Capability | Status |
+| --- | --- |
+| USB HID | Supported |
+| NFC | In development; works with iOS flows |
+| U2F V2 | Supported |
+| FIDO2.0 / CTAP2.0 | Supported |
+| FIDO2.1 / CTAP2.1 | Experimental profile |
+| `ClientPIN` | Supported |
+| Discoverable credentials | Supported |
+| Attestation | Per-install software attestation |
 
-The runtime is now split into foldered subsystem owners instead of a few large mixed-purpose
-files:
+ZeroFIDO targets stock Flipper Zero firmware `1.4.3` and builds as an external `.fap` in the Tools
+category.
 
-- [src/transport](<repo>/src/transport): transport adapters and HID framing
-- [src/ctap](<repo>/src/ctap): CTAP2 protocol adapter ownership
-- [src/u2f](<repo>/src/u2f): U2F protocol adapter ownership
-- [src/pin](<repo>/src/pin): PIN command, flow, and durable state
-- [src/ui](<repo>/src/ui): UI approval, status, and view ownership
-- [src/store](<repo>/src/store): credential-store bootstrap, record format, and
-  recovery
-- [src/app](<repo>/src/app): app lifecycle/composition support
+## Install
 
-Current transport ownership is deliberately narrow:
+Download a release `.fap` when one is published, then copy it to your Flipper SD card under the
+Tools apps folder. You can also install it through qFlipper or Flipper Lab by choosing the `.fap`
+file.
 
-- USB HID is one transport adapter.
-- CTAP2 and U2F are transport-agnostic protocol adapters.
-- Future NFC/BLE support should be additive by introducing new transport adapters plus adapter
-  tests, not by rewriting CTAP2, U2F, PIN, UI, or store logic.
-
-The runtime still threads a session identity through protocol handling for approval, cancel, and
-continuation-sensitive flows, but HID packet assembly, channel allocation, and USB lifecycle stay
-owned by `src/transport/`.
-
-## Build
-
-The workspace uses `uv` for Python tooling.
+To build and launch from source:
 
 ```bash
-uv run python -m ufbt
+uv sync
 uv run python -m ufbt launch
+```
+
+## How To Use
+
+1. Open ZeroFIDO on the Flipper.
+2. Choose USB HID for normal desktop browser use.
+3. Use NFC for iOS flows while NFC support matures.
+4. Register the Flipper as a passkey or security key on a site that supports WebAuthn/FIDO2.
+5. Approve credential creation or sign-in on the Flipper screen.
+
+For older services, use the same app through the legacy U2F flow.
+
+## Features
+
+- WebAuthn/FIDO2 registration and sign-in
+- Legacy U2F register, authenticate, and version handling
+- Local approval for credential creation and assertions
+- `ClientPIN`, retry state, and PIN token flow
+- Discoverable credentials for resident-key/passkey-style use
+- Runtime profile selection for FIDO2.0 and experimental FIDO2.1 metadata
+- USB HID transport and NFC transport work in the app runtime
+
+## Build From Source
+
+The project uses `uv` for Python tooling and `ufbt` for Flipper builds.
+
+```bash
+uv sync
+uv run python -m ufbt
+```
+
+Build and launch on a connected Flipper:
+
+```bash
+uv run python -m ufbt launch
+```
+
+The Python toolchain declares Python `3.14+` in `pyproject.toml`. C validation expects
+`clang-format`, `clang-tidy`, `cppcheck`, and a host C compiler.
+
+On macOS:
+
+```bash
+brew install llvm cppcheck
 ```
 
 ## Validation
 
-Formatting, lint, and static analysis are wired for the C sources:
+Run the Python tests:
+
+```bash
+uv run python -m unittest discover tests
+```
+
+Run C formatting and analyzers:
 
 ```bash
 uv run python tools/check_c.py format
@@ -65,126 +105,93 @@ uv run python tools/check_c.py cppcheck
 uv run python tools/check_c.py all
 ```
 
-Tooling expectations:
-
-- `clang-format` is available from Xcode Command Line Tools on macOS
-- `clang-tidy` comes from Homebrew `llvm`
-- `cppcheck` comes from Homebrew `cppcheck`
-
-Install the analyzer dependencies on macOS with:
+Run native protocol regressions:
 
 ```bash
-brew install llvm cppcheck
+uv run python tools/run_protocol_regressions.py
 ```
 
-## Symbol gate
-
-The pinned firmware reference checkout used during development is expected at:
-
-`<flipper-firmware-checkout>`
-
-To validate the exported external API surface:
+Check SDK symbols against a local Flipper firmware checkout:
 
 ```bash
 uv run python host_tools/check_symbol_gate.py <flipper-firmware-checkout>
 ```
 
-## Dev conformance suite
+## Developer Tools
 
-The dev harness is now a full local conformance suite with:
-
-- a helper/orchestrator service
-- a live operator dashboard
-- raw CTAPHID and U2F probes
-- browser-driven WebAuthn scenarios
-- row-by-row verdicts against the protocol matrix
-
-Start it with:
+Probe a FIDO HID device during development:
 
 ```bash
-uv run python host_tools/serve_webauthn_debug.py
+uv run python host_tools/ctaphid_probe.py --cmd list
+uv run python host_tools/ctaphid_probe.py --cmd getinfo
+uv run python host_tools/ctaphid_probe.py --cmd makecredential
+uv run python host_tools/ctaphid_probe.py --cmd getassertion
 ```
 
-Then open:
-
-`http://localhost:8765/webauthn_debug.html`
-
-The helper auto-detects a matching HID authenticator, but the suite stays idle until you press
-`Run Suite` in the dashboard. Set `autostart` to `true` in your local fixture config if you want
-the previous auto-run behavior.
-
-Browser-side WebAuthn scenarios now run in the dashboard page you opened yourself. The helper does
-not spawn its own Chromium instance anymore.
-
-Local fixture defaults live in:
-
-- example config: [host_tools/fixture_config.example.json](<repo>/host_tools/fixture_config.example.json)
-- optional local override: `host_tools/fixture_config.local.json`
-
-The latest persisted suite report is written to:
-
-- `.tmp/conformance_suite/latest.json`
-
-## Attestation
-
-`zerofido` now returns a `packed` attestation statement signed by a stable software attestation
-identity carrying the ZeroFIDO AAGUID.
-
-This is an honest software attestation model, not a hardware-backed one:
-
-- the attestation identity is shared across builds of the ZeroFIDO project
-- the attestation certificate identifies the ZeroFIDO software authenticator model
-- attestation is a project/model branding signal, not proof of an exclusive official binary
-- attestation subject fields are part of the shipped ZeroFIDO project identity for explicit private
-  trust pinning and should not be treated on their own as public legal-vendor proof
-- public sites may still show anonymous provider info when they request `attestation: "none"` or do
-  not trust or resolve ZeroFIDO metadata
-
-For relying-party trust and inspection, use:
-
-- root certificate: [docs/11-attestation-root.pem](<repo>/docs/11-attestation-root.pem)
-- leaf certificate: [docs/11-attestation-leaf.pem](<repo>/docs/11-attestation-leaf.pem)
-- policy note: [docs/11-attestation.md](<repo>/docs/11-attestation.md)
-
-The canonical model metadata statement is in
-[docs/12-metadata-statement.json](<repo>/docs/12-metadata-statement.json), with
-distribution notes in [docs/12-metadata.md](<repo>/docs/12-metadata.md).
-
-For certification tooling that expects an importable metadata JSON shaped like its own GetInfo
-snapshot, generate one from the canonical statement with:
+Capture NFC trace lines from the Flipper USB CDC console:
 
 ```bash
-uv run python host_tools/export_certification_metadata.py --from-device --output metadata.json
+uv run python host_tools/nfc_trace_console.py --port <serial-port>
 ```
 
-That export keeps the full static metadata statement fields that CTAP does not expose, while using
-the live device GetInfo shape for `authenticatorGetInfo`.
+## Release Packaging
 
-## Protocol audit
+Build a release `.fap` and verify that only the app entry point remains exported:
 
-The current FIDO protocol coverage and deviation matrix is in
-[docs/13-fido-audit-matrix.md](<repo>/docs/13-fido-audit-matrix.md).
+```bash
+uv run python host_tools/package_release.py
+```
 
-The frozen current-state claim inventory that later audit slices extend is in
-[docs/16-current-state-claim-inventory.md](<repo>/docs/16-current-state-claim-inventory.md).
+Package an existing `dist/zerofido.fap` without rebuilding:
 
-This matrix distinguishes:
+```bash
+uv run python host_tools/package_release.py --skip-build
+```
 
-- protocol-correct behavior
-- browser-interoperability considerations
-- intentional product choices such as local approval UX and constrained product-scope feature cuts
+The packaged artifact lands at `dist/zerofido-release.fap`.
 
-Important current design note for `ClientPIN`: ZeroFIDO keeps `PIN_AUTH_BLOCKED` in app-owned
-durable state and clears it only through an explicit local UI action. This is intentional. Stock
-external `.fap` apps do not have an app-owned retained power-session primitive, so the project does
-not depend on fragile hidden firmware state to approximate literal CTAP power-cycle semantics.
+## Metadata And Attestation
 
-It should be kept in sync with runtime behavior when CTAP, CTAPHID, U2F, ClientPIN, or metadata
-surfaces change.
+ZeroFIDO generates local attestation material on the device. Public builds do not provide
+hardware-backed vendor provenance, enterprise attestation, or a FIDO Metadata Service trust path.
+Private relying parties can pin a local certificate when that fits their test setup.
+
+Export metadata for certification tools:
+
+```bash
+uv run python host_tools/export_certification_metadata.py \
+  --statement metadata.json \
+  --profile fido2-2.0 \
+  --client-pin-state unset \
+  --output metadata-ctap20.json
+
+uv run python host_tools/export_certification_metadata.py \
+  --statement metadata.json \
+  --profile fido2-2.1-experimental \
+  --client-pin-state unset \
+  --output metadata-ctap21-experimental.json
+```
+
+For U2F, export metadata from the same device certificate returned by U2F Register:
+
+```bash
+uv run python host_tools/ctaphid_probe.py --cmd u2fregister --u2f-cert-out u2f-attestation.der
+uv run python host_tools/export_certification_metadata.py \
+  --statement metadata.json \
+  --profile u2f \
+  --u2f-attestation-cert u2f-attestation.der \
+  --output metadata-u2f.json
+```
+
+## Security Notes
+
+- Flipper Zero hardware does not give this app a secure element for credential keys.
+- Software attestation proves a local app install identity, not vendor hardware provenance.
+- Physical access to the device changes the threat model.
+- Diagnostic and conformance builds may log protocol data. Review build flags before release use.
 
 ## License
 
-ZeroFIDO is licensed under the GNU General Public License, version 3 only. See [LICENSE](LICENSE).
+ZeroFIDO uses the GNU General Public License, version 3 only. See [`LICENSE`](LICENSE).
 
-Third-party dependency and provenance notes are tracked in
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Dependency and provenance notes live in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

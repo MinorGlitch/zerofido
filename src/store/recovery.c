@@ -19,63 +19,71 @@
 
 #include <string.h>
 
+#include "../zerofido_storage.h"
 #include "internal.h"
 
-void zf_store_recovery_cleanup_temp_files(Storage *storage) {
-    File *dir = storage_file_alloc(storage);
-    FileInfo info;
-    char name[96];
+typedef struct {
+    Storage *storage;
+} ZfStoreRecoveryCleanupContext;
 
-    if (!dir) {
-        return;
+static bool zf_store_recovery_cleanup_visitor(const char *name, const FileInfo *info,
+                                              void *context) {
+    ZfStoreRecoveryCleanupContext *cleanup_context = context;
+
+    if (!name || !info || !cleanup_context) {
+        return false;
     }
-    if (storage_dir_open(dir, ZF_APP_DATA_DIR)) {
-        while (storage_dir_read(dir, &info, name, sizeof(name))) {
-            if (file_info_is_dir(&info)) {
-                continue;
-            }
+    if (file_info_is_dir(info)) {
+        return true;
+    }
 
-            if (zf_store_has_suffix(name, ".tmp")) {
-                char path[128];
-                zf_store_build_record_path(name, path, sizeof(path));
-                storage_common_remove(storage, path);
-            } else if (zf_store_has_suffix(name, ".bak")) {
-                char file_name[96];
-                char backup_path[128];
-                char record_path[128];
-                size_t base_len = strlen(name) - 4;
+    if (zf_store_has_suffix(name, ".bak")) {
+        char file_name[96];
+        char backup_path[128];
+        char record_path[128];
+        size_t base_len = strlen(name) - 4;
 
-                if (base_len == 0 || base_len >= sizeof(file_name)) {
-                    continue;
-                }
-                memcpy(file_name, name, base_len);
-                file_name[base_len] = '\0';
-                zf_store_build_record_path(name, backup_path, sizeof(backup_path));
-                zf_store_build_record_path(file_name, record_path, sizeof(record_path));
-                if (storage_file_exists(storage, record_path)) {
-                    storage_common_remove(storage, backup_path);
-                } else {
-                    storage_common_rename(storage, backup_path, record_path);
-                }
-            }
+        if (base_len == 0U || base_len >= sizeof(file_name)) {
+            return true;
         }
+        memcpy(file_name, name, base_len);
+        file_name[base_len] = '\0';
+        if (!zf_storage_build_child_path(ZF_APP_DATA_DIR, name, backup_path,
+                                         sizeof(backup_path)) ||
+            !zf_storage_build_child_path(ZF_APP_DATA_DIR, file_name, record_path,
+                                         sizeof(record_path))) {
+            return false;
+        }
+        if (storage_file_exists(cleanup_context->storage, record_path)) {
+            return zf_storage_remove_optional(cleanup_context->storage, backup_path);
+        }
+        storage_common_rename(cleanup_context->storage, backup_path, record_path);
     }
 
-    storage_dir_close(dir);
-    storage_file_free(dir);
+    return true;
+}
+
+/*
+ * Startup recovery is conservative: temp files are discarded, while backup
+ * files are restored only if the primary record is missing.
+ */
+void zf_store_recovery_cleanup_temp_files(Storage *storage) {
+    char name[96];
+    char path[128];
+    ZfStoreRecoveryCleanupContext context = {.storage = storage};
+
+    zf_storage_remove_dir_entries_with_suffix(storage, ZF_APP_DATA_DIR, ".tmp", name,
+                                              sizeof(name), path, sizeof(path));
+    zf_storage_for_each_dir_entry(storage, ZF_APP_DATA_DIR, name, sizeof(name),
+                                  zf_store_recovery_cleanup_visitor, &context);
 }
 
 bool zf_store_recovery_remove_record_paths(Storage *storage, const char *file_name) {
     char record_path[128];
     char counter_path[128];
-    FS_Error record_result;
-    FS_Error counter_result;
 
     zf_store_build_record_path(file_name, record_path, sizeof(record_path));
     zf_store_build_counter_floor_path(file_name, counter_path, sizeof(counter_path));
-    record_result = storage_common_remove(storage, record_path);
-    counter_result = storage_common_remove(storage, counter_path);
-
-    return (record_result == FSE_OK || record_result == FSE_NOT_EXIST) &&
-           (counter_result == FSE_OK || counter_result == FSE_NOT_EXIST);
+    return zf_storage_remove_optional(storage, record_path) &&
+           zf_storage_remove_optional(storage, counter_path);
 }

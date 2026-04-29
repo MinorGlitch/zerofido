@@ -26,6 +26,12 @@
 #include "zerofido_crypto.h"
 #include "zerofido_types.h"
 
+/*
+ * Complete clientPIN runtime state. Only pin_hash, retry count, consecutive
+ * mismatch count, and auth-block flag are durable. pin_token, token metadata,
+ * and key_agreement are runtime secrets regenerated on init/reset and must not
+ * be serialized.
+ */
 typedef struct {
     bool pin_set;
     uint8_t pin_hash[ZF_PIN_HASH_LEN];
@@ -34,6 +40,7 @@ typedef struct {
     uint32_t pin_token_issued_at;
     uint64_t pin_token_permissions;
     bool pin_token_permissions_scoped;
+    bool pin_token_permissions_managed;
     bool pin_token_permissions_rp_id_set;
     char pin_token_permissions_rp_id[ZF_MAX_RP_ID_LEN];
     uint8_t pin_retries;
@@ -62,6 +69,10 @@ bool zerofido_pin_resume_auth_attempts(Storage *storage, ZfClientPinState *state
 bool zerofido_pin_clear(Storage *storage, ZfClientPinState *state);
 uint8_t zerofido_pin_handle_command(ZerofidoApp *app, const uint8_t *request, size_t request_len,
                                     uint8_t *out, size_t out_capacity, size_t *out_len);
+uint8_t zerofido_pin_handle_command_with_session(ZerofidoApp *app, ZfTransportSessionId session_id,
+                                                 const uint8_t *request, size_t request_len,
+                                                 uint8_t *out, size_t out_capacity,
+                                                 size_t *out_len);
 const char *zerofido_pin_subcommand_tag(uint64_t subcommand);
 uint8_t zerofido_pin_require_auth(Storage *storage, ZfClientPinState *state, bool uv_requested,
                                   bool has_pin_auth,

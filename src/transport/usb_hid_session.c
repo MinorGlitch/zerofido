@@ -15,12 +15,15 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
+#ifndef ZF_NFC_ONLY
+
 #include "usb_hid_session.h"
 
 #include <furi_hal_usb_hid_u2f.h>
 #include <string.h>
 
 #include "dispatch.h"
+#include "../u2f/apdu.h"
 #include "../zerofido_app_i.h"
 #include "../zerofido_crypto.h"
 
@@ -119,6 +122,11 @@ static bool zf_transport_remember_cid(ZfTransportState *transport, uint32_t cid)
     return false;
 }
 
+/*
+ * Allocates a random CTAPHID channel ID. Reserved CIDs are never assigned, and
+ * when the table is full the least-recently-used non-active, non-locked CID is
+ * reclaimed.
+ */
 static bool zf_transport_allocate_cid(ZfTransportState *transport, uint32_t *out_cid) {
     for (size_t attempt = 0; attempt < 32; ++attempt) {
         uint32_t cid = furi_hal_random_get();
@@ -143,6 +151,32 @@ static void zf_transport_add_action(uint32_t *actions, uint32_t action) {
     }
 }
 
+static bool zf_transport_try_send_u2f_validation_error(const ZerofidoApp *app,
+                                                       ZfTransportState *transport) {
+    ZfResolvedCapabilities capabilities;
+    uint8_t status[2] = {0};
+    uint16_t status_len = 0;
+
+    if (!app || !transport || transport->cmd != ZF_CTAPHID_MSG) {
+        return false;
+    }
+
+    zf_runtime_get_effective_capabilities(app, &capabilities);
+    if (!capabilities.u2f_enabled) {
+        return false;
+    }
+
+    status_len = u2f_validate_request_into_response(transport->payload, transport->total_len,
+                                                    status, sizeof(status));
+    if (status_len == 0) {
+        return false;
+    }
+
+    zf_transport_session_send_frames(transport->cid, ZF_CTAPHID_MSG, status, status_len);
+    zf_transport_session_reset(transport);
+    return true;
+}
+
 void zf_transport_session_attach_arena(ZfTransportState *transport, uint8_t *payload,
                                        size_t payload_capacity) {
     if (!transport) {
@@ -158,6 +192,9 @@ static bool zf_transport_ensure_payload(ZerofidoApp *app, ZfTransportState *tran
         return false;
     }
     if (!transport->payload && app) {
+        if (!zf_app_transport_arena_acquire(app)) {
+            return false;
+        }
         zf_transport_session_attach_arena(transport, app->transport_arena, ZF_MAX_MSG_SIZE);
     }
     return transport->payload && transport->payload_capacity >= ZF_MAX_MSG_SIZE;
@@ -188,6 +225,36 @@ static uint8_t zf_transport_resync_processing(const ZerofidoApp *app, ZfTranspor
     return ZF_CTAP_ERR_KEEPALIVE_CANCEL;
 }
 
+static uint8_t zf_transport_recover_processing_with_broadcast_init(
+    const ZerofidoApp *app, ZfTransportState *transport, const uint8_t *packet, size_t packet_len,
+    uint16_t msg_len, uint32_t *actions) {
+    ZfResolvedCapabilities capabilities;
+    uint32_t assigned_cid = 0;
+
+    if (msg_len != 8 || (packet_len - 7) < msg_len) {
+        zf_transport_session_send_error(ZF_BROADCAST_CID, ZF_HID_ERR_INVALID_LEN);
+        return ZF_CTAP_SUCCESS;
+    }
+    if (!zf_transport_allocate_cid(transport, &assigned_cid)) {
+        zf_transport_session_send_error(ZF_BROADCAST_CID, ZF_HID_ERR_OTHER);
+        return ZF_CTAP_SUCCESS;
+    }
+
+    transport->processing_resync = true;
+    transport->processing = false;
+    transport->processing_cancel_requested = true;
+    transport->processing_generation++;
+    zf_transport_add_action(actions, ZF_TRANSPORT_ACTION_CANCEL_PENDING_INTERACTION);
+    zf_runtime_get_effective_capabilities(app, &capabilities);
+    zf_transport_handle_init(ZF_BROADCAST_CID, assigned_cid, &packet[7], msg_len, &capabilities);
+    return ZF_CTAP_ERR_KEEPALIVE_CANCEL;
+}
+
+/*
+ * Serializes one CTAPHID response: an initial frame carries CID, command, total
+ * length, and up to 57 bytes; continuation frames carry CID, sequence number,
+ * and up to 59 bytes. Every HID report is padded to 64 bytes by zero fill.
+ */
 void zf_transport_session_send_frames(uint32_t cid, uint8_t cmd, const uint8_t *data, size_t size) {
     uint8_t packet[ZF_CTAPHID_PACKET_SIZE];
     uint8_t seq = 0;
@@ -310,6 +377,11 @@ void zf_transport_session_reset(ZfTransportState *transport) {
     transport->last_activity = 0;
 }
 
+/*
+ * While a CTAP2 request is processing, only control packets that can unblock or
+ * resync the channel are honored: CANCEL, same-CID INIT, and broadcast INIT.
+ * Other CIDs receive busy responses so the worker keeps one in-flight request.
+ */
 uint8_t zf_transport_session_handle_processing_control(const ZerofidoApp *app,
                                                        ZfTransportState *transport,
                                                        const uint8_t *packet, size_t packet_len,
@@ -351,6 +423,10 @@ uint8_t zf_transport_session_handle_processing_control(const ZerofidoApp *app,
         return zf_transport_resync_processing(app, transport, cid, packet, packet_len, msg_len,
                                               actions);
     }
+    if (cmd == ZF_CTAPHID_INIT && cid == ZF_BROADCAST_CID) {
+        return zf_transport_recover_processing_with_broadcast_init(app, transport, packet,
+                                                                   packet_len, msg_len, actions);
+    }
 
     if (cid != transport->cid) {
         zf_transport_session_send_error(cid, ZF_HID_ERR_CHANNEL_BUSY);
@@ -366,6 +442,10 @@ static void zf_transport_complete_if_ready(ZerofidoApp *app, ZfTransportState *t
     }
 
     transport->active = false;
+    if (zf_transport_try_send_u2f_validation_error(app, transport)) {
+        return;
+    }
+
     switch (transport->cmd) {
     case ZF_CTAPHID_PING:
         protocol = ZfTransportProtocolKindPing;
@@ -455,6 +535,11 @@ static void zf_transport_copy_init_payload(ZfTransportState *transport, const ui
     transport->received_len = chunk;
 }
 
+/*
+ * Handles initial CTAPHID command frames before payload assembly. This is where
+ * broadcast INIT channel allocation, LOCK ownership, command-specific length
+ * checks, and invalid-channel/busy responses are enforced.
+ */
 static bool zf_transport_handle_init_command(const ZerofidoApp *app, ZfTransportState *transport,
                                              uint32_t cid, uint8_t cmd, uint16_t msg_len,
                                              const uint8_t *packet, size_t packet_len,
@@ -617,6 +702,13 @@ static void zf_transport_handle_processing_packet(ZerofidoApp *app, ZfTransportS
         zf_transport_resync_processing(app, transport, cid, packet, packet_len, msg_len, actions);
         return;
     }
+    if (packet[4] == ZF_CTAPHID_INIT && cid == ZF_BROADCAST_CID) {
+        uint16_t msg_len = ((uint16_t)packet[5] << 8) | packet[6];
+
+        zf_transport_recover_processing_with_broadcast_init(app, transport, packet, packet_len,
+                                                            msg_len, actions);
+        return;
+    }
 
     zf_transport_send_busy_or_invalid_seq(transport, cid);
 }
@@ -728,3 +820,5 @@ void zf_transport_session_tick(ZfTransportState *transport, uint32_t now) {
         zf_transport_session_expire_lock(transport);
     }
 }
+
+#endif

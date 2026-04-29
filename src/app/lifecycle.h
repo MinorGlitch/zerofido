@@ -19,6 +19,13 @@
 
 #include "../zerofido_app_i.h"
 
+/*
+ * App lifecycle order:
+ *   alloc -> open -> startup_async/startup_pending -> shutdown -> free
+ *
+ * startup_pending is polled from the UI loop. It joins a completed startup
+ * thread and may start the selected transport worker once backend init succeeds.
+ */
 ZerofidoApp *zf_app_lifecycle_alloc(void);
 bool zf_app_lifecycle_open(ZerofidoApp *app);
 bool zf_app_lifecycle_startup(ZerofidoApp *app);

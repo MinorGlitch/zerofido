@@ -15,6 +15,8 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
+#ifndef ZF_NFC_ONLY
+
 #include "usb_hid_worker.h"
 
 #ifndef ZF_HOST_TEST
@@ -28,6 +30,7 @@
 #include "../zerofido_app_i.h"
 #include "../zerofido_crypto.h"
 #include "../zerofido_notify.h"
+#include "../zerofido_telemetry.h"
 #include "../zerofido_ui.h"
 #include "../zerofido_ui_i.h"
 
@@ -42,8 +45,9 @@
 #define ZF_WORKER_EVT_DISCONNECT (1 << 2)
 #define ZF_WORKER_EVT_REQUEST (1 << 3)
 #define ZF_WORKER_EVT_APPROVAL (1 << 4)
-#define ZF_WORKER_POLL_MS 50U
+#define ZF_WORKER_POLL_MS 5U
 
+/* Reads connection state under the UI mutex because callbacks and UI share it. */
 static bool zf_transport_worker_is_connected(const ZerofidoApp *app) {
     bool connected = false;
 
@@ -75,6 +79,7 @@ static void zf_transport_signal_worker(ZerofidoApp *app, uint32_t flags) {
     }
 }
 
+/* Converts Flipper HID callbacks into worker-thread flags. */
 static void zf_transport_event_callback(HidU2fEvent ev, void *context) {
     ZerofidoApp *app = context;
 
@@ -96,9 +101,13 @@ static void zf_transport_event_callback(HidU2fEvent ev, void *context) {
     }
 }
 
+/* Claims the U2F HID USB interface while remembering what to restore on exit. */
 static bool zf_transport_enable_usb(ZerofidoApp *app) {
     FuriHalUsbInterface *current_usb = NULL;
 
+#ifndef ZF_HOST_TEST
+    furi_hal_usb_unlock();
+#endif
     furi_hal_hid_u2f_set_callback(NULL, NULL);
     current_usb = furi_hal_usb_get_config();
     app->previous_usb = current_usb == &usb_hid_u2f ? ZF_USB_RESTORE_DEFAULT : current_usb;
@@ -202,9 +211,12 @@ static void zf_transport_tick(ZfTransportState *transport) {
 }
 
 static uint32_t zf_transport_worker_next_timeout(const ZfTransportState *transport) {
-    return transport && transport->active ? ZF_WORKER_POLL_MS : FuriWaitForever;
+    UNUSED(transport);
+    /* HID request callbacks can coalesce under fast host traffic, so poll as a fallback. */
+    return ZF_WORKER_POLL_MS;
 }
 
+/* Processes INIT/CANCEL/ABORT packets while a CTAP command waits for UI. */
 static bool zf_transport_drain_processing_control_requests(ZerofidoApp *app,
                                                            ZfTransportState *transport) {
     uint8_t packet[ZF_CTAPHID_PACKET_SIZE];
@@ -230,6 +242,7 @@ static bool zf_transport_drain_processing_control_requests(ZerofidoApp *app,
     }
 }
 
+/* Processes one queued HID transaction, reading continuations only until it completes. */
 static void zf_transport_handle_request(ZerofidoApp *app, ZfTransportState *transport,
                                         uint32_t flags, uint8_t *packet) {
     uint32_t actions = 0;
@@ -256,9 +269,13 @@ static void zf_transport_handle_request(ZerofidoApp *app, ZfTransportState *tran
         zf_transport_session_handle_packet(app, transport, packet, packet_len, &actions);
         zf_transport_worker_apply_actions(app, actions);
         packet_len = 0;
+        if (!transport->active) {
+            return;
+        }
     }
 }
 
+/* Publishes protocol output using the response CTAPHID command for the request kind. */
 void zf_transport_usb_hid_send_dispatch_result(ZerofidoApp *app,
                                                const ZfProtocolDispatchRequest *request,
                                                const ZfProtocolDispatchResult *result) {
@@ -270,9 +287,7 @@ void zf_transport_usb_hid_send_dispatch_result(ZerofidoApp *app,
 
     if (result->send_transport_error) {
         zf_transport_session_send_error(request->session_id, result->transport_error);
-        if (app) {
-            zf_crypto_secure_zero(app->transport_arena, sizeof(app->transport_arena));
-        }
+        zf_app_transport_arena_wipe(app);
         return;
     }
 
@@ -291,27 +306,22 @@ void zf_transport_usb_hid_send_dispatch_result(ZerofidoApp *app,
         break;
     default:
         zf_transport_session_send_error(request->session_id, ZF_HID_ERR_INVALID_CMD);
-        if (app) {
-            zf_crypto_secure_zero(app->transport_arena, sizeof(app->transport_arena));
-        }
+        zf_app_transport_arena_wipe(app);
         return;
     }
 
     if (result->response_len == 0 && request->protocol != ZfTransportProtocolKindWink) {
         zf_transport_session_send_error(request->session_id, ZF_HID_ERR_OTHER);
-        if (app) {
-            zf_crypto_secure_zero(app->transport_arena, sizeof(app->transport_arena));
-        }
+        zf_app_transport_arena_wipe(app);
         return;
     }
 
     zf_transport_session_send_frames(request->session_id, response_command, result->response,
                                      result->response_len);
-    if (app) {
-        zf_crypto_secure_zero(app->transport_arena, sizeof(app->transport_arena));
-    }
+    zf_app_transport_arena_wipe(app);
 }
 
+/* Called by long CTAP handlers to notice cancel traffic without holding the UI mutex. */
 uint8_t zf_transport_usb_hid_poll_cbor_control(ZerofidoApp *app,
                                                ZfTransportSessionId current_session_id) {
     ZfTransportState *transport = app ? app->transport_state : NULL;
@@ -337,11 +347,13 @@ uint8_t zf_transport_usb_hid_poll_cbor_control(ZerofidoApp *app,
     return ZF_CTAP_SUCCESS;
 }
 
+/* Waits for user approval while continuing keepalives and cancellation handling. */
 bool zf_transport_usb_hid_wait_for_interaction(ZerofidoApp *app,
                                                ZfTransportSessionId current_session_id,
                                                bool *approved) {
     ZfTransportState *transport = app ? app->transport_state : NULL;
     uint8_t packet[ZF_CTAPHID_PACKET_SIZE];
+    const bool send_keepalive = transport && transport->cmd == ZF_CTAPHID_CBOR;
     bool sent_keepalive = false;
 
     if (!transport) {
@@ -353,7 +365,7 @@ bool zf_transport_usb_hid_wait_for_interaction(ZerofidoApp *app,
             break;
         }
 
-        if (!sent_keepalive) {
+        if (send_keepalive && !sent_keepalive) {
             zf_transport_session_send_frames(current_session_id, ZF_CTAPHID_KEEPALIVE,
                                              (const uint8_t[]){ZF_KEEPALIVE_UPNEEDED}, 1);
             sent_keepalive = true;
@@ -369,8 +381,10 @@ bool zf_transport_usb_hid_wait_for_interaction(ZerofidoApp *app,
                 transport->processing_cancel_requested = true;
                 return false;
             }
-            zf_transport_session_send_frames(current_session_id, ZF_CTAPHID_KEEPALIVE,
-                                             (const uint8_t[]){ZF_KEEPALIVE_UPNEEDED}, 1);
+            if (send_keepalive) {
+                zf_transport_session_send_frames(current_session_id, ZF_CTAPHID_KEEPALIVE,
+                                                 (const uint8_t[]){ZF_KEEPALIVE_UPNEEDED}, 1);
+            }
             zf_transport_tick(transport);
             continue;
         }
@@ -395,14 +409,23 @@ bool zf_transport_usb_hid_wait_for_interaction(ZerofidoApp *app,
     return true;
 }
 
+/* Main USB lifecycle: claim interface, process event flags, then scrub buffers on shutdown. */
 int32_t zf_transport_usb_hid_worker(void *context) {
     ZerofidoApp *app = context;
     ZfTransportState *transport = &app->transport_state_storage;
     uint8_t packet[ZF_CTAPHID_PACKET_SIZE];
 
+    zf_telemetry_log("usb worker start");
     memset(transport, 0, sizeof(*transport));
+    if (!zf_app_transport_arena_acquire(app)) {
+        zf_telemetry_log_oom("usb transport arena", ZF_TRANSPORT_ARENA_SIZE);
+        zerofido_ui_set_transport_connected(app, false);
+        return 0;
+    }
     zf_transport_session_attach_arena(transport, app->transport_arena, ZF_MAX_MSG_SIZE);
     if (!zf_transport_enable_usb(app)) {
+        zerofido_ui_set_transport_connected(app, false);
+        zf_app_transport_arena_release(app);
         return 0;
     }
 
@@ -433,14 +456,16 @@ int32_t zf_transport_usb_hid_worker(void *context) {
         zf_transport_tick(transport);
     }
 
+    zf_transport_worker_on_disconnect(app, transport);
     furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
     app->transport_state = NULL;
     furi_mutex_release(app->ui_mutex);
     zf_transport_session_reset(transport);
     zf_crypto_secure_zero(packet, sizeof(packet));
-    zf_crypto_secure_zero(app->transport_arena, sizeof(app->transport_arena));
+    zf_app_transport_arena_release(app);
     zf_transport_restore_usb(app);
     zerofido_notify_reset(app);
+    zf_telemetry_log("usb worker stop");
     return 0;
 }
 
@@ -473,3 +498,5 @@ void zf_transport_usb_hid_notify_interaction_changed(ZerofidoApp *app) {
 
     zf_transport_signal_worker(app, ZF_WORKER_EVT_APPROVAL);
 }
+
+#endif

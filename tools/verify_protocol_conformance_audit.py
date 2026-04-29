@@ -1,3 +1,10 @@
+"""Validate the protocol-conformance audit ledger.
+
+The checker ties ledger rows to the claim inventory, proof taxonomy,
+revalidation map, and conformance manifest so protocol evidence cannot drift
+from the scenario IDs and slice ownership it claims.
+"""
+
 from __future__ import annotations
 
 import argparse

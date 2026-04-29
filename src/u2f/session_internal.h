@@ -21,23 +21,23 @@
 #include <stdint.h>
 #include <string.h>
 
-#include <mbedtls/ecp.h>
-
 #include "common.h"
 #include "session.h"
 
+/* Private U2F runtime state shared by session, response, and persistence code. */
 typedef struct U2fData {
     uint8_t device_key[U2F_EC_KEY_SIZE];
     uint8_t cert_key[U2F_EC_KEY_SIZE];
     uint32_t counter;
     uint32_t counter_high_water;
+    bool cert_ready;
     bool ready;
     bool user_present;
     U2fEvtCallback callback;
     void *context;
-    mbedtls_ecp_group group;
 } U2fData;
 
+/* ISO7816 status words returned by U2F APDU handlers. */
 static const uint8_t zf_u2f_state_no_error[] = {0x90, 0x00};
 static const uint8_t zf_u2f_state_not_supported[] = {0x6D, 0x00};
 static const uint8_t zf_u2f_state_wrong_length[] = {0x67, 0x00};

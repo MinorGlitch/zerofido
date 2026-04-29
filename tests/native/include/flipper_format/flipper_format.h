@@ -13,6 +13,7 @@ void flipper_format_free(FlipperFormat *flipper_format);
 
 bool flipper_format_file_open_always(FlipperFormat *flipper_format, const char *path);
 bool flipper_format_file_open_existing(FlipperFormat *flipper_format, const char *path);
+bool flipper_format_file_close(FlipperFormat *flipper_format);
 
 bool flipper_format_write_header_cstr(FlipperFormat *flipper_format, const char *type,
                                       uint32_t version);

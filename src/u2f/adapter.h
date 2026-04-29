@@ -25,8 +25,14 @@
 
 typedef struct ZerofidoApp ZerofidoApp;
 
+/*
+ * Adapter between shared transport dispatch and the legacy U2F session. It
+ * owns lazy initialization, user-presence approval, and in-place APDU response
+ * encoding for USB HID MSG and NFC U2F requests.
+ */
 bool zf_u2f_adapter_init(ZerofidoApp *app);
 bool zf_u2f_adapter_ensure_init(ZerofidoApp *app);
+bool zf_u2f_adapter_ensure_attestation_assets(void);
 void zf_u2f_adapter_deinit(ZerofidoApp *app);
 bool zf_u2f_adapter_is_available(const ZerofidoApp *app);
 void zf_u2f_adapter_set_connected(ZerofidoApp *app, bool connected);

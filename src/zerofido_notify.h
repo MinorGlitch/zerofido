@@ -21,6 +21,7 @@
 
 typedef struct ZerofidoApp ZerofidoApp;
 
+/* Notification helpers map authenticator events to LED/vibration patterns. */
 bool zerofido_notify_init(ZerofidoApp *app);
 void zerofido_notify_deinit(ZerofidoApp *app);
 void zerofido_notify_prompt(ZerofidoApp *app);

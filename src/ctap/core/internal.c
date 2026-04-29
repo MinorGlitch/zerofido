@@ -43,6 +43,12 @@ void zf_ctap_end_maintenance(ZerofidoApp *app) {
     furi_mutex_release(app->ui_mutex);
 }
 
+/*
+ * Verifies PIN/UV authorization against a private copy of app->pin_state.
+ * zerofido_pin_require_auth may update retries, auth-block state, token expiry,
+ * or managed permissions; those mutations are published back under ui_mutex
+ * before the maintenance gate is released.
+ */
 uint8_t zf_ctap_require_pin_auth_with_state(
     ZerofidoApp *app, ZfClientPinState *pin_state, bool uv_requested, bool has_pin_auth,
     const uint8_t client_data_hash[ZF_CLIENT_DATA_HASH_LEN], const uint8_t *pin_auth,
@@ -73,5 +79,11 @@ uint8_t zf_ctap_require_pin_auth_with_state(
 }
 
 uint8_t zf_ctap_dispatch_require_idle(ZerofidoApp *app) {
-    return zf_ctap_local_maintenance_busy(app) ? ZF_CTAP_ERR_NOT_ALLOWED : ZF_CTAP_SUCCESS;
+    /*
+     * This is only a pre-dispatch fast gate. Stateful handlers acquire the
+     * real maintenance gate before mutating shared state, so do not block on
+     * ui_mutex here: NFC readers may poll CTAP MSG repeatedly while the
+     * request thread is trying to enter this function.
+     */
+    return app && app->maintenance_busy ? ZF_CTAP_ERR_NOT_ALLOWED : ZF_CTAP_SUCCESS;
 }

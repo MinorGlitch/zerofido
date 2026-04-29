@@ -1,21 +1,59 @@
+import os
+
+
+profile = os.environ.get("ZEROFIDO_PROFILE", "nfc").lower()
+if profile not in ("usb", "nfc", "full"):
+    raise ValueError("ZEROFIDO_PROFILE must be one of: usb, nfc, full")
+
+cdefines = ["ZF_RELEASE_DIAGNOSTICS=1"]
+sources = [
+    "*.c",
+    "!dist",
+    "!docs",
+    "!fixtures",
+    "!host_tools",
+    "!include",
+    "!tests",
+    "!tools",
+]
+requires = [
+    "gui",
+    "storage",
+    "notification",
+]
+description = "CTAP2 authenticator over USB HID"
+if profile == "usb":
+    cdefines.append("ZF_USB_ONLY")
+    sources.extend(
+        [
+            "!nfc_*.c",
+        ]
+    )
+elif profile == "nfc":
+    cdefines.append("ZF_NFC_ONLY")
+    sources.extend(
+        [
+            "!usb_hid_*.c",
+        ]
+    )
+    requires.append("nfc")
+    description = "CTAP2 authenticator over NFC"
+else:
+    requires.append("nfc")
+    description = "CTAP2 authenticator over USB HID or NFC"
+
 App(
     appid="zerofido",
     name="ZeroFIDO",
     apptype=FlipperAppType.EXTERNAL,
     entry_point="zerofido_main",
     stack_size=4 * 1024,
-    sources=["src/*.c", "src/**/*.c"],
-    cdefines=["ZF_RELEASE_DIAGNOSTICS=1"],
-    requires=[
-        "gui",
-        "storage",
-        "notification",
-        "nfc",
-    ],
-    fap_libs=["mbedtls"],
+    sources=sources,
+    cdefines=cdefines,
+    requires=requires,
     fap_icon="icon.png",
     fap_category="Tools",
-    fap_description="CTAP2 authenticator over USB HID or NFC",
+    fap_description=description,
     fap_author="Alex Stoyanov",
     fap_version=(1, 0),
 )

@@ -37,6 +37,15 @@
 #include "../zerofido_pin.h"
 #include "../zerofido_store.h"
 
+#if defined(ZF_RELEASE_DIAGNOSTICS) && ZF_RELEASE_DIAGNOSTICS
+#define ZF_CTAP_ROUTE_DIAG(text) FURI_LOG_I("ZeroFIDO:CTAP", "route %s", (text))
+#else
+#define ZF_CTAP_ROUTE_DIAG(text) \
+    do {                         \
+        (void)(text);            \
+    } while(false)
+#endif
+
 static uint8_t zf_handle_selection(ZerofidoApp *app, ZfTransportSessionId session_id,
                                    size_t request_len, size_t *out_len) {
     uint8_t status = zf_ctap_require_empty_payload(request_len);
@@ -54,6 +63,13 @@ static uint8_t zf_handle_selection(ZerofidoApp *app, ZfTransportSessionId sessio
     return ZF_CTAP_SUCCESS;
 }
 
+/*
+ * CTAP command router. GetInfo is read-only; ClientPIN, reset,
+ * makeCredential, getAssertion, getNextAssertion, and selection all require
+ * the local maintenance gate to be idle before entering their handlers.
+ * Empty-payload commands are checked here so handlers can assume their wire
+ * shape once called.
+ */
 uint8_t zf_ctap_dispatch_command(ZerofidoApp *app, const ZfResolvedCapabilities *capabilities,
                                  ZfTransportSessionId session_id, uint8_t cmd,
                                  const uint8_t *request_body, size_t request_body_len,
@@ -84,8 +100,9 @@ uint8_t zf_ctap_dispatch_command(ZerofidoApp *app, const ZfResolvedCapabilities 
         furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
         zf_ctap_assertion_queue_clear(app);
         furi_mutex_release(app->ui_mutex);
-        status = zerofido_pin_handle_command(app, request_body, request_body_len, response_body,
-                                             response_body_capacity, response_body_len);
+        status = zerofido_pin_handle_command_with_session(app, session_id, request_body,
+                                                          request_body_len, response_body,
+                                                          response_body_capacity, response_body_len);
         zf_ctap_end_maintenance(app);
         break;
     case ZfCtapeCmdReset:
@@ -105,10 +122,12 @@ uint8_t zf_ctap_dispatch_command(ZerofidoApp *app, const ZfResolvedCapabilities 
                                                 response_body_len);
         break;
     case ZfCtapeCmdGetAssertion:
+        ZF_CTAP_ROUTE_DIAG("GA gate");
         status = zf_ctap_dispatch_require_idle(app);
         if (status != ZF_CTAP_SUCCESS) {
             break;
         }
+        ZF_CTAP_ROUTE_DIAG("GA call");
         status = zf_ctap_handle_get_assertion(app, session_id, request_body, request_body_len,
                                               response_body, response_body_capacity,
                                               response_body_len);

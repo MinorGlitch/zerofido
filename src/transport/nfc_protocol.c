@@ -15,6 +15,8 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
+#ifndef ZF_USB_ONLY
+
 #include "nfc_protocol.h"
 
 #include <string.h>
@@ -52,6 +54,11 @@ bool zf_transport_nfc_is_fido_select_apdu(const ZfNfcApdu *apdu) {
     return apdu->data_len == ZF_NFC_AID_LEN || apdu->data[ZF_NFC_AID_LEN] == 0x00U;
 }
 
+/*
+ * Parses the ISO 7816 APDU forms ZeroFIDO accepts: short and extended Lc/Le,
+ * with the CLA chaining bit stripped into apdu->chained. Any trailing bytes
+ * outside the declared body/Le are rejected.
+ */
 bool zf_transport_nfc_parse_apdu(const uint8_t *buffer, size_t buffer_len, ZfNfcApdu *apdu) {
     size_t index = 4;
 
@@ -163,3 +170,5 @@ size_t zf_transport_nfc_encode_u2f_request(const ZfNfcApdu *apdu, uint8_t *out,
     offset += apdu->data_len;
     return offset;
 }
+
+#endif

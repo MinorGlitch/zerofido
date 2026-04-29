@@ -34,8 +34,8 @@
 #define ZF_DEV_ATTESTATION 0
 #endif
 
-#ifndef ZF_FIDO2_NONE_ATTESTATION
-#define ZF_FIDO2_NONE_ATTESTATION 0
+#ifndef ZF_HAS_SETTINGS_UI
+#define ZF_HAS_SETTINGS_UI 1
 #endif
 
 #define ZF_CTAPHID_PACKET_SIZE 64
@@ -44,7 +44,7 @@
 #ifdef ZF_HOST_TEST
 #define ZF_COMMAND_SCRATCH_SIZE 6144U
 #else
-#define ZF_COMMAND_SCRATCH_SIZE 5504U
+#define ZF_COMMAND_SCRATCH_SIZE 2880U
 #endif
 #define ZF_UI_SCRATCH_SIZE 2048U
 #define ZF_APPROVAL_TIMEOUT_MS 30000
@@ -67,7 +67,7 @@
 #define ZF_HMAC_SECRET_AUTH_MAX_LEN 32
 #define ZF_HMAC_SECRET_OUTPUT_MAX_LEN (64 + ZF_PIN_PROTOCOL2_IV_LEN)
 #define ZF_MAX_CREDENTIALS 32
-#define ZF_STORE_FORMAT_VERSION 3U
+#define ZF_STORE_FORMAT_VERSION 1U
 #define ZF_MAX_RP_ID_LEN 256
 #define ZF_MAX_USER_ID_LEN 64
 #define ZF_MAX_USER_NAME_LEN 65
@@ -106,6 +106,11 @@
 #define ZF_CRED_PROTECT_UV_REQUIRED 0x03U
 
 typedef uint32_t ZfTransportSessionId;
+
+typedef enum {
+    ZfAttestationModePacked = 0,
+    ZfAttestationModeNone = 1,
+} ZfAttestationMode;
 
 typedef union {
     void *align_ptr;
@@ -208,8 +213,6 @@ typedef struct {
 #else
     uint8_t credential_id_len;
     uint8_t rp_id_hash[32];
-    char display_name[ZF_INDEX_DISPLAY_NAME_LEN];
-    char rp_id_display[ZF_INDEX_RP_ID_LEN];
 #endif
     uint32_t sign_count;
     uint32_t counter_high_water;
@@ -254,7 +257,6 @@ typedef struct {
 /* Descriptor lists reference caller-owned scratch storage for parsed ID hashes. */
 typedef struct {
     uint8_t credential_id_digest[ZF_DESCRIPTOR_ID_DIGEST_LEN];
-    uint16_t credential_id_len;
 } ZfCredentialDescriptor;
 
 typedef struct {
@@ -290,6 +292,8 @@ typedef struct {
     bool has_pin_auth;
     bool has_pin_protocol;
     bool hmac_secret_requested;
+    bool has_attestation_format_preference;
+    ZfAttestationMode preferred_attestation_mode;
 } ZfMakeCredentialRequest;
 
 /* Parsed getAssertion request plus allow-list/options/PIN metadata. */

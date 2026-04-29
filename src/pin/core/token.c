@@ -32,6 +32,7 @@ void zf_pin_reset_token_metadata(ZfClientPinState *state) {
     state->pin_token_issued_at = 0;
     state->pin_token_permissions = 0;
     state->pin_token_permissions_scoped = false;
+    state->pin_token_permissions_managed = false;
     state->pin_token_permissions_rp_id_set = false;
     zf_crypto_secure_zero(state->pin_token_permissions_rp_id,
                           sizeof(state->pin_token_permissions_rp_id));
@@ -48,9 +49,11 @@ void zf_pin_note_pin_token_issued(ZfClientPinState *state) {
 }
 
 void zf_pin_set_token_permissions(ZfClientPinState *state, uint64_t permissions,
-                                  bool permission_scoped, const char *rp_id) {
+                                  bool permission_scoped, bool permission_managed,
+                                  const char *rp_id) {
     state->pin_token_permissions = permissions;
     state->pin_token_permissions_scoped = permission_scoped;
+    state->pin_token_permissions_managed = permission_managed;
     state->pin_token_permissions_rp_id_set = rp_id && rp_id[0] != '\0';
     if (state->pin_token_permissions_rp_id_set) {
         strncpy(state->pin_token_permissions_rp_id, rp_id,
@@ -66,6 +69,34 @@ bool zf_pin_token_is_expired(const ZfClientPinState *state) {
            (int32_t)ZF_PIN_TOKEN_TIMEOUT_MS;
 }
 
+static size_t zf_pin_uv_auth_param_len(uint64_t pin_protocol) {
+    return pin_protocol == ZF_PIN_PROTOCOL_V2 ? ZF_PIN_AUTH_MAX_LEN : ZF_PIN_AUTH_LEN;
+}
+
+static void zf_pin_consume_up_tested_permissions(ZfClientPinState *state,
+                                                 uint64_t required_permissions) {
+    const uint64_t up_tested_permissions = ZF_PIN_PERMISSION_MC | ZF_PIN_PERMISSION_GA;
+
+    if ((required_permissions & up_tested_permissions) == 0U) {
+        return;
+    }
+
+    state->pin_token_permissions &= ~up_tested_permissions;
+    if ((state->pin_token_permissions & up_tested_permissions) == 0U) {
+        state->pin_token_permissions_scoped = false;
+        state->pin_token_permissions_managed = false;
+        state->pin_token_permissions_rp_id_set = false;
+        zf_crypto_secure_zero(state->pin_token_permissions_rp_id,
+                              sizeof(state->pin_token_permissions_rp_id));
+    }
+}
+
+/*
+ * Enforces makeCredential/getAssertion PIN/UV authorization. Verifies token
+ * HMAC over clientDataHash using protocol-specific truncation, checks expiry,
+ * permission mask, optional RP scoping, and consumes managed UP-tested
+ * permissions after successful use.
+ */
 uint8_t zerofido_pin_require_auth(Storage *storage, ZfClientPinState *state, bool uv_requested,
                                   bool has_pin_auth,
                                   const uint8_t client_data_hash[ZF_CLIENT_DATA_HASH_LEN],
@@ -76,7 +107,13 @@ uint8_t zerofido_pin_require_auth(Storage *storage, ZfClientPinState *state, boo
 
     *uv_verified = false;
     if (has_pin_auth) {
-        if (pin_auth_len != ZF_PIN_AUTH_LEN) {
+        if (!has_pin_protocol) {
+            return ZF_CTAP_ERR_MISSING_PARAMETER;
+        }
+        if (pin_protocol != ZF_PIN_PROTOCOL_V1 && pin_protocol != ZF_PIN_PROTOCOL_V2) {
+            return ZF_CTAP_ERR_INVALID_PARAMETER;
+        }
+        if (pin_auth_len != zf_pin_uv_auth_param_len(pin_protocol)) {
             return ZF_CTAP_ERR_PIN_AUTH_INVALID;
         }
         if (state->pin_auth_blocked) {
@@ -84,12 +121,6 @@ uint8_t zerofido_pin_require_auth(Storage *storage, ZfClientPinState *state, boo
         }
         if (!state->pin_set) {
             return ZF_CTAP_ERR_PIN_NOT_SET;
-        }
-        if (!has_pin_protocol) {
-            return ZF_CTAP_ERR_MISSING_PARAMETER;
-        }
-        if (pin_protocol != ZF_PIN_PROTOCOL_V1) {
-            return ZF_CTAP_ERR_INVALID_PARAMETER;
         }
         if (!state->pin_token_active) {
             return ZF_CTAP_ERR_PIN_AUTH_INVALID;
@@ -103,7 +134,8 @@ uint8_t zerofido_pin_require_auth(Storage *storage, ZfClientPinState *state, boo
                                    ZF_CLIENT_DATA_HASH_LEN, expected)) {
             return ZF_CTAP_ERR_OTHER;
         }
-        if (!zf_crypto_constant_time_equal(expected, pin_auth, ZF_PIN_AUTH_LEN)) {
+        if (!zf_crypto_constant_time_equal(expected, pin_auth,
+                                           zf_pin_uv_auth_param_len(pin_protocol))) {
             zf_crypto_secure_zero(expected, sizeof(expected));
             return zf_pin_note_pin_auth_mismatch(storage, state);
         }
@@ -124,7 +156,8 @@ uint8_t zerofido_pin_require_auth(Storage *storage, ZfClientPinState *state, boo
                 }
             } else {
                 zf_pin_set_token_permissions(state, state->pin_token_permissions,
-                                             state->pin_token_permissions_scoped, rp_id);
+                                             state->pin_token_permissions_scoped,
+                                             state->pin_token_permissions_managed, rp_id);
             }
         }
 
@@ -136,6 +169,9 @@ uint8_t zerofido_pin_require_auth(Storage *storage, ZfClientPinState *state, boo
             state->pin_auth_blocked = previous_pin_auth_blocked;
             zf_crypto_secure_zero(expected, sizeof(expected));
             return ZF_CTAP_ERR_OTHER;
+        }
+        if (state->pin_token_permissions_managed) {
+            zf_pin_consume_up_tested_permissions(state, required_permissions);
         }
         *uv_verified = true;
         zf_crypto_secure_zero(expected, sizeof(expected));

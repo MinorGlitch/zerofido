@@ -31,6 +31,12 @@ enum {
 
 #define ZF_CBOR_SKIP_DEPTH_LIMIT 16U
 
+/*
+ * CTAP uses strict definite-length CBOR here: no indefinite strings/maps, no
+ * non-minimal integer encodings, UTF-8 text is validated, and recursive skip is
+ * depth-limited. Parsers rely on those properties when skipping unknown fields.
+ */
+
 static size_t zf_cbor_remaining(const ZfCborCursor *cursor) {
     return (size_t)(cursor->end - cursor->ptr);
 }
@@ -184,6 +190,25 @@ bool zf_cbor_encode_bytes(ZfCborEncoder *enc, const uint8_t *data, size_t size) 
            (size == 0 || zf_cbor_append(enc, data, size));
 }
 
+bool zf_cbor_reserve_bytes(ZfCborEncoder *enc, size_t size, uint8_t **out) {
+    size_t old_offset = 0;
+
+    if (!enc || !out) {
+        return false;
+    }
+    old_offset = enc->offset;
+    if (!zf_cbor_encode_head(enc, ZF_CBOR_MAJOR_BYTES, size)) {
+        return false;
+    }
+    if (enc->offset > enc->capacity || size > enc->capacity - enc->offset) {
+        enc->offset = old_offset;
+        return false;
+    }
+    *out = enc->buf + enc->offset;
+    enc->offset += size;
+    return true;
+}
+
 bool zf_cbor_encode_text(ZfCborEncoder *enc, const char *text) {
     return zf_cbor_encode_text_n(enc, text, strlen(text));
 }
@@ -199,6 +224,15 @@ bool zf_cbor_encode_map(ZfCborEncoder *enc, size_t pairs) {
 
 bool zf_cbor_encode_array(ZfCborEncoder *enc, size_t items) {
     return zf_cbor_encode_head(enc, ZF_CBOR_MAJOR_ARRAY, items);
+}
+
+bool zf_cbor_encode_p256_cose_key(ZfCborEncoder *enc, int64_t alg, const uint8_t *x, size_t x_size,
+                                  const uint8_t *y, size_t y_size) {
+    return zf_cbor_encode_map(enc, 5) && zf_cbor_encode_int(enc, 1) && zf_cbor_encode_int(enc, 2) &&
+           zf_cbor_encode_int(enc, 3) && zf_cbor_encode_int(enc, alg) &&
+           zf_cbor_encode_int(enc, -1) && zf_cbor_encode_int(enc, 1) &&
+           zf_cbor_encode_int(enc, -2) && zf_cbor_encode_bytes(enc, x, x_size) &&
+           zf_cbor_encode_int(enc, -3) && zf_cbor_encode_bytes(enc, y, y_size);
 }
 
 void zf_cbor_cursor_init(ZfCborCursor *cursor, const uint8_t *data, size_t size) {

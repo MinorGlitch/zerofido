@@ -21,6 +21,11 @@
 
 #include "session.h"
 
+/*
+ * Encoders write complete U2F APDU responses, including status words. The
+ * register path binds appId/challenge to an attestation signature; authenticate
+ * binds the counter and user-presence byte to the credential key.
+ */
 uint16_t zf_u2f_encode_register_response(U2fData *instance, uint8_t *buf,
                                          uint16_t response_capacity);
 uint16_t zf_u2f_encode_authenticate_response(U2fData *instance, uint8_t *buf, uint16_t request_len,

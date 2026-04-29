@@ -25,6 +25,10 @@
 #include "../zerofido_runtime_config.h"
 #include "../zerofido_ui_i.h"
 
+/*
+ * Approval terminal transitions are one-shot: only Pending can complete, and a
+ * successful completion releases approval.done exactly once.
+ */
 static bool zerofido_ui_finish_interaction_locked(ZerofidoApp *app, ZfApprovalState state) {
     if (app->approval.state != ZfApprovalPending) {
         return false;
@@ -55,6 +59,10 @@ static void zerofido_dialog_result_callback(DialogExResult result, void *context
 static void zerofido_ui_prepare_interaction_locked(ZerofidoApp *app, ZfInteractionKind kind,
                                                    ZfUiProtocol protocol, const char *operation,
                                                    const char *target_id, const char *user_text) {
+    /*
+     * generation and pending_hide_generation keep delayed hide events from
+     * closing a newer prompt that reused the same view.
+     */
     app->approval.generation++;
     app->approval.pending_hide_generation = 0;
     app->approval.state = ZfApprovalPending;
@@ -77,7 +85,8 @@ static void zerofido_ui_prepare_interaction_locked(ZerofidoApp *app, ZfInteracti
         app->approval.details.approval
             .user_text[sizeof(app->approval.details.approval.user_text) - 1] = '\0';
     } else {
-        app->approval.details.selection.selected_record_index = UINT32_MAX;
+        app->approval.details.selection.selected_menu_index = UINT16_MAX;
+        app->approval.details.selection.selected_record_index = UINT16_MAX;
     }
 }
 
@@ -104,6 +113,11 @@ static bool zerofido_ui_wait_for_interaction_result(ZerofidoApp *app,
     return ok;
 }
 
+/*
+ * Requests a transport-facing approval. The return value says whether the
+ * interaction reached a terminal state; approved separately says whether that
+ * terminal state was approval.
+ */
 bool zerofido_ui_request_approval(ZerofidoApp *app, ZfUiProtocol protocol, const char *operation,
                                   const char *target_id, const char *user_text,
                                   ZfTransportSessionId current_session_id, bool *approved) {
@@ -126,7 +140,6 @@ bool zerofido_ui_request_approval(ZerofidoApp *app, ZfUiProtocol protocol, const
         }
         return true;
     }
-
     zerofido_ui_prepare_interaction_locked(app, ZfInteractionKindApproval, protocol, operation,
                                            target_id, user_text);
     zerofido_ui_clear_interaction_signal(app);
@@ -156,7 +169,7 @@ bool zerofido_ui_request_assertion_selection(ZerofidoApp *app, const char *rp_id
     zerofido_ui_prepare_interaction_locked(app, ZfInteractionKindAssertionSelection,
                                            ZfUiProtocolFido2, "Select account", rp_id,
                                            "Choose account");
-    app->approval.details.selection.credential_count = match_count;
+    app->approval.details.selection.credential_count = (uint8_t)match_count;
     for (size_t i = 0; i < match_count; ++i) {
         app->approval.details.selection.credential_indices[i] = match_indices[i];
     }
@@ -171,7 +184,7 @@ bool zerofido_ui_request_assertion_selection(ZerofidoApp *app, const char *rp_id
     furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
     *selected_record_index = app->approval.details.selection.selected_record_index;
     furi_mutex_release(app->ui_mutex);
-    return *selected_record_index != UINT32_MAX;
+    return *selected_record_index != UINT16_MAX;
 }
 
 void zerofido_ui_show_interaction(ZerofidoApp *app) {
@@ -188,6 +201,9 @@ void zerofido_ui_show_interaction(ZerofidoApp *app) {
     furi_mutex_release(app->ui_mutex);
 
     if (kind == ZfInteractionKindApproval) {
+        if (!zerofido_ui_ensure_view(app, ZfViewApproval)) {
+            return;
+        }
         dialog_ex_reset(app->approval_view);
         dialog_ex_set_context(app->approval_view, app);
         dialog_ex_set_result_callback(app->approval_view, zerofido_dialog_result_callback);
@@ -222,18 +238,20 @@ void zerofido_ui_hide_interaction(ZerofidoApp *app) {
         return;
     }
 
-    if (kind == ZfInteractionKindApproval) {
+    if (kind == ZfInteractionKindApproval && app->approval_view) {
         dialog_ex_reset(app->approval_view);
     }
     zerofido_ui_switch_to_view(app, ZfViewStatus);
     if (approval_state == ZfApprovalTimedOut) {
         zerofido_ui_set_status(app, "Request timed out");
+        zerofido_notify_error(app);
     } else if (approval_state == ZfApprovalDenied) {
         zerofido_ui_set_status(app, "Request denied");
+        zerofido_notify_error(app);
     } else {
         zerofido_ui_refresh_status(app);
+        zerofido_notify_reset(app);
     }
-    zerofido_notify_reset(app);
 }
 
 bool zerofido_ui_deny_pending_interaction(ZerofidoApp *app) {

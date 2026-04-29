@@ -19,6 +19,7 @@
 
 #include <furi_hal_random.h>
 #include <furi_hal_rtc.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "store/bootstrap.h"
@@ -35,6 +36,10 @@ static void zf_store_index_entry_file_name(const ZfCredentialIndexEntry *entry, 
 #endif
 }
 
+/*
+ * Production index entries deliberately avoid storing the RP ID in plaintext.
+ * Host tests keep plaintext metadata to make protocol expectations readable.
+ */
 static void zf_store_index_entry_set_rp_id(ZfCredentialIndexEntry *entry, const char *rp_id) {
 #ifdef ZF_HOST_TEST
     strncpy(entry->rp_id, rp_id, sizeof(entry->rp_id) - 1);
@@ -52,6 +57,10 @@ typedef struct {
 #endif
 } ZfStoreRpMatcher;
 
+/*
+ * RP matching is centralized so lookup, deletion, and exclusion checks all use
+ * the same hash-vs-plaintext behavior.
+ */
 static void zf_store_rp_matcher_init(ZfStoreRpMatcher *matcher, const char *rp_id) {
 #ifdef ZF_HOST_TEST
     matcher->rp_id = rp_id;
@@ -114,12 +123,57 @@ static void zf_store_insert_sorted_index(uint16_t *out_indices, size_t *count, s
     (*count)++;
 }
 
+/* Keeps the index dense after deletions; callers remove durable files first. */
 static void zf_store_compact_after_delete(ZfCredentialStore *store, size_t index) {
     for (size_t j = index + 1; j < store->count; ++j) {
         store->records[j - 1] = store->records[j];
     }
     store->count--;
     memset(&store->records[store->count], 0, sizeof(store->records[store->count]));
+}
+
+static size_t zf_store_effective_capacity(const ZfCredentialStore *store) {
+    if (!store || !store->records) {
+        return 0;
+    }
+    return store->capacity > 0U ? store->capacity : ZF_MAX_CREDENTIALS;
+}
+
+bool zf_store_ensure_capacity(ZfCredentialStore *store, size_t min_capacity) {
+    size_t old_capacity = 0U;
+    size_t new_capacity = 0U;
+    ZfCredentialIndexEntry *records = NULL;
+
+    if (!store || min_capacity > ZF_MAX_CREDENTIALS) {
+        return false;
+    }
+    old_capacity = zf_store_effective_capacity(store);
+    if (min_capacity <= old_capacity) {
+        return true;
+    }
+    if (store->records && store->capacity == 0U) {
+        return false;
+    }
+
+    new_capacity = old_capacity > 0U ? old_capacity : 1U;
+    while (new_capacity < min_capacity && new_capacity < ZF_MAX_CREDENTIALS) {
+        new_capacity *= 2U;
+    }
+    if (new_capacity > ZF_MAX_CREDENTIALS) {
+        new_capacity = ZF_MAX_CREDENTIALS;
+    }
+    if (new_capacity < min_capacity) {
+        return false;
+    }
+
+    records = realloc(store->records, new_capacity * sizeof(*records));
+    if (!records) {
+        return false;
+    }
+    memset(&records[old_capacity], 0, (new_capacity - old_capacity) * sizeof(records[0]));
+    store->records = records;
+    store->capacity = new_capacity;
+    return true;
 }
 
 void zf_store_index_entry_from_record(const ZfCredentialRecord *record,
@@ -164,6 +218,8 @@ void zf_store_deinit(ZfCredentialStore *store) {
 }
 
 void zf_store_clear(ZfCredentialStore *store) {
+    size_t capacity = zf_store_effective_capacity(store);
+
     if (!store || !store->records) {
         if (store) {
             store->count = 0;
@@ -171,7 +227,7 @@ void zf_store_clear(ZfCredentialStore *store) {
         return;
     }
 
-    memset(store->records, 0, sizeof(store->records[0]) * ZF_MAX_CREDENTIALS);
+    memset(store->records, 0, sizeof(store->records[0]) * capacity);
     store->count = 0;
 }
 
@@ -207,15 +263,25 @@ bool zf_store_prepare_credential(ZfCredentialRecord *record, const char *rp_id,
     record->created_at = furi_hal_rtc_get_timestamp();
     record->resident_key = resident_key;
     record->cred_protect = ZF_CRED_PROTECT_UV_OPTIONAL;
+    record->hmac_secret = true;
+    furi_hal_random_fill_buf(record->hmac_secret_without_uv, sizeof(record->hmac_secret_without_uv));
+    furi_hal_random_fill_buf(record->hmac_secret_with_uv, sizeof(record->hmac_secret_with_uv));
     record->in_use = true;
     return true;
 }
 
+/*
+ * Write-before-publish protects the live index from pointing at a missing or
+ * partially written credential file.
+ */
 bool zf_store_add_record_with_buffer(Storage *storage, ZfCredentialStore *store,
                                      const ZfCredentialRecord *record, uint8_t *buffer,
                                      size_t buffer_size) {
-    if (!store || !store->records || !record || !buffer ||
+    if (!store || !record || !buffer ||
         buffer_size < ZF_STORE_RECORD_IO_SIZE || store->count >= ZF_MAX_CREDENTIALS) {
+        return false;
+    }
+    if (!zf_store_ensure_capacity(store, store->count + 1U)) {
         return false;
     }
     if (!zf_store_record_format_write_record_with_buffer(storage, record, buffer, buffer_size)) {
@@ -249,7 +315,10 @@ bool zf_store_remove_record_file(Storage *storage, const ZfCredentialRecord *rec
 }
 
 bool zf_store_publish_added_record(ZfCredentialStore *store, const ZfCredentialRecord *record) {
-    if (!store || !store->records || !record || store->count >= ZF_MAX_CREDENTIALS) {
+    if (!store || !record || store->count >= ZF_MAX_CREDENTIALS) {
+        return false;
+    }
+    if (!zf_store_ensure_capacity(store, store->count + 1U)) {
         return false;
     }
 
@@ -287,20 +356,29 @@ bool zf_store_update_record_with_buffer(Storage *storage, ZfCredentialStore *sto
     return false;
 }
 
-bool zf_store_load_record_with_buffer(Storage *storage, const ZfCredentialIndexEntry *entry,
-                                      ZfCredentialRecord *out_record, uint8_t *buffer,
-                                      size_t buffer_size) {
+typedef bool (*ZfStoreRecordLoader)(Storage *storage, const char *file_name,
+                                    ZfCredentialRecord *out_record, uint8_t *buffer,
+                                    size_t buffer_size);
+
+/*
+ * Full-record loads share the same index-to-file lookup. Host tests can fall
+ * back to index data because their fake storage often exercises policy without
+ * serializing every record fixture.
+ */
+static bool zf_store_load_record_internal_with_buffer(Storage *storage,
+                                                      const ZfCredentialIndexEntry *entry,
+                                                      ZfCredentialRecord *out_record,
+                                                      uint8_t *buffer, size_t buffer_size,
+                                                      ZfStoreRecordLoader loader) {
     char file_name[ZF_CREDENTIAL_ID_LEN * 2 + 1];
 
-    if (!entry || !entry->in_use || !out_record || !buffer ||
+    if (!entry || !entry->in_use || !out_record || !buffer || !loader ||
         buffer_size < ZF_STORE_RECORD_IO_SIZE) {
         return false;
     }
 
     zf_store_index_entry_file_name(entry, file_name);
-    bool loaded =
-        zf_store_record_format_load_record_with_buffer(storage, file_name, out_record, buffer,
-                                                       buffer_size);
+    bool loaded = loader(storage, file_name, out_record, buffer, buffer_size);
     if (loaded) {
         return true;
     }
@@ -325,6 +403,23 @@ bool zf_store_load_record_with_buffer(Storage *storage, const ZfCredentialIndexE
 #else
     return false;
 #endif
+}
+
+bool zf_store_load_record_with_buffer(Storage *storage, const ZfCredentialIndexEntry *entry,
+                                      ZfCredentialRecord *out_record, uint8_t *buffer,
+                                      size_t buffer_size) {
+    return zf_store_load_record_internal_with_buffer(storage, entry, out_record, buffer,
+                                                     buffer_size,
+                                                     zf_store_record_format_load_record_with_buffer);
+}
+
+bool zf_store_load_record_for_display_with_buffer(Storage *storage,
+                                                  const ZfCredentialIndexEntry *entry,
+                                                  ZfCredentialRecord *out_record,
+                                                  uint8_t *buffer, size_t buffer_size) {
+    return zf_store_load_record_internal_with_buffer(
+        storage, entry, out_record, buffer, buffer_size,
+        zf_store_record_format_load_record_for_display_with_buffer);
 }
 
 bool zf_store_load_record_by_index_with_buffer(Storage *storage, const ZfCredentialStore *store,
@@ -554,6 +649,10 @@ bool zf_store_find_resident_credential_indices_for_user_with_buffer(
     return true;
 }
 
+/*
+ * Removes files only; the in-memory array is left untouched until
+ * zf_store_publish_deleted_indices compacts it.
+ */
 bool zf_store_remove_credential_files_by_indices(Storage *storage, const ZfCredentialStore *store,
                                                  const uint16_t *deleted_indices,
                                                  size_t deleted_count,
@@ -608,6 +707,7 @@ void zf_store_publish_deleted_indices(ZfCredentialStore *store, const uint16_t *
     }
 }
 
+/* UI/manual deletion path: find by credential ID, remove files, then compact. */
 ZfStoreDeleteResult zf_store_delete_record(Storage *storage, ZfCredentialStore *store,
                                            const uint8_t *credential_id, size_t credential_id_len) {
     if (!store || !store->records) {
@@ -730,8 +830,9 @@ size_t zf_store_find_by_rp_filtered(Storage *storage, const ZfCredentialStore *s
     for (size_t i = 0; i < store->count; ++i) {
         const ZfCredentialIndexEntry *entry = &store->records[i];
 
-        if (!entry->in_use || (filter && !filter(entry, filter_context)) ||
-            !zf_store_index_entry_matches_rp(storage, store, entry, rp_id, &matcher)) {
+        if (!entry->in_use ||
+            !zf_store_index_entry_matches_rp(storage, store, entry, rp_id, &matcher) ||
+            (filter && !filter(entry, filter_context))) {
             continue;
         }
 
@@ -742,6 +843,11 @@ size_t zf_store_find_by_rp_filtered(Storage *storage, const ZfCredentialStore *s
     return count;
 }
 
+/*
+ * Fast existence check for makeCredential exclude-list and assertion policy.
+ * When storage is available it reloads candidate records to confirm the RP ID
+ * string, not only the index hash.
+ */
 bool zf_store_has_matching_credential_with_buffer(Storage *storage, const ZfCredentialStore *store,
                                                   const char *rp_id,
                                                   ZfStoreCredentialFilter filter,
@@ -759,8 +865,9 @@ bool zf_store_has_matching_credential_with_buffer(Storage *storage, const ZfCred
     for (size_t i = 0; i < store->count; ++i) {
         const ZfCredentialIndexEntry *entry = &store->records[i];
 
-        if (!entry->in_use || (filter && !filter(entry, filter_context)) ||
-            !zf_store_index_entry_matches_rp(storage, store, entry, rp_id, &matcher)) {
+        if (!entry->in_use ||
+            !zf_store_index_entry_matches_rp(storage, store, entry, rp_id, &matcher) ||
+            (filter && !filter(entry, filter_context))) {
             continue;
         }
 

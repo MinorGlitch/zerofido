@@ -27,6 +27,7 @@
 #include "../zerofido_pin.h"
 #include "../zerofido_runtime_config.h"
 #include "../zerofido_store.h"
+#include "../zerofido_telemetry.h"
 #include "../zerofido_ui.h"
 #include "../zerofido_ui_i.h"
 
@@ -36,6 +37,8 @@ typedef enum {
     ZfStorageInitInvalidPinState,
 } ZfStorageInitStatus;
 
+static void zf_app_lifecycle_close_records(ZerofidoApp *app);
+
 static bool zf_app_lifecycle_open_records(ZerofidoApp *app) {
     app->gui = furi_record_open(RECORD_GUI);
     app->storage = furi_record_open(RECORD_STORAGE);
@@ -44,55 +47,111 @@ static bool zf_app_lifecycle_open_records(ZerofidoApp *app) {
     app->approval.done = furi_semaphore_alloc(1, 0);
 
     if (!(app->gui && app->storage && app->notifications && app->ui_mutex && app->approval.done)) {
+        zf_app_lifecycle_close_records(app);
         return false;
     }
 
-    return zerofido_notify_init(app);
+    if (!zerofido_notify_init(app)) {
+        zf_app_lifecycle_close_records(app);
+        return false;
+    }
+    return true;
 }
 
 static void zf_app_lifecycle_close_records(ZerofidoApp *app) {
+    if (!app) {
+        return;
+    }
+
     if (app->approval.done) {
         furi_semaphore_free(app->approval.done);
+        app->approval.done = NULL;
     }
     if (app->ui_mutex) {
         furi_mutex_free(app->ui_mutex);
+        app->ui_mutex = NULL;
     }
     if (app->storage) {
         furi_record_close(RECORD_STORAGE);
+        app->storage = NULL;
     }
     if (app->notifications) {
         zerofido_notify_deinit(app);
         furi_record_close(RECORD_NOTIFICATION);
+        app->notifications = NULL;
     }
     if (app->gui) {
         furi_record_close(RECORD_GUI);
+        app->gui = NULL;
     }
 }
 
 static ZfStorageInitStatus zf_app_lifecycle_init_storage(ZerofidoApp *app) {
     ZfPinInitResult pin_init = ZfPinInitOk;
+    ZfCredentialIndexEntry *existing_records = app->store.records;
+    ZfResolvedCapabilities capabilities;
+    uint8_t *store_io = NULL;
 
     zf_attestation_reset_consistency_cache();
+    zerofido_ui_set_status(app, "Key");
     if (!zf_crypto_ensure_store_key()) {
         return ZfStorageInitFailed;
     }
-    if (!app->store.records) {
-        app->store.records = app->store_records;
-    }
-    if (!zf_store_init_with_buffer(app->storage, &app->store, app->command_scratch.bytes,
-                                   sizeof(app->command_scratch.bytes))) {
+    store_io = malloc(ZF_STORE_RECORD_IO_SIZE);
+    if (!store_io) {
+        zf_telemetry_log_oom("startup store io", ZF_STORE_RECORD_IO_SIZE);
         return ZfStorageInitFailed;
     }
+    zerofido_ui_set_status(app, "Index");
+    if (!zf_store_init_with_buffer(app->storage, &app->store, store_io, ZF_STORE_RECORD_IO_SIZE)) {
+        zf_crypto_secure_zero(store_io, ZF_STORE_RECORD_IO_SIZE);
+        free(store_io);
+        if (!existing_records && app->store.records) {
+            zf_crypto_secure_zero(app->store.records,
+                                  app->store.capacity * sizeof(app->store.records[0]));
+            free(app->store.records);
+            app->store.records = NULL;
+            app->store.capacity = 0U;
+            app->store.count = 0U;
+        }
+        return ZfStorageInitFailed;
+    }
+    if (!existing_records && app->store.records) {
+        app->store_records_owned = true;
+    }
+    zf_crypto_secure_zero(store_io, ZF_STORE_RECORD_IO_SIZE);
+    free(store_io);
 
+    zerofido_ui_set_status(app, "PIN");
     pin_init = zerofido_pin_init_with_result(app->storage, &app->pin_state);
     if (pin_init == ZfPinInitInvalidPersistedState) {
         return ZfStorageInitInvalidPinState;
     }
+    if (pin_init != ZfPinInitOk) {
+        return ZfStorageInitFailed;
+    }
+    zf_runtime_config_refresh_capabilities(app);
 
-    return pin_init == ZfPinInitOk ? ZfStorageInitOk : ZfStorageInitFailed;
+    zerofido_ui_set_status(app, "Attest");
+    if (!zf_attestation_ensure_ready()) {
+        zf_telemetry_log("attestation prewarm failed");
+    }
+    zf_runtime_get_effective_capabilities(app, &capabilities);
+    if (capabilities.u2f_enabled) {
+        zerofido_ui_set_status(app, "U2F keys");
+        if (!zf_u2f_adapter_init(app)) {
+            zf_telemetry_log("u2f key prewarm failed");
+        }
+    }
+
+    return ZfStorageInitOk;
 }
 
 static const ZfTransportAdapterOps *zf_app_lifecycle_adapter_for_mode(ZfTransportMode mode) {
+#ifdef ZF_USB_ONLY
+    UNUSED(mode);
+    return &zf_transport_usb_hid_adapter;
+#else
 #ifdef ZF_NFC_ONLY
     UNUSED(mode);
     return &zf_transport_nfc_adapter;
@@ -104,6 +163,7 @@ static const ZfTransportAdapterOps *zf_app_lifecycle_adapter_for_mode(ZfTranspor
     default:
         return &zf_transport_usb_hid_adapter;
     }
+#endif
 #endif
 }
 
@@ -157,6 +217,7 @@ static bool zf_app_lifecycle_start_worker(ZerofidoApp *app) {
     thread = furi_thread_alloc_ex("ZeroFIDOWorker", worker_stack_size,
                                   app->transport_adapter->worker, app);
     if (!thread) {
+        zf_telemetry_log_oom("worker thread alloc", worker_stack_size);
         return false;
     }
 
@@ -174,19 +235,6 @@ static bool zf_app_lifecycle_start_worker(ZerofidoApp *app) {
     return true;
 }
 
-static bool zf_app_lifecycle_is_running(ZerofidoApp *app) {
-    bool running = false;
-
-    if (!app || !app->ui_mutex) {
-        return false;
-    }
-
-    furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
-    running = app->running;
-    furi_mutex_release(app->ui_mutex);
-    return running;
-}
-
 static void zf_app_lifecycle_stop_worker(ZerofidoApp *app) {
     if (!app->worker_thread) {
         return;
@@ -201,11 +249,11 @@ static void zf_app_lifecycle_stop_worker(ZerofidoApp *app) {
 ZerofidoApp *zf_app_lifecycle_alloc(void) {
     ZerofidoApp *app = malloc(sizeof(ZerofidoApp));
     if (!app) {
+        zf_telemetry_log_oom("lifecycle alloc", sizeof(ZerofidoApp));
         return NULL;
     }
 
     memset(app, 0, sizeof(*app));
-    app->store.records = app->store_records;
     app->running = true;
     app->ui_events_enabled = true;
     zf_runtime_config_load_defaults(&app->runtime_config);
@@ -224,13 +272,14 @@ bool zf_app_lifecycle_open(ZerofidoApp *app) {
 }
 
 bool zf_app_lifecycle_startup(ZerofidoApp *app) {
+    zf_telemetry_log("startup begin");
+    zerofido_ui_set_status(app, "Config");
     zf_app_lifecycle_load_runtime_config(app);
 
+    zerofido_ui_set_status(app, "Storage");
     ZfStorageInitStatus storage_status = zf_app_lifecycle_init_storage(app);
-    bool u2f_ready = true;
+    bool u2f_ready = !app->capabilities.u2f_enabled || zf_u2f_adapter_is_available(app);
     const char *backend_status = zf_app_lifecycle_backend_status(app, storage_status, u2f_ready);
-    bool can_start_worker = storage_status == ZfStorageInitOk &&
-                            (app->capabilities.fido2_enabled || app->capabilities.u2f_enabled);
 
     if (backend_status) {
         app->startup_reset_available = storage_status == ZfStorageInitInvalidPinState;
@@ -239,17 +288,16 @@ bool zf_app_lifecycle_startup(ZerofidoApp *app) {
         zerofido_ui_set_status(app, NULL);
     }
 
-    if (can_start_worker && zf_app_lifecycle_is_running(app) &&
-        !zf_app_lifecycle_start_worker(app)) {
-        return false;
-    }
-
-    zerofido_ui_refresh_status(app);
-    return true;
+    zerofido_ui_refresh_status_line(app);
+    zerofido_ui_refresh_credentials_status(app);
+    zf_telemetry_log("startup end");
+    return backend_status == NULL;
 }
 
 static int32_t zf_app_lifecycle_startup_worker(void *context) {
     ZerofidoApp *app = context;
+
+    zf_telemetry_log("startup worker start");
     bool ok = zf_app_lifecycle_startup(app);
 
     furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
@@ -259,8 +307,11 @@ static int32_t zf_app_lifecycle_startup_worker(void *context) {
 
     if (!ok) {
         zerofido_ui_set_status(app, "Startup failed");
-        zerofido_ui_refresh_status(app);
+    } else {
+        zerofido_ui_set_status(app, NULL);
     }
+    zerofido_ui_refresh_credentials_status(app);
+    zf_telemetry_log(ok ? "startup worker ok" : "startup worker failed");
     return 0;
 }
 
@@ -274,10 +325,11 @@ bool zf_app_lifecycle_startup_async(ZerofidoApp *app) {
     app->startup_ok = false;
     furi_mutex_release(app->ui_mutex);
 
-    zerofido_ui_set_status(app, "Starting...");
+    zerofido_ui_set_status(app, NULL);
     app->startup_thread =
         furi_thread_alloc_ex("ZeroFIDOStart", 8 * 1024, zf_app_lifecycle_startup_worker, app);
     if (!app->startup_thread) {
+        zf_telemetry_log_oom("startup thread alloc", 8 * 1024);
         furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
         app->startup_ok = false;
         app->startup_complete = true;
@@ -292,25 +344,71 @@ bool zf_app_lifecycle_startup_async(ZerofidoApp *app) {
 }
 
 void zf_app_lifecycle_wait_startup(ZerofidoApp *app) {
-    if (!app || !app->startup_thread) {
+    FuriThread *startup_thread = NULL;
+
+    if (!app || !app->ui_mutex) {
         return;
     }
 
-    furi_thread_join(app->startup_thread);
-    furi_thread_free(app->startup_thread);
+    furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
+    startup_thread = app->startup_thread;
     app->startup_thread = NULL;
+    furi_mutex_release(app->ui_mutex);
+
+    if (!startup_thread) {
+        return;
+    }
+
+    furi_thread_join(startup_thread);
+    furi_thread_free(startup_thread);
 }
 
+/*
+ * Startup thread ownership has two states while startup_thread is non-NULL:
+ * running, or completed-but-not-joined. startup_complete distinguishes them and
+ * gates the join plus transport-worker start.
+ */
 bool zf_app_lifecycle_startup_pending(ZerofidoApp *app) {
+    FuriThread *completed_thread = NULL;
     bool pending = false;
+    bool completed_ok = false;
+    bool start_transport = false;
 
     if (!app || !app->ui_mutex) {
         return false;
     }
 
     furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
-    pending = app->startup_thread && !app->startup_complete;
+    if (app->startup_thread && app->startup_complete) {
+        completed_thread = app->startup_thread;
+        app->startup_thread = NULL;
+        completed_ok = app->startup_ok;
+        start_transport = completed_ok && app->running && !app->worker_thread &&
+                          (app->capabilities.fido2_enabled || app->capabilities.u2f_enabled);
+    } else {
+        pending = app->startup_thread != NULL;
+    }
     furi_mutex_release(app->ui_mutex);
+
+    if (completed_thread) {
+        furi_thread_join(completed_thread);
+        furi_thread_free(completed_thread);
+        if (start_transport) {
+            zerofido_ui_set_status(app, "Transport");
+            if (!zf_app_lifecycle_start_worker(app)) {
+                furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
+                app->startup_ok = false;
+                furi_mutex_release(app->ui_mutex);
+                zerofido_ui_set_status(app, "Transport init failed");
+                zerofido_ui_refresh_status_line(app);
+                return false;
+            }
+        }
+        if (completed_ok) {
+            zerofido_ui_set_status(app, NULL);
+        }
+        zerofido_ui_refresh_credentials_status(app);
+    }
     return pending;
 }
 
@@ -345,8 +443,19 @@ void zf_app_lifecycle_free(ZerofidoApp *app) {
         return;
     }
 
+    ZfCredentialIndexEntry *owned_records = app->store_records_owned ? app->store.records : NULL;
+
     zf_u2f_adapter_deinit(app);
     zf_store_deinit(&app->store);
+    if (owned_records) {
+        zf_crypto_secure_zero(owned_records, sizeof(owned_records[0]) * app->store.capacity);
+        free(owned_records);
+        app->store.records = NULL;
+        app->store.capacity = 0U;
+        app->store_records_owned = false;
+    }
+    zf_app_command_scratch_destroy(app);
+    zf_app_transport_arena_release(app);
     zerofido_ui_deinit(app);
     zf_app_lifecycle_close_records(app);
     zf_crypto_secure_zero(app, sizeof(*app));

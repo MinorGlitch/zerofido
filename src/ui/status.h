@@ -21,5 +21,6 @@
 
 #include "../zerofido_app_i.h"
 
+/* Status view helpers bind the home screen and mirror transport connection state. */
 void zerofido_ui_status_bind_view(ZerofidoApp *app);
 void zerofido_ui_apply_transport_connected(ZerofidoApp *app, bool connected);

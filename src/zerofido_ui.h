@@ -23,9 +23,16 @@
 #include "zerofido_app_i.h"
 #include "zerofido_store.h"
 
+/*
+ * UI functions are the synchronization boundary between protocol workers and
+ * Flipper views. Request helpers create approval/selection state, workers wait
+ * on the approval semaphore, and callbacks publish the terminal state.
+ */
 bool zerofido_ui_init(ZerofidoApp *app);
 void zerofido_ui_deinit(ZerofidoApp *app);
 void zerofido_ui_refresh_status(ZerofidoApp *app);
+void zerofido_ui_refresh_status_line(ZerofidoApp *app);
+void zerofido_ui_refresh_credentials_status(ZerofidoApp *app);
 void zerofido_ui_set_status(ZerofidoApp *app, const char *text);
 void zerofido_ui_set_status_locked(ZerofidoApp *app, const char *text);
 void zerofido_ui_set_transport_connected(ZerofidoApp *app, bool connected);

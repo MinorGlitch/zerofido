@@ -44,6 +44,11 @@ static void zf_pin_force_runtime_block(ZfClientPinState *state) {
     zf_pin_invalidate_token_state(state);
 }
 
+/*
+ * Records a pinUvAuthParam mismatch. This does not decrement pin_retries, but
+ * three consecutive mismatches enter PIN_AUTH_BLOCKED until explicit local
+ * resume/restart handling clears the temporary throttle.
+ */
 uint8_t zf_pin_note_pin_auth_mismatch(Storage *storage, ZfClientPinState *state) {
     if (state->pin_consecutive_mismatches < UINT8_MAX) {
         state->pin_consecutive_mismatches++;
@@ -63,6 +68,11 @@ uint8_t zf_pin_note_pin_auth_mismatch(Storage *storage, ZfClientPinState *state)
     return state->pin_auth_blocked ? ZF_CTAP_ERR_PIN_AUTH_BLOCKED : ZF_CTAP_ERR_PIN_AUTH_INVALID;
 }
 
+/*
+ * Records a failed PIN-hash verification. This consumes one durable retry,
+ * refreshes the key-agreement key per CTAP expectations, and fail-closes if the
+ * stricter state cannot be persisted.
+ */
 uint8_t zf_pin_auth_failure(Storage *storage, ZfClientPinState *state) {
     ZfP256KeyAgreementKey next_key_agreement;
 

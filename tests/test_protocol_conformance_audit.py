@@ -1,3 +1,5 @@
+"""Tests for the protocol-conformance audit verifier."""
+
 from __future__ import annotations
 
 import importlib.util

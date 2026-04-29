@@ -26,12 +26,13 @@
 #include "../zerofido_types.h"
 
 typedef struct {
-    uint8_t auth_data[288];
     uint8_t cose[128];
     uint8_t extension_data[32];
     uint8_t signature[80];
-    uint8_t attestation_cert[ZF_ATTESTATION_CERT_MAX_SIZE];
 } ZfMakeCredentialResponseScratch;
+
+_Static_assert(sizeof(ZfMakeCredentialResponseScratch) <= 240U,
+               "makeCredential response scratch must stay NFC-safe");
 
 typedef struct {
     uint8_t auth_data[160];
@@ -49,11 +50,15 @@ typedef struct {
 uint8_t zf_ctap_build_get_info_response(const ZfResolvedCapabilities *capabilities,
                                         bool client_pin_set, uint8_t *out, size_t out_capacity,
                                         size_t *out_len);
-uint8_t zf_ctap_build_make_credential_response_with_scratch(
+uint8_t zf_ctap_build_packed_make_credential_response_with_scratch(
     ZfMakeCredentialResponseScratch *scratch, const char *rp_id, const ZfCredentialRecord *record,
     const uint8_t client_data_hash[ZF_CLIENT_DATA_HASH_LEN], bool user_verified,
     bool include_cred_protect, bool include_hmac_secret, uint8_t *out, size_t out_capacity,
     size_t *out_len);
+uint8_t zf_ctap_build_none_make_credential_response_with_scratch(
+    ZfMakeCredentialResponseScratch *scratch, const char *rp_id, const ZfCredentialRecord *record,
+    bool user_verified, bool include_cred_protect, bool include_hmac_secret, uint8_t *out,
+    size_t out_capacity, size_t *out_len);
 uint8_t zf_ctap_build_assertion_response_with_scratch(
     ZfAssertionResponseScratch *scratch, const ZfAssertionRequestData *request,
     const ZfCredentialRecord *record, bool user_present, bool user_verified, uint32_t sign_count,

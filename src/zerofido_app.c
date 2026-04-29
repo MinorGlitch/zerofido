@@ -18,24 +18,35 @@
 #include "zerofido_app.h"
 
 #include "app/lifecycle.h"
+#include "zerofido_telemetry.h"
 #include "zerofido_ui.h"
 #include "zerofido_ui_i.h"
 
+/*
+ * Application composition root. Lifecycle setup opens storage/UI/runtime state,
+ * then the view dispatcher owns the foreground thread until exit triggers
+ * transport shutdown and secret scrubbing.
+ */
 int32_t zerofido_main(void *p) {
     UNUSED(p);
 
+    zf_telemetry_log("main entry");
     ZerofidoApp *app = zf_app_lifecycle_alloc();
     if (!app) {
+        zf_telemetry_log_oom("app alloc", sizeof(ZerofidoApp));
         return -1;
     }
 
     if (!zf_app_lifecycle_open(app)) {
+        zf_telemetry_log("lifecycle open failed");
         zf_app_lifecycle_free(app);
         return -1;
     }
 
     zerofido_ui_switch_to_view(app, ZfViewStatus);
+    zf_telemetry_log("startup async before");
     zf_app_lifecycle_startup_async(app);
+    zf_telemetry_log("startup async after");
     view_dispatcher_run(app->view_dispatcher);
     zf_app_lifecycle_shutdown(app);
     zf_app_lifecycle_free(app);

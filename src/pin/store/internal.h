@@ -21,14 +21,25 @@
 
 #include "../../zerofido_types.h"
 
-#define ZF_PIN_FILE_PATH ZF_APP_DATA_DIR "/client_pin.bin"
-#define ZF_PIN_FILE_TEMP_PATH ZF_APP_DATA_DIR "/client_pin.tmp"
+/*
+ * v2 path intentionally ignores pre-overhaul development PIN files. Several NFC
+ * bring-up builds could persist a ClientPIN hash before the transport/session
+ * ownership was stable; reusing that state makes readers report "incorrect PIN"
+ * without ever issuing setPIN again.
+ */
+#define ZF_PIN_FILE_PATH ZF_APP_DATA_DIR "/client_pin_v2.bin"
+#define ZF_PIN_FILE_TEMP_PATH ZF_APP_DATA_DIR "/client_pin_v2.tmp"
 #define ZF_PIN_FILE_MAGIC 0x50494E31UL
 #define ZF_PIN_FILE_VERSION 1U
 #define ZF_PIN_FILE_FLAG_AUTH_BLOCKED 0x01U
 #define ZF_PIN_RETRY_SEAL_MAGIC 0x504E5231UL
 #define ZF_PIN_RETRY_SEAL_SIZE 32U
 
+/*
+ * Persisted PIN file format. The PIN hash is encrypted with the device unique
+ * enclave key; retry/auth-block state is additionally sealed to the PIN hash so
+ * file rollback or counter splicing is detected on load.
+ */
 typedef struct {
     uint32_t magic;
     uint8_t version;

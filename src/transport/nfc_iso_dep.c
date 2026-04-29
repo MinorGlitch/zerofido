@@ -15,6 +15,8 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
+#ifndef ZF_USB_ONLY
+
 #include "nfc_iso_dep.h"
 
 #include <nfc/protocols/iso14443_3a/iso14443_3a.h>
@@ -25,19 +27,54 @@
 #include <string.h>
 #include <toolbox/bit_buffer.h>
 
-#include "nfc_iso4_backport.h"
 #include "nfc_protocol.h"
 #include "nfc_trace.h"
+
+static ZfNfcReaderProfile zf_transport_nfc_default_reader_profile(ZfNfcReaderProfileKind kind) {
+    ZfNfcReaderProfile profile = {
+        .kind = kind,
+        .ats = {0x05U, 0x78U, 0x91U, 0xE8U, 0x00U},
+        .ats_len = 5U,
+        .r_ack_uses_incoming_block = true,
+        .rx_chain_duplicate_limit = 8U,
+        .max_rx_chain_len = ZF_MAX_MSG_SIZE,
+    };
+
+    /*
+     * Android is intentionally profile-compatible for now. Keeping it explicit
+     * prevents iOS-specific behavior from becoming hard-coded into the engine.
+     */
+    if (kind == ZfNfcReaderProfileAndroid) {
+        profile.kind = ZfNfcReaderProfileAndroid;
+    }
+    return profile;
+}
+
+void zf_transport_nfc_set_reader_profile(ZfNfcTransportState *state,
+                                         ZfNfcReaderProfileKind kind) {
+    if (!state) {
+        return;
+    }
+
+    state->reader_profile = zf_transport_nfc_default_reader_profile(kind);
+}
+
+static void zf_transport_nfc_ensure_reader_profile(ZfNfcTransportState *state) {
+    if (!state || state->reader_profile.ats_len != 0U) {
+        return;
+    }
+
+    zf_transport_nfc_set_reader_profile(state, ZfNfcReaderProfileIos);
+}
 
 #if defined(ZF_RELEASE_DIAGNOSTICS) && ZF_RELEASE_DIAGNOSTICS
 static void zf_transport_nfc_trace_cache_state(const char *event, const ZfNfcTransportState *state,
                                                uint8_t pcb, size_t data_len) {
-    FURI_LOG_I(ZF_NFC_TRACE_TAG, "iso-cache %s pcb=%02X len=%u valid=%u cached=%u frame=%u", event,
-               pcb, (unsigned)data_len, state && state->iso4_last_tx_valid ? 1U : 0U,
-               state ? (unsigned)state->iso4_last_tx_len : 0U,
-               state && state->iso4_frame_buffer
-                   ? (unsigned)bit_buffer_get_size_bytes(state->iso4_frame_buffer)
-                   : 0U);
+    zf_transport_nfc_trace_format(
+        "iso-cache %s pcb=%02X len=%u valid=%u cached=%u frame=%u", event, pcb,
+        (unsigned)data_len, state && state->iso4_last_tx_valid ? 1U : 0U,
+        state ? (unsigned)state->iso4_last_tx_len : 0U,
+        state ? (unsigned)state->tx_frame_len : 0U);
 }
 #else
 static void zf_transport_nfc_trace_cache_state(const char *event, const ZfNfcTransportState *state,
@@ -51,28 +88,18 @@ static void zf_transport_nfc_trace_cache_state(const char *event, const ZfNfcTra
 
 static void zf_transport_nfc_cache_last_iso_response(ZfNfcTransportState *state,
                                                      const uint8_t *data, size_t data_len) {
-    if (!state || (!data && data_len > 0U) || data_len > sizeof(state->iso4_last_tx)) {
+    if (!state || (!data && data_len > 0U) || data_len > sizeof(state->iso4_tx_frame)) {
         zf_transport_nfc_trace_cache_state("skip", state, data && data_len > 0U ? data[0] : 0U,
                                            data_len);
         return;
     }
 
     if (data_len > 0U) {
-        memcpy(state->iso4_last_tx, data, data_len);
+        memmove(state->iso4_tx_frame, data, data_len);
     }
     state->iso4_last_tx_len = data_len;
     state->iso4_last_tx_valid = true;
     zf_transport_nfc_trace_cache_state("set", state, data_len > 0U ? data[0] : 0U, data_len);
-}
-
-static void zf_transport_nfc_cache_last_tx_buffer(ZfNfcTransportState *state) {
-    if (!state || !state->tx_buffer || !state->iso4_last_tx_buffer) {
-        return;
-    }
-
-    bit_buffer_reset(state->iso4_last_tx_buffer);
-    bit_buffer_append_bytes(state->iso4_last_tx_buffer, bit_buffer_get_data(state->tx_buffer),
-                            bit_buffer_get_size_bytes(state->tx_buffer));
 }
 
 static bool zf_transport_nfc_is_replayable_iso_i_response(const uint8_t *data, size_t data_len) {
@@ -83,65 +110,69 @@ static bool zf_transport_nfc_is_replayable_iso_i_response(const uint8_t *data, s
     return (data[0] & 0xC2U) == ZF_NFC_PCB_BLOCK;
 }
 
-static bool zf_transport_nfc_replay_bit_buffer_if_i_response(ZfNfcTransportState *state,
-                                                             BitBuffer *buffer) {
-    const uint8_t *data = NULL;
-    size_t data_len = 0U;
+typedef struct {
+    bool iso4_last_tx_valid;
+    size_t iso4_last_tx_len;
+    uint8_t iso4_last_tx[ZF_NFC_LAST_TX_CAPACITY];
+} ZfNfcReplaySnapshot;
 
-    if (!state || !buffer) {
-        return false;
+static void zf_transport_nfc_snapshot_replay(ZfNfcTransportState *state,
+                                             ZfNfcReplaySnapshot *snapshot) {
+    if (!snapshot) {
+        return;
     }
 
-    data_len = bit_buffer_get_size_bytes(buffer);
-    data = bit_buffer_get_data(buffer);
-    if (!zf_transport_nfc_is_replayable_iso_i_response(data, data_len)) {
-        return false;
+    memset(snapshot, 0, sizeof(*snapshot));
+    if (!state) {
+        return;
     }
 
-    return zf_transport_nfc_send_frame(state, data, data_len);
+    snapshot->iso4_last_tx_valid = state->iso4_last_tx_valid;
+    snapshot->iso4_last_tx_len = state->iso4_last_tx_len;
+    memcpy(snapshot->iso4_last_tx, state->iso4_tx_frame, sizeof(snapshot->iso4_last_tx));
 }
 
-static bool zf_transport_nfc_send_listener_block(ZfNfcTransportState *state) {
-    bool sent = false;
+static void zf_transport_nfc_restore_replay(ZfNfcTransportState *state,
+                                            const ZfNfcReplaySnapshot *snapshot) {
+    if (!state || !snapshot) {
+        return;
+    }
 
-    if (!state || !state->iso4_layer || !state->iso4_frame_buffer || !state->tx_buffer) {
+    state->iso4_last_tx_valid = snapshot->iso4_last_tx_valid;
+    state->iso4_last_tx_len = snapshot->iso4_last_tx_len;
+    memcpy(state->iso4_tx_frame, snapshot->iso4_last_tx, sizeof(state->iso4_tx_frame));
+}
+
+static bool zf_transport_nfc_snapshot_has_replay(const ZfNfcReplaySnapshot *snapshot) {
+    if (!snapshot) {
         return false;
     }
 
-    if (!zf_nfc_iso4_layer_encode_response(state->iso4_layer, state->tx_buffer,
-                                           state->iso4_frame_buffer)) {
-        return false;
-    }
-    if (bit_buffer_get_size_bytes(state->iso4_frame_buffer) > 0U &&
-        (state->iso_pcb & ZF_NFC_PCB_BLOCK) == ZF_NFC_PCB_BLOCK) {
-        bit_buffer_set_byte(state->iso4_frame_buffer, 0U, state->iso_pcb);
-    }
-
-    sent = zf_transport_nfc_send_frame(state, bit_buffer_get_data(state->iso4_frame_buffer),
-                                       bit_buffer_get_size_bytes(state->iso4_frame_buffer));
-    if (sent) {
-        zf_transport_nfc_cache_last_iso_response(
-            state, bit_buffer_get_data(state->iso4_frame_buffer),
-            bit_buffer_get_size_bytes(state->iso4_frame_buffer));
-    }
-    return sent;
+    return snapshot->iso4_last_tx_valid || snapshot->iso4_last_tx_len > 0U;
 }
 
 bool zf_transport_nfc_send_frame(ZfNfcTransportState *state, const uint8_t *data, size_t data_len) {
-    if (!state || !state->nfc || !state->tx_buffer || (!data && data_len > 0U)) {
+    const uint8_t *tx_data = NULL;
+
+    if (!state || !state->nfc || !state->tx_buffer || (!data && data_len > 0U) ||
+        data_len > sizeof(state->iso4_tx_frame)) {
         return false;
     }
 
+    state->tx_frame_len = data_len;
+    if (data_len > 0U) {
+        memmove(state->iso4_tx_frame, data, data_len);
+    }
+    tx_data = state->iso4_tx_frame;
     bit_buffer_reset(state->tx_buffer);
-    bit_buffer_append_bytes(state->tx_buffer, data, data_len);
+    bit_buffer_append_bytes(state->tx_buffer, tx_data, data_len);
     iso14443_crc_append(Iso14443CrcTypeA, state->tx_buffer);
     const bool sent = nfc_listener_tx(state->nfc, state->tx_buffer) == NfcErrorNone;
     if (sent) {
-        if (zf_transport_nfc_is_replayable_iso_i_response(data, data_len)) {
-            zf_transport_nfc_cache_last_iso_response(state, data, data_len);
-            zf_transport_nfc_cache_last_tx_buffer(state);
+        if (zf_transport_nfc_is_replayable_iso_i_response(tx_data, data_len)) {
+            zf_transport_nfc_cache_last_iso_response(state, tx_data, data_len);
         }
-        zf_transport_nfc_trace_bytes("iso-tx", data, data_len);
+        zf_transport_nfc_trace_bytes("iso-tx", tx_data, data_len);
     }
     return sent;
 }
@@ -166,26 +197,20 @@ bool zf_transport_nfc_send_short_frame(ZfNfcTransportState *state, uint8_t data)
     return zf_transport_nfc_send_raw_bits(state, &data, 4U);
 }
 
+/*
+ * Encodes one ISO-DEP I-block response. PCB/CID are synthesized from the active
+ * ISO state, the chaining bit is set when more data follows, and the PCB toggle
+ * advances only after a successful send.
+ */
 bool zf_transport_nfc_send_iso_response(ZfNfcTransportState *state, const uint8_t *data,
                                         size_t data_len, bool chaining) {
-    uint8_t block[ZF_NFC_MAX_FRAME_INF_SIZE + 2U];
+    uint8_t block[ZF_NFC_MAX_TX_FRAME_INF_SIZE + 2U];
     size_t block_len = 0U;
     uint8_t pcb = 0U;
     bool sent = false;
 
-    if (!state || (!data && data_len > 0U) || data_len > ZF_NFC_MAX_FRAME_INF_SIZE) {
+    if (!state || (!data && data_len > 0U) || data_len > ZF_NFC_MAX_TX_FRAME_INF_SIZE) {
         return false;
-    }
-
-    if (!chaining && !state->iso4_tx_chain_active) {
-        bit_buffer_reset(state->tx_buffer);
-        if (data_len > 0U) {
-            bit_buffer_append_bytes(state->tx_buffer, data, data_len);
-        }
-        if (zf_transport_nfc_send_listener_block(state)) {
-            zf_transport_nfc_trace_bytes("apdu-tx", data, data_len);
-            return true;
-        }
     }
 
     pcb = (uint8_t)(ZF_NFC_PCB_BLOCK | (state->iso_pcb & 0x01U) |
@@ -201,20 +226,72 @@ bool zf_transport_nfc_send_iso_response(ZfNfcTransportState *state, const uint8_
     }
     sent = zf_transport_nfc_send_frame(state, block, block_len);
     if (sent) {
-        zf_transport_nfc_cache_last_iso_response(state, block, block_len);
         state->iso_pcb ^= 0x01U;
         zf_transport_nfc_trace_bytes("apdu-tx", data, data_len);
     }
     return sent;
 }
 
+/*
+ * Sends shim/discovery responses without overwriting the replay cache. DESFire
+ * probes and similar reader discovery traffic must not replace the last FIDO
+ * ISO response used for R-NAK/empty-I recovery.
+ */
+bool zf_transport_nfc_send_iso_response_preserving_replay(ZfNfcTransportState *state,
+                                                          const uint8_t *data, size_t data_len,
+                                                          bool chaining) {
+    ZfNfcReplaySnapshot snapshot;
+    bool restore_replay = false;
+    bool sent = false;
+
+    zf_transport_nfc_snapshot_replay(state, &snapshot);
+    restore_replay = zf_transport_nfc_snapshot_has_replay(&snapshot);
+    sent = zf_transport_nfc_send_iso_response(state, data, data_len, chaining);
+    if (restore_replay) {
+        zf_transport_nfc_restore_replay(state, &snapshot);
+    }
+    return sent;
+}
+
 bool zf_transport_nfc_send_r_ack(ZfNfcTransportState *state, uint8_t pcb) {
+    uint8_t block_number = (pcb & 0x01U);
+
+    zf_transport_nfc_ensure_reader_profile(state);
+    if (state && !state->reader_profile.r_ack_uses_incoming_block) {
+        block_number ^= 0x01U;
+    }
     const uint8_t ack[2] = {
-        (uint8_t)(ZF_NFC_PCB_R_BLOCK | (pcb & 0x01U) | ZF_NFC_PCB_BLOCK |
+        (uint8_t)(ZF_NFC_PCB_R_BLOCK | block_number | ZF_NFC_PCB_BLOCK |
                   (state && state->iso_cid_present ? ZF_NFC_PCB_CID : 0U)),
         state ? state->iso_cid : 0U,
     };
     return zf_transport_nfc_send_frame(state, ack, state && state->iso_cid_present ? 2U : 1U);
+}
+
+bool zf_transport_nfc_send_r_nak(ZfNfcTransportState *state, uint8_t pcb) {
+    const uint8_t nak[2] = {
+        (uint8_t)(ZF_NFC_PCB_R_BLOCK | (pcb & 0x01U) | ZF_NFC_PCB_BLOCK | ZF_NFC_PCB_CHAIN |
+                  (state && state->iso_cid_present ? ZF_NFC_PCB_CID : 0U)),
+        state ? state->iso_cid : 0U,
+    };
+    return zf_transport_nfc_send_frame(state, nak, state && state->iso_cid_present ? 2U : 1U);
+}
+
+bool zf_transport_nfc_send_wtx(ZfNfcTransportState *state) {
+    uint8_t frame[3] = {0};
+    size_t frame_len = 0U;
+
+    if (!state) {
+        return false;
+    }
+
+    frame[frame_len++] =
+        (uint8_t)(0xF2U | (state->iso_cid_present ? ZF_NFC_PCB_CID : 0U));
+    if (state->iso_cid_present) {
+        frame[frame_len++] = state->iso_cid;
+    }
+    frame[frame_len++] = 0x0AU;
+    return zf_transport_nfc_send_frame(state, frame, frame_len);
 }
 
 void zf_transport_nfc_clear_last_iso_response(ZfNfcTransportState *state) {
@@ -224,25 +301,20 @@ void zf_transport_nfc_clear_last_iso_response(ZfNfcTransportState *state) {
         return;
     }
 
-    had_cached_response = state->iso4_last_tx_valid || state->iso4_last_tx_len > 0U ||
-                          (state->iso4_last_tx_buffer &&
-                           bit_buffer_get_size_bytes(state->iso4_last_tx_buffer) > 0U) ||
-                          (state->iso4_frame_buffer &&
-                           bit_buffer_get_size_bytes(state->iso4_frame_buffer) > 0U);
+    had_cached_response = state->iso4_last_tx_valid || state->iso4_last_tx_len > 0U;
     state->iso4_last_tx_valid = false;
     state->iso4_last_tx_len = 0U;
-    memset(state->iso4_last_tx, 0, sizeof(state->iso4_last_tx));
-    if (state->iso4_last_tx_buffer) {
-        bit_buffer_reset(state->iso4_last_tx_buffer);
-    }
-    if (state->iso4_frame_buffer) {
-        bit_buffer_reset(state->iso4_frame_buffer);
-    }
+    memset(state->iso4_tx_frame, 0, sizeof(state->iso4_tx_frame));
     if (had_cached_response) {
         zf_transport_nfc_trace_cache_state("clear", state, 0U, 0U);
     }
 }
 
+/*
+ * Replays the last cacheable ISO I-block for reader recovery paths such as
+ * R-NAK or empty I-blocks. The cache is protocol recovery state, not a queued
+ * application response.
+ */
 bool zf_transport_nfc_replay_last_iso_response(ZfNfcTransportState *state) {
     if (!state) {
         zf_transport_nfc_trace_cache_state("replay-null", state, 0U, 0U);
@@ -250,18 +322,13 @@ bool zf_transport_nfc_replay_last_iso_response(ZfNfcTransportState *state) {
     }
 
     if (state->iso4_last_tx_valid && state->iso4_last_tx_len > 0U &&
-        state->iso4_last_tx_len <= sizeof(state->iso4_last_tx)) {
+        state->iso4_last_tx_len <= sizeof(state->iso4_tx_frame)) {
         bool sent = false;
 
-        sent = zf_transport_nfc_send_frame(state, state->iso4_last_tx, state->iso4_last_tx_len);
+        sent = zf_transport_nfc_send_frame(state, state->iso4_tx_frame, state->iso4_last_tx_len);
         zf_transport_nfc_trace_cache_state(sent ? "replay-array" : "replay-array-fail", state,
-                                           state->iso4_last_tx[0], state->iso4_last_tx_len);
+                                           state->iso4_tx_frame[0], state->iso4_last_tx_len);
         return sent;
-    }
-
-    if (zf_transport_nfc_replay_bit_buffer_if_i_response(state, state->iso4_frame_buffer)) {
-        zf_transport_nfc_trace_cache_state("replay-frame", state, 0U, state->iso4_last_tx_len);
-        return true;
     }
 
     zf_transport_nfc_trace_cache_state("replay-miss", state, 0U, 0U);
@@ -275,29 +342,61 @@ void zf_transport_nfc_clear_tx_chain(ZfNfcTransportState *state) {
 
     state->iso4_tx_chain_active = false;
     state->iso4_tx_chain_completed = false;
+    state->iso4_tx_chain_data = NULL;
     state->iso4_tx_chain_len = 0U;
     state->iso4_tx_chain_offset = 0U;
-    memset(state->iso4_tx_chain, 0, sizeof(state->iso4_tx_chain));
+    state->iso4_tx_chain_status_word = 0U;
+}
+
+static void zf_transport_nfc_build_tx_chain_chunk(const ZfNfcTransportState *state,
+                                                  uint8_t *chunk, size_t chunk_len) {
+    const size_t payload_len = state->iso4_tx_chain_len - 2U;
+    size_t absolute_offset = state->iso4_tx_chain_offset;
+
+    for (size_t i = 0U; i < chunk_len; ++i, ++absolute_offset) {
+        if (absolute_offset < payload_len) {
+            chunk[i] = state->iso4_tx_chain_data[absolute_offset];
+        } else {
+            const size_t sw_offset = absolute_offset - payload_len;
+            chunk[i] = sw_offset == 0U ? (uint8_t)(state->iso4_tx_chain_status_word >> 8)
+                                       : (uint8_t)state->iso4_tx_chain_status_word;
+        }
+    }
 }
 
 bool zf_transport_nfc_send_next_tx_chain_block(ZfNfcTransportState *state) {
+    uint8_t chunk[ZF_NFC_TX_CHAIN_CHUNK_SIZE];
     size_t remaining = 0U;
     size_t chunk_len = 0U;
     bool chaining = false;
     bool sent = false;
 
-    if (!state || !state->iso4_tx_chain_active ||
+    if (!state || !state->iso4_tx_chain_active || state->iso4_tx_chain_len < 2U ||
+        state->iso4_tx_chain_len > ZF_TRANSPORT_ARENA_SIZE ||
         state->iso4_tx_chain_offset >= state->iso4_tx_chain_len ||
-        state->iso4_tx_chain_len > sizeof(state->iso4_tx_chain)) {
+        (!state->iso4_tx_chain_data && state->iso4_tx_chain_len > 2U)) {
+#if defined(ZF_RELEASE_DIAGNOSTICS) && ZF_RELEASE_DIAGNOSTICS
+        zf_transport_nfc_trace_format(
+            "tx-chain invalid active=%u len=%u off=%u data=%u arena=%u",
+            state && state->iso4_tx_chain_active ? 1U : 0U,
+            state ? (unsigned)state->iso4_tx_chain_len : 0U,
+            state ? (unsigned)state->iso4_tx_chain_offset : 0U,
+            state && state->iso4_tx_chain_data ? 1U : 0U, (unsigned)ZF_TRANSPORT_ARENA_SIZE);
+#endif
         return false;
     }
 
     remaining = state->iso4_tx_chain_len - state->iso4_tx_chain_offset;
     chunk_len = remaining > ZF_NFC_TX_CHAIN_CHUNK_SIZE ? ZF_NFC_TX_CHAIN_CHUNK_SIZE : remaining;
     chaining = remaining > chunk_len;
-    sent = zf_transport_nfc_send_iso_response(
-        state, &state->iso4_tx_chain[state->iso4_tx_chain_offset], chunk_len, chaining);
+    zf_transport_nfc_build_tx_chain_chunk(state, chunk, chunk_len);
+    sent = zf_transport_nfc_send_iso_response(state, chunk, chunk_len, chaining);
     if (!sent) {
+#if defined(ZF_RELEASE_DIAGNOSTICS) && ZF_RELEASE_DIAGNOSTICS
+        zf_transport_nfc_trace_format("tx-chain send fail len=%u rem=%u chain=%u",
+                                      (unsigned)chunk_len, (unsigned)remaining,
+                                      chaining ? 1U : 0U);
+#endif
         return false;
     }
 
@@ -305,29 +404,29 @@ bool zf_transport_nfc_send_next_tx_chain_block(ZfNfcTransportState *state) {
     if (state->iso4_tx_chain_offset >= state->iso4_tx_chain_len) {
         state->iso4_tx_chain_active = false;
         state->iso4_tx_chain_completed = true;
+        state->iso4_tx_chain_data = NULL;
         state->iso4_tx_chain_len = 0U;
         state->iso4_tx_chain_offset = 0U;
-        memset(state->iso4_tx_chain, 0, sizeof(state->iso4_tx_chain));
+        state->iso4_tx_chain_status_word = 0U;
     }
     return true;
 }
 
 bool zf_transport_nfc_begin_chained_apdu_payload(ZfNfcTransportState *state, const uint8_t *data,
                                                  size_t data_len, uint16_t status_word) {
-    const size_t total_len = data_len + 2U;
+    size_t total_len = 0U;
 
-    if (!state || (!data && data_len > 0U) || total_len > sizeof(state->iso4_tx_chain)) {
+    if (!state || (!data && data_len > 0U) || data_len > ZF_TRANSPORT_ARENA_SIZE - 2U ||
+        data_len + 2U > ZF_TRANSPORT_ARENA_SIZE) {
         return false;
     }
 
+    total_len = data_len + 2U;
     zf_transport_nfc_clear_tx_chain(state);
-    if (data_len > 0U) {
-        memcpy(state->iso4_tx_chain, data, data_len);
-    }
-    state->iso4_tx_chain[data_len] = (uint8_t)(status_word >> 8);
-    state->iso4_tx_chain[data_len + 1U] = (uint8_t)status_word;
+    state->iso4_tx_chain_data = data;
     state->iso4_tx_chain_len = total_len;
     state->iso4_tx_chain_offset = 0U;
+    state->iso4_tx_chain_status_word = status_word;
     state->iso4_tx_chain_active = true;
     return zf_transport_nfc_send_next_tx_chain_block(state);
 }
@@ -335,6 +434,7 @@ bool zf_transport_nfc_begin_chained_apdu_payload(ZfNfcTransportState *state, con
 bool zf_transport_nfc_send_status_word(ZfNfcTransportState *state, uint16_t status_word) {
     const uint8_t bytes[2] = {(uint8_t)(status_word >> 8), (uint8_t)status_word};
 
+    zf_transport_nfc_clear_tx_chain(state);
     return zf_transport_nfc_send_iso_response(state, bytes, sizeof(bytes), false);
 }
 
@@ -350,28 +450,17 @@ bool zf_transport_nfc_send_forced_iso_status_word(ZfNfcTransportState *state,
 bool zf_transport_nfc_send_apdu_payload(ZfNfcTransportState *state, const uint8_t *data,
                                         size_t data_len, uint16_t status_word) {
     size_t frame_len = data_len + 2U;
-    uint8_t block[ZF_NFC_MAX_FRAME_INF_SIZE + 2U];
+    uint8_t block[ZF_NFC_MAX_TX_FRAME_INF_SIZE + 2U];
     size_t block_len = 0U;
     uint8_t pcb = 0U;
     uint8_t sw[2] = {(uint8_t)(status_word >> 8), (uint8_t)status_word};
     bool sent = false;
 
-    if (!state || (!data && data_len > 0U) || frame_len > ZF_NFC_MAX_FRAME_INF_SIZE) {
+    if (!state || (!data && data_len > 0U) || frame_len > ZF_NFC_MAX_TX_FRAME_INF_SIZE) {
         return false;
     }
 
-    if (state->iso4_layer) {
-        bit_buffer_reset(state->tx_buffer);
-        if (data_len > 0U) {
-            bit_buffer_append_bytes(state->tx_buffer, data, data_len);
-        }
-        bit_buffer_append_bytes(state->tx_buffer, sw, sizeof(sw));
-        if (zf_transport_nfc_send_listener_block(state)) {
-            zf_transport_nfc_trace_apdu_tx(data, data_len, status_word);
-            return true;
-        }
-    }
-
+    zf_transport_nfc_clear_tx_chain(state);
     pcb = (uint8_t)(ZF_NFC_PCB_BLOCK | (state->iso_pcb & 0x01U) |
                     (state->iso_cid_present ? ZF_NFC_PCB_CID : 0U));
     block[block_len++] = pcb;
@@ -386,9 +475,24 @@ bool zf_transport_nfc_send_apdu_payload(ZfNfcTransportState *state, const uint8_
     block_len += sizeof(sw);
     sent = zf_transport_nfc_send_frame(state, block, block_len);
     if (sent) {
-        zf_transport_nfc_cache_last_iso_response(state, block, block_len);
         state->iso_pcb ^= 0x01U;
         zf_transport_nfc_trace_apdu_tx(data, data_len, status_word);
+    }
+    return sent;
+}
+
+bool zf_transport_nfc_send_apdu_payload_preserving_replay(ZfNfcTransportState *state,
+                                                          const uint8_t *data, size_t data_len,
+                                                          uint16_t status_word) {
+    ZfNfcReplaySnapshot snapshot;
+    bool restore_replay = false;
+    bool sent = false;
+
+    zf_transport_nfc_snapshot_replay(state, &snapshot);
+    restore_replay = zf_transport_nfc_snapshot_has_replay(&snapshot);
+    sent = zf_transport_nfc_send_apdu_payload(state, data, data_len, status_word);
+    if (restore_replay) {
+        zf_transport_nfc_restore_replay(state, &snapshot);
     }
     return sent;
 }
@@ -397,16 +501,21 @@ void zf_transport_nfc_prepare_listener(ZfNfcTransportState *state) {
     static const uint8_t uid[] = {0x04, 0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0xF6};
     static const uint8_t atqa[] = {0x44, 0x00};
     Iso14443_3aData *base_data = NULL;
+    const ZfNfcReaderProfile *profile = NULL;
 
+    zf_transport_nfc_ensure_reader_profile(state);
+    profile = &state->reader_profile;
     iso14443_4a_reset(state->iso14443_4a_data);
     iso14443_4a_set_uid(state->iso14443_4a_data, uid, sizeof(uid));
     base_data = iso14443_4a_get_base_data(state->iso14443_4a_data);
     iso14443_3a_set_atqa(base_data, atqa);
     iso14443_3a_set_sak(base_data, 0x20U);
-    state->iso14443_4a_data->ats_data.tl = 0x05U;
-    state->iso14443_4a_data->ats_data.t0 = 0x78U;
-    state->iso14443_4a_data->ats_data.ta_1 = 0x91U;
-    state->iso14443_4a_data->ats_data.tb_1 = 0xE8U;
-    state->iso14443_4a_data->ats_data.tc_1 = 0x00U;
+    state->iso14443_4a_data->ats_data.tl = profile->ats_len >= 1U ? profile->ats[0] : 0x05U;
+    state->iso14443_4a_data->ats_data.t0 = profile->ats_len >= 2U ? profile->ats[1] : 0x78U;
+    state->iso14443_4a_data->ats_data.ta_1 = profile->ats_len >= 3U ? profile->ats[2] : 0x91U;
+    state->iso14443_4a_data->ats_data.tb_1 = profile->ats_len >= 4U ? profile->ats[3] : 0xE8U;
+    state->iso14443_4a_data->ats_data.tc_1 = profile->ats_len >= 5U ? profile->ats[4] : 0x00U;
     simple_array_reset(state->iso14443_4a_data->ats_data.t1_tk);
 }
+
+#endif

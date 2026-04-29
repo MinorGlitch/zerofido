@@ -25,6 +25,10 @@
 
 typedef struct ZerofidoApp ZerofidoApp;
 
+/*
+ * Stores remaining getAssertion matches after the first response. The queue is
+ * bound to the transport session and expires after the CTAP assertion window.
+ */
 void zf_ctap_assertion_queue_clear(ZerofidoApp *app);
 void zf_ctap_assertion_queue_seed(ZerofidoApp *app, ZfTransportSessionId session_id,
                                   const ZfGetAssertionRequest *request, bool uv_verified,

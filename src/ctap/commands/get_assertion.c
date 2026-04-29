@@ -17,6 +17,7 @@
 
 #include "get_assertion.h"
 
+#include <furi.h>
 #include <string.h>
 
 #include "../core/approval.h"
@@ -32,6 +33,30 @@
 #include "../../zerofido_crypto.h"
 #include "../../zerofido_notify.h"
 #include "../../zerofido_store.h"
+
+#if defined(ZF_RELEASE_DIAGNOSTICS) && ZF_RELEASE_DIAGNOSTICS
+#define ZF_CTAP_GA_DIAG(text) FURI_LOG_I("ZeroFIDO:CTAP", "GA %s", (text))
+#else
+#define ZF_CTAP_GA_DIAG(text)                                                                      \
+    do {                                                                                           \
+        (void)(text);                                                                              \
+    } while (false)
+#endif
+
+typedef struct {
+    ZfGetAssertionRequest request;
+    uint16_t matches[ZF_MAX_CREDENTIALS];
+    ZfClientPinState pin_state;
+    ZfCredentialRecord selected_record;
+    union {
+        ZfCredentialDescriptor descriptors[ZF_MAX_ALLOW_LIST];
+        ZfAssertionResponseScratch response;
+        uint8_t store_io[ZF_STORE_RECORD_IO_SIZE];
+    } work;
+} ZfGetAssertionScratch;
+
+_Static_assert(sizeof(ZfGetAssertionScratch) <= ZF_COMMAND_SCRATCH_SIZE,
+               "getAssertion scratch exceeds command arena");
 
 /*
  * Prepares a signed assertion response and computes the next sign counter, but
@@ -93,7 +118,7 @@ static bool zf_ctap_snapshot_index_entry_locked(ZerofidoApp *app, size_t record_
 }
 
 static bool zf_ctap_selected_record_still_current_locked(ZerofidoApp *app, size_t record_index,
-                                                        const ZfCredentialRecord *record) {
+                                                         const ZfCredentialRecord *record) {
     if (!app->store.records || record_index >= app->store.count) {
         return false;
     }
@@ -102,8 +127,8 @@ static bool zf_ctap_selected_record_still_current_locked(ZerofidoApp *app, size_
 }
 
 static size_t zf_ctap_resolve_assertion_matches_snapshot(ZerofidoApp *app,
-                                                        const ZfGetAssertionRequest *request,
-                                                        bool uv_verified, uint16_t *matches) {
+                                                         const ZfGetAssertionRequest *request,
+                                                         bool uv_verified, uint16_t *matches) {
     size_t match_count = 0;
 
     furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
@@ -139,6 +164,96 @@ static bool zf_ctap_load_assertion_record(ZerofidoApp *app, size_t record_index,
     return true;
 }
 
+static uint8_t zf_ctap_publish_assertion_counter(ZerofidoApp *app,
+                                                 const ZfCredentialIndexEntry *entry,
+                                                 ZfCredentialRecord *record, size_t record_index,
+                                                 uint32_t next_sign_count) {
+    uint32_t prepared_counter_high_water = 0;
+
+    record->sign_count = next_sign_count;
+    if (!zf_store_prepare_counter_advance(app->storage, entry, record,
+                                          &prepared_counter_high_water)) {
+        return ZF_CTAP_ERR_OTHER;
+    }
+
+    furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
+    if (!zf_ctap_selected_record_still_current_locked(app, record_index, record)) {
+        furi_mutex_release(app->ui_mutex);
+        return ZF_CTAP_ERR_NO_CREDENTIALS;
+    }
+    if (!zf_store_publish_counter_advance(&app->store, record, prepared_counter_high_water)) {
+        furi_mutex_release(app->ui_mutex);
+        return ZF_CTAP_ERR_OTHER;
+    }
+    zf_ctap_assertion_queue_clear(app);
+    furi_mutex_release(app->ui_mutex);
+    zerofido_notify_success(app);
+    return ZF_CTAP_SUCCESS;
+}
+
+static uint8_t zf_ctap_load_and_prepare_assertion(
+    ZerofidoApp *app, const ZfAssertionRequestData *request, const ZfClientPinState *pin_state,
+    size_t record_index, bool user_present, bool uv_verified, bool include_user_details,
+    bool include_count, size_t match_count, bool user_selected, bool include_user_selected,
+    ZfCredentialRecord *record, ZfCredentialIndexEntry *entry, uint8_t *store_io,
+    size_t store_io_size, ZfAssertionResponseScratch *response_scratch, uint32_t *next_sign_count,
+    uint8_t *out, size_t out_capacity, size_t *out_len) {
+    if (!zf_ctap_load_assertion_record(app, record_index, request->rp_id, record, entry, store_io,
+                                       store_io_size)) {
+        return ZF_CTAP_ERR_NO_CREDENTIALS;
+    }
+    return zf_prepare_assertion_response(request, pin_state, record, user_present, uv_verified,
+                                         include_user_details, include_count, match_count,
+                                         user_selected, include_user_selected, next_sign_count,
+                                         response_scratch, out, out_capacity, out_len);
+}
+
+static uint8_t zf_ctap_finish_assertion(
+    ZerofidoApp *app, ZfTransportSessionId session_id, const ZfGetAssertionRequest *request,
+    ZfGetAssertionScratch *scratch, bool resolve_match, size_t record_index, bool user_present,
+    bool uv_verified, bool include_user_details, bool include_user_selected,
+    bool poll_before_publish, bool *maintenance_acquired, uint8_t *out, size_t out_capacity,
+    size_t *out_len) {
+    uint32_t next_sign_count = 0;
+    ZfCredentialIndexEntry selected_entry = {0};
+    uint8_t status = ZF_CTAP_ERR_OTHER;
+
+    if (!zf_ctap_begin_maintenance(app)) {
+        return ZF_CTAP_ERR_NOT_ALLOWED;
+    }
+    *maintenance_acquired = true;
+
+    if (resolve_match) {
+        size_t match_count = zf_ctap_resolve_assertion_matches_snapshot(
+            app, request, uv_verified, scratch->matches);
+        if (match_count == 0) {
+            return ZF_CTAP_ERR_NO_CREDENTIALS;
+        }
+        record_index = scratch->matches[0];
+    }
+
+    memset(&scratch->selected_record, 0, sizeof(scratch->selected_record));
+    status = zf_ctap_load_and_prepare_assertion(
+        app, &request->assertion, &scratch->pin_state, record_index, user_present, uv_verified,
+        include_user_details, false, 1U, include_user_selected, include_user_selected,
+        &scratch->selected_record, &selected_entry, scratch->work.store_io,
+        sizeof(scratch->work.store_io), &scratch->work.response, &next_sign_count, out,
+        out_capacity, out_len);
+    if (status != ZF_CTAP_SUCCESS) {
+        return status;
+    }
+
+    if (poll_before_publish) {
+        status = zf_transport_poll_cbor_control(app, session_id);
+        if (status != ZF_CTAP_SUCCESS) {
+            return status;
+        }
+    }
+
+    return zf_ctap_publish_assertion_counter(app, &selected_entry, &scratch->selected_record,
+                                             record_index, next_sign_count);
+}
+
 /*
  * Assertion handling has three security-relevant paths:
  * - up=false: no touch, no UP flag, first matching credential only.
@@ -151,40 +266,22 @@ static bool zf_ctap_load_assertion_record(ZerofidoApp *app, size_t record_index,
 uint8_t zf_ctap_handle_get_assertion(ZerofidoApp *app, ZfTransportSessionId session_id,
                                      const uint8_t *data, size_t data_len, uint8_t *out,
                                      size_t out_capacity, size_t *out_len) {
-    typedef struct {
-        ZfGetAssertionRequest request;
-        uint16_t matches[ZF_MAX_CREDENTIALS];
-        ZfClientPinState pin_state;
-        ZfCredentialRecord selected_record;
-        ZfCredentialIndexEntry selected_entry;
-        union {
-            ZfCredentialDescriptor descriptors[ZF_MAX_ALLOW_LIST];
-            ZfAssertionResponseScratch response;
-            uint8_t store_io[ZF_STORE_RECORD_IO_SIZE];
-        } work;
-    } ZfGetAssertionScratch;
-
-    _Static_assert(sizeof(ZfGetAssertionScratch) <= ZF_COMMAND_SCRATCH_SIZE,
-                   "getAssertion scratch exceeds command arena");
-
     ZfGetAssertionScratch *scratch = zf_ctap_command_scratch(app, sizeof(*scratch));
     size_t match_count = 0;
     bool uv_verified = false;
     bool uses_allow_list = false;
     bool maintenance_acquired = false;
-    uint32_t prepared_counter_high_water = 0;
-    uint32_t next_sign_count = 0;
     uint8_t status = ZF_CTAP_ERR_OTHER;
     ZfGetAssertionRequest *request = NULL;
     uint16_t *matches = NULL;
-    ZfCredentialRecord *selected_record = NULL;
 
+    ZF_CTAP_GA_DIAG("entry");
     if (!scratch) {
         return ZF_CTAP_ERR_OTHER;
     }
+    ZF_CTAP_GA_DIAG("scratch");
     request = &scratch->request;
     matches = scratch->matches;
-    selected_record = &scratch->selected_record;
     request->allow_list.entries = scratch->work.descriptors;
     request->allow_list.capacity =
         sizeof(scratch->work.descriptors) / sizeof(scratch->work.descriptors[0]);
@@ -193,6 +290,7 @@ uint8_t zf_ctap_handle_get_assertion(ZerofidoApp *app, ZfTransportSessionId sess
     if (status != ZF_CTAP_SUCCESS) {
         goto cleanup;
     }
+    ZF_CTAP_GA_DIAG("parsed");
     status = zf_ctap_validate_pin_auth_protocol(request->has_pin_auth, request->has_pin_protocol,
                                                 request->pin_protocol,
                                                 app->capabilities.pin_uv_auth_protocol_2_enabled);
@@ -210,6 +308,7 @@ uint8_t zf_ctap_handle_get_assertion(ZerofidoApp *app, ZfTransportSessionId sess
         status = ZF_CTAP_ERR_UNSUPPORTED_OPTION;
         goto cleanup;
     }
+    ZF_CTAP_GA_DIAG("clear queue");
     furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
     zf_ctap_assertion_queue_clear(app);
     furi_mutex_release(app->ui_mutex);
@@ -231,80 +330,32 @@ uint8_t zf_ctap_handle_get_assertion(ZerofidoApp *app, ZfTransportSessionId sess
     if (status != ZF_CTAP_SUCCESS) {
         goto cleanup;
     }
+    ZF_CTAP_GA_DIAG("pin ok");
     status = zf_transport_poll_cbor_control(app, session_id);
     if (status != ZF_CTAP_SUCCESS) {
         goto cleanup;
     }
 
     if (request->has_up && !request->up) {
-        memset(selected_record, 0, sizeof(*selected_record));
-        next_sign_count = 0;
+        ZF_CTAP_GA_DIAG("silent");
 
-        match_count = zf_ctap_resolve_assertion_matches_snapshot(app, request, uv_verified, matches);
-        if (match_count == 0) {
-            status = ZF_CTAP_ERR_NO_CREDENTIALS;
-            goto cleanup;
-        }
-
-        if (!zf_ctap_begin_maintenance(app)) {
-            status = ZF_CTAP_ERR_NOT_ALLOWED;
-            goto cleanup;
-        }
-        maintenance_acquired = true;
-        match_count = zf_ctap_resolve_assertion_matches_snapshot(app, request, uv_verified, matches);
-        if (match_count == 0) {
-            status = ZF_CTAP_ERR_NO_CREDENTIALS;
-            goto cleanup;
-        }
-        if (!zf_ctap_load_assertion_record(app, matches[0], request->assertion.rp_id,
-                                           selected_record,
-                                           &scratch->selected_entry, scratch->work.store_io,
-                                           sizeof(scratch->work.store_io))) {
-            status = ZF_CTAP_ERR_NO_CREDENTIALS;
-            goto cleanup;
-        }
-        status = zf_prepare_assertion_response(
-            &request->assertion, &scratch->pin_state, selected_record, false, uv_verified,
-            uv_verified && !uses_allow_list, false, 1U, false, false,
-            &next_sign_count, &scratch->work.response, out, out_capacity, out_len);
-        if (status != ZF_CTAP_SUCCESS) {
-            goto cleanup;
-        }
-        selected_record->sign_count = next_sign_count;
-        if (!zf_store_prepare_counter_advance(app->storage, &scratch->selected_entry,
-                                              selected_record, &prepared_counter_high_water)) {
-            status = ZF_CTAP_ERR_OTHER;
-            goto cleanup;
-        }
-        furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
-        if (!zf_ctap_selected_record_still_current_locked(app, matches[0], selected_record)) {
-            furi_mutex_release(app->ui_mutex);
-            status = ZF_CTAP_ERR_NO_CREDENTIALS;
-            goto cleanup;
-        }
-        if (!zf_store_publish_counter_advance(&app->store, selected_record,
-                                              prepared_counter_high_water)) {
-            furi_mutex_release(app->ui_mutex);
-            status = ZF_CTAP_ERR_OTHER;
-            goto cleanup;
-        }
-        zf_ctap_assertion_queue_clear(app);
-        furi_mutex_release(app->ui_mutex);
-        zerofido_notify_success(app);
-        status = ZF_CTAP_SUCCESS;
+        status = zf_ctap_finish_assertion(
+            app, session_id, request, scratch, true, 0, false, uv_verified,
+            uv_verified && !uses_allow_list, false, false, &maintenance_acquired, out,
+            out_capacity, out_len);
         goto cleanup;
     }
 
     match_count = zf_ctap_resolve_assertion_matches_snapshot(app, request, uv_verified, matches);
+    ZF_CTAP_GA_DIAG("matches");
 
     if (!uses_allow_list && match_count > 1) {
+        ZF_CTAP_GA_DIAG("select");
         uint32_t selected_record_index = 0;
-        memset(selected_record, 0, sizeof(*selected_record));
-        next_sign_count = 0;
 
-        status = zf_ctap_request_assertion_selection(app, request->assertion.rp_id, matches,
-                                                     match_count, session_id,
-                                                     &selected_record_index);
+        status =
+            zf_ctap_request_assertion_selection(app, request->assertion.rp_id, matches, match_count,
+                                                session_id, &selected_record_index);
         if (status != ZF_CTAP_SUCCESS) {
             goto cleanup;
         }
@@ -312,128 +363,43 @@ uint8_t zf_ctap_handle_get_assertion(ZerofidoApp *app, ZfTransportSessionId sess
         if (status != ZF_CTAP_SUCCESS) {
             goto cleanup;
         }
-        if (!zf_ctap_begin_maintenance(app)) {
-            status = ZF_CTAP_ERR_NOT_ALLOWED;
-            goto cleanup;
-        }
-        maintenance_acquired = true;
-
-        if (!zf_ctap_load_assertion_record(app, selected_record_index, request->assertion.rp_id,
-                                           selected_record, &scratch->selected_entry,
-                                           scratch->work.store_io,
-                                           sizeof(scratch->work.store_io))) {
-            status = ZF_CTAP_ERR_NO_CREDENTIALS;
-            goto cleanup;
-        }
-        status = zf_prepare_assertion_response(&request->assertion, &scratch->pin_state,
-                                               selected_record, true, uv_verified, uv_verified,
-                                               false, 1, true,
-                                               app->capabilities.advertise_fido_2_1,
-                                               &next_sign_count, &scratch->work.response, out,
-                                               out_capacity, out_len);
-        if (status != ZF_CTAP_SUCCESS) {
-            goto cleanup;
-        }
-        selected_record->sign_count = next_sign_count;
-
-        status = zf_transport_poll_cbor_control(app, session_id);
-        if (status != ZF_CTAP_SUCCESS) {
-            goto cleanup;
-        }
-        if (!zf_store_prepare_counter_advance(app->storage, &scratch->selected_entry,
-                                              selected_record, &prepared_counter_high_water)) {
-            status = ZF_CTAP_ERR_OTHER;
-            goto cleanup;
-        }
-
-        furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
-        if (!zf_ctap_selected_record_still_current_locked(app, selected_record_index,
-                                                          selected_record)) {
-            furi_mutex_release(app->ui_mutex);
-            status = ZF_CTAP_ERR_NO_CREDENTIALS;
-            goto cleanup;
-        }
-        if (!zf_store_publish_counter_advance(&app->store, selected_record,
-                                              prepared_counter_high_water)) {
-            furi_mutex_release(app->ui_mutex);
-            status = ZF_CTAP_ERR_OTHER;
-            goto cleanup;
-        }
-        zf_ctap_assertion_queue_clear(app);
-        furi_mutex_release(app->ui_mutex);
-        zerofido_notify_success(app);
-        status = ZF_CTAP_SUCCESS;
+        status = zf_ctap_finish_assertion(
+            app, session_id, request, scratch, false, selected_record_index, true, uv_verified,
+            uv_verified, app->capabilities.advertise_fido_2_1, true, &maintenance_acquired, out,
+            out_capacity, out_len);
         goto cleanup;
     }
 
-    status =
-        zf_ctap_request_approval(app, "Authenticate", request->assertion.rp_id, "Touch required",
-                                 session_id);
+    status = zf_ctap_request_approval(app, "Authenticate", request->assertion.rp_id,
+                                      "Touch required", session_id);
     if (status != ZF_CTAP_SUCCESS) {
         goto cleanup;
     }
+    ZF_CTAP_GA_DIAG("approved");
     status = zf_transport_poll_cbor_control(app, session_id);
     if (status != ZF_CTAP_SUCCESS) {
         goto cleanup;
     }
-    if (!zf_ctap_begin_maintenance(app)) {
-        status = ZF_CTAP_ERR_NOT_ALLOWED;
-        goto cleanup;
-    }
-    maintenance_acquired = true;
+    ZF_CTAP_GA_DIAG("maintenance");
 
-    match_count = zf_ctap_resolve_assertion_matches_snapshot(app, request, uv_verified, matches);
-    if (match_count == 0) {
-        status = ZF_CTAP_ERR_NO_CREDENTIALS;
-        goto cleanup;
-    }
-
-    memset(selected_record, 0, sizeof(*selected_record));
-    next_sign_count = 0;
-    if (!zf_ctap_load_assertion_record(app, matches[0], request->assertion.rp_id, selected_record,
-                                       &scratch->selected_entry, scratch->work.store_io,
-                                       sizeof(scratch->work.store_io))) {
-        status = ZF_CTAP_ERR_NO_CREDENTIALS;
-        goto cleanup;
-    }
-    status = zf_prepare_assertion_response(&request->assertion, &scratch->pin_state,
-                                           selected_record, true, uv_verified,
-                                           uv_verified && !uses_allow_list, false, 1U, false, false,
-                                           &next_sign_count, &scratch->work.response, out, out_capacity,
-                                           out_len);
+    status = zf_ctap_finish_assertion(
+        app, session_id, request, scratch, true, 0, true, uv_verified,
+        uv_verified && !uses_allow_list, false, true, &maintenance_acquired, out, out_capacity,
+        out_len);
+    ZF_CTAP_GA_DIAG("loaded");
+    ZF_CTAP_GA_DIAG("response");
     if (status != ZF_CTAP_SUCCESS) {
         goto cleanup;
     }
-
-    status = zf_transport_poll_cbor_control(app, session_id);
-    if (status != ZF_CTAP_SUCCESS) {
-        goto cleanup;
-    }
-    selected_record->sign_count = next_sign_count;
-    if (!zf_store_prepare_counter_advance(app->storage, &scratch->selected_entry, selected_record,
-                                          &prepared_counter_high_water)) {
-        status = ZF_CTAP_ERR_OTHER;
-        goto cleanup;
-    }
-
-    furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
-    if (!zf_ctap_selected_record_still_current_locked(app, matches[0], selected_record)) {
-        furi_mutex_release(app->ui_mutex);
-        status = ZF_CTAP_ERR_NO_CREDENTIALS;
-        goto cleanup;
-    }
-    if (!zf_store_publish_counter_advance(&app->store, selected_record,
-                                          prepared_counter_high_water)) {
-        furi_mutex_release(app->ui_mutex);
-        status = ZF_CTAP_ERR_OTHER;
-        goto cleanup;
-    }
-    zf_ctap_assertion_queue_clear(app);
-    furi_mutex_release(app->ui_mutex);
-    zerofido_notify_success(app);
-    status = ZF_CTAP_SUCCESS;
+    ZF_CTAP_GA_DIAG("counter");
+    ZF_CTAP_GA_DIAG("success");
 
 cleanup:
+#if defined(ZF_RELEASE_DIAGNOSTICS) && ZF_RELEASE_DIAGNOSTICS
+    if (status != ZF_CTAP_SUCCESS) {
+        FURI_LOG_I("ZeroFIDO:CTAP", "GA error=%02X", status);
+    }
+#endif
     if (maintenance_acquired) {
         zf_ctap_end_maintenance(app);
     }

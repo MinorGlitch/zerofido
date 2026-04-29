@@ -9,6 +9,7 @@
 #include "furi_hal.h"
 #include "furi_hal_random.h"
 #include "furi_hal_usb_hid_u2f.h"
+#include "flipper_format/flipper_format.h"
 #include "mbedtls/ecp.h"
 #include "mbedtls/ecdsa.h"
 #include "mbedtls/md.h"
@@ -59,6 +60,14 @@ struct FileInfo {
     int unused;
 };
 
+struct FlipperFormat {
+    int unused;
+};
+
+struct FuriString {
+    char value[64];
+};
+
 struct FuriHalUsbInterface {
     int unused;
 };
@@ -67,6 +76,7 @@ struct FuriThread {
     FuriThreadCallback callback;
     void *context;
     size_t stack_size;
+    FuriThreadPriority priority;
     bool started;
     bool joined;
     bool freed;
@@ -147,6 +157,12 @@ static size_t g_thread_flags_set_count = 0;
 static FuriThread g_nfc_worker_thread;
 static uint32_t g_last_thread_wait_timeout = 0;
 static size_t g_thread_flag_wait_call_count = 0;
+static FuriMutex *g_thread_start_observed_mutex = NULL;
+static size_t g_thread_start_observed_depth = 0;
+static size_t g_thread_join_count = 0;
+static size_t g_thread_free_count = 0;
+static FuriMutex *g_thread_join_observed_mutex = NULL;
+static size_t g_thread_join_observed_depth = 0;
 static FuriStatus g_semaphore_results[8];
 static size_t g_semaphore_result_count = 0;
 static size_t g_semaphore_result_index = 0;
@@ -165,12 +181,20 @@ static uint8_t g_last_nfc_tx[320];
 static size_t g_last_nfc_tx_bits = 0;
 static size_t g_last_nfc_tx_len = 0;
 static size_t g_nfc_tx_count = 0;
+static bool g_nfc_alloc_result = true;
+static bool g_nfc_listener_alloc_result = true;
 static size_t g_mutex_max_depth = 0;
 static char g_last_status_text[64];
 static char g_last_log_text[192];
 static char g_log_text[4096];
 static size_t g_log_i_count = 0;
+static bool g_bit_buffer_scrub_on_reset = false;
 static bool g_ctap2_saw_transport_auto_accept = false;
+static bool g_ctap2_request_response_overlap = false;
+static size_t g_ctap2_large_response_len = 0U;
+static bool g_get_info_builder_called = false;
+static bool g_get_info_builder_saw_nfc_transport = false;
+static bool g_get_info_builder_saw_usb_transport = false;
 static bool g_u2f_cert_assets_present = true;
 static bool g_u2f_cert_check_result = true;
 static bool g_u2f_cert_key_load_result = true;
@@ -261,6 +285,12 @@ static void test_reset(void) {
     memset(&g_nfc_worker_thread, 0, sizeof(g_nfc_worker_thread));
     g_last_thread_wait_timeout = 0;
     g_thread_flag_wait_call_count = 0;
+    g_thread_start_observed_mutex = NULL;
+    g_thread_start_observed_depth = 0;
+    g_thread_join_count = 0;
+    g_thread_free_count = 0;
+    g_thread_join_observed_mutex = NULL;
+    g_thread_join_observed_depth = 0;
     memset(g_semaphore_results, 0, sizeof(g_semaphore_results));
     g_semaphore_result_count = 0;
     g_semaphore_result_index = 0;
@@ -279,12 +309,20 @@ static void test_reset(void) {
     g_last_nfc_tx_bits = 0;
     g_last_nfc_tx_len = 0;
     g_nfc_tx_count = 0;
+    g_nfc_alloc_result = true;
+    g_nfc_listener_alloc_result = true;
     g_mutex_max_depth = 0;
     memset(g_last_status_text, 0, sizeof(g_last_status_text));
     memset(g_last_log_text, 0, sizeof(g_last_log_text));
     memset(g_log_text, 0, sizeof(g_log_text));
     g_log_i_count = 0;
+    g_bit_buffer_scrub_on_reset = false;
     g_ctap2_saw_transport_auto_accept = false;
+    g_ctap2_request_response_overlap = false;
+    g_ctap2_large_response_len = 0U;
+    g_get_info_builder_called = false;
+    g_get_info_builder_saw_nfc_transport = false;
+    g_get_info_builder_saw_usb_transport = false;
     g_u2f_cert_assets_present = true;
     g_u2f_cert_check_result = true;
     g_u2f_cert_key_load_result = true;
@@ -431,24 +469,33 @@ void furi_thread_set_appid(FuriThread *thread, const char *appid) {
 }
 
 void furi_thread_set_priority(FuriThread *thread, FuriThreadPriority priority) {
-    UNUSED(thread);
-    UNUSED(priority);
+    if (thread) {
+        thread->priority = priority;
+    }
 }
 
 void furi_thread_start(FuriThread *thread) {
     if (thread) {
+        if (g_thread_start_observed_mutex) {
+            g_thread_start_observed_depth = g_thread_start_observed_mutex->depth;
+        }
         thread->started = true;
     }
 }
 
 void furi_thread_join(FuriThread *thread) {
     if (thread) {
+        g_thread_join_count++;
+        if (g_thread_join_observed_mutex) {
+            g_thread_join_observed_depth = g_thread_join_observed_mutex->depth;
+        }
         thread->joined = true;
     }
 }
 
 void furi_thread_free(FuriThread *thread) {
     if (thread) {
+        g_thread_free_count++;
         thread->freed = true;
         free(thread);
     }
@@ -538,6 +585,9 @@ void bit_buffer_free(BitBuffer *buffer) {
 
 void bit_buffer_reset(BitBuffer *buffer) {
     expect(buffer != NULL, "bit buffer reset should receive a buffer");
+    if (g_bit_buffer_scrub_on_reset) {
+        memset(buffer->data, 0xEE, buffer->capacity);
+    }
     buffer->size_bits = 0;
     buffer->size_bytes = 0;
 }
@@ -601,6 +651,10 @@ void iso14443_crc_trim(BitBuffer *buffer) {
 }
 
 Nfc *nfc_alloc(void) {
+    if (!g_nfc_alloc_result) {
+        return NULL;
+    }
+
     Nfc *nfc = malloc(sizeof(*nfc));
 
     expect(nfc != NULL, "nfc allocation should succeed");
@@ -626,6 +680,10 @@ void nfc_stop(Nfc *nfc) {
 }
 
 NfcListener *nfc_listener_alloc(Nfc *nfc, NfcProtocol protocol, const NfcDeviceData *data) {
+    if (!g_nfc_listener_alloc_result) {
+        return NULL;
+    }
+
     NfcListener *listener = malloc(sizeof(*listener));
 
     expect(listener != NULL, "nfc listener allocation should succeed");
@@ -1040,6 +1098,101 @@ void storage_file_close(File *file) {
     file->open = false;
 }
 
+FlipperFormat *flipper_format_file_alloc(Storage *storage) {
+    static FlipperFormat flipper_format;
+
+    UNUSED(storage);
+    return &flipper_format;
+}
+
+void flipper_format_free(FlipperFormat *flipper_format) {
+    UNUSED(flipper_format);
+}
+
+bool flipper_format_file_open_always(FlipperFormat *flipper_format, const char *path) {
+    UNUSED(flipper_format);
+    UNUSED(path);
+    return false;
+}
+
+bool flipper_format_file_open_existing(FlipperFormat *flipper_format, const char *path) {
+    UNUSED(flipper_format);
+    UNUSED(path);
+    return false;
+}
+
+bool flipper_format_file_close(FlipperFormat *flipper_format) {
+    UNUSED(flipper_format);
+    return true;
+}
+
+bool flipper_format_write_header_cstr(FlipperFormat *flipper_format, const char *type,
+                                      uint32_t version) {
+    UNUSED(flipper_format);
+    UNUSED(type);
+    UNUSED(version);
+    return false;
+}
+
+bool flipper_format_write_uint32(FlipperFormat *flipper_format, const char *key,
+                                 const uint32_t *value, size_t count) {
+    UNUSED(flipper_format);
+    UNUSED(key);
+    UNUSED(value);
+    UNUSED(count);
+    return false;
+}
+
+bool flipper_format_write_hex(FlipperFormat *flipper_format, const char *key, const uint8_t *value,
+                              size_t size) {
+    UNUSED(flipper_format);
+    UNUSED(key);
+    UNUSED(value);
+    UNUSED(size);
+    return false;
+}
+
+bool flipper_format_read_header(FlipperFormat *flipper_format, FuriString *type,
+                                uint32_t *version) {
+    UNUSED(flipper_format);
+    UNUSED(type);
+    UNUSED(version);
+    return false;
+}
+
+bool flipper_format_read_uint32(FlipperFormat *flipper_format, const char *key, uint32_t *value,
+                                size_t count) {
+    UNUSED(flipper_format);
+    UNUSED(key);
+    UNUSED(value);
+    UNUSED(count);
+    return false;
+}
+
+bool flipper_format_read_hex(FlipperFormat *flipper_format, const char *key, uint8_t *value,
+                             size_t size) {
+    UNUSED(flipper_format);
+    UNUSED(key);
+    UNUSED(value);
+    UNUSED(size);
+    return false;
+}
+
+FuriString *furi_string_alloc(void) {
+    static FuriString string;
+
+    memset(&string, 0, sizeof(string));
+    return &string;
+}
+
+void furi_string_free(FuriString *string) {
+    UNUSED(string);
+}
+
+const char *furi_string_get_cstr(const FuriString *string) {
+    return string ? string->value : "";
+}
+
 const FuriHalUsbInterface usb_hid_u2f = {0};
 
 size_t furi_hal_hid_u2f_get_request(uint8_t *packet) {
@@ -1196,6 +1349,17 @@ void zf_crypto_secure_zero(void *data, size_t size) {
     memset(data, 0, size);
 }
 
+void zf_crypto_sha256(const uint8_t *data, size_t size, uint8_t out[32]) {
+    if (size > 0U) {
+        expect(data != NULL, "sha256 input should be present when size is non-zero");
+        expect(g_sha256_trace_len + size <= sizeof(g_sha256_trace),
+               "sha256 trace buffer should fit");
+        memcpy(&g_sha256_trace[g_sha256_trace_len], data, size);
+        g_sha256_trace_len += size;
+    }
+    memset(out, 0, 32);
+}
+
 bool zf_crypto_hmac_sha256_parts_with_scratch(ZfHmacSha256Scratch *scratch, const uint8_t *key,
                                               size_t key_len, const uint8_t *first,
                                               size_t first_size, const uint8_t *second,
@@ -1264,22 +1428,38 @@ bool zf_crypto_hmac_sha256(const uint8_t *key, size_t key_len, const uint8_t *da
 
 size_t zerofido_handle_ctap2(ZerofidoApp *app, uint32_t cid, const uint8_t *request,
                              size_t request_len, uint8_t *response, size_t response_capacity) {
-    UNUSED(app);
     UNUSED(cid);
     if (!request || request_len == 0 || !response || response_capacity < 2) {
         return 0;
     }
 
+    g_ctap2_request_response_overlap = request == response;
     if (request[0] == ZfCtapeCmdGetInfo) {
         response[0] = ZF_CTAP_SUCCESS;
         response[1] = 0xA0;
         return 2;
     }
     if (request[0] == ZfCtapeCmdMakeCredential) {
-        UNUSED(app);
-        g_ctap2_saw_transport_auto_accept = true;
+        g_ctap2_saw_transport_auto_accept = test_transport_auto_accept_enabled(app);
         response[0] = ZF_CTAP_SUCCESS;
         response[1] = 0xA0;
+        return 2;
+    }
+    if (request[0] == ZfCtapeCmdClientPin) {
+        g_ctap2_saw_transport_auto_accept = test_transport_auto_accept_enabled(app);
+        if (g_ctap2_large_response_len != 0U) {
+            const size_t response_len = g_ctap2_large_response_len < response_capacity ?
+                                            g_ctap2_large_response_len :
+                                            response_capacity;
+            for (size_t i = 0U; i < response_len; ++i) {
+                response[i] = (uint8_t)(0xA0U + (i & 0x0FU));
+            }
+            response[0] = ZF_CTAP_SUCCESS;
+            response[1] = 0xA1U;
+            return response_len;
+        }
+        response[0] = ZF_CTAP_SUCCESS;
+        response[1] = 0xA1;
         return 2;
     }
 
@@ -1370,6 +1550,38 @@ bool u2f_data_cnt_reserve(uint32_t cnt, uint32_t *reserved_cnt) {
     if (reserved_cnt) {
         *reserved_cnt = g_u2f_last_reserved_counter;
     }
+    return true;
+}
+
+bool zf_crypto_p256_private_key_valid(const uint8_t private_key[ZF_PRIVATE_KEY_LEN]) {
+    return private_key != NULL;
+}
+
+bool zf_crypto_p256_public_key_valid(const uint8_t public_x[ZF_PUBLIC_KEY_LEN],
+                                     const uint8_t public_y[ZF_PUBLIC_KEY_LEN]) {
+    return public_x != NULL && public_y != NULL;
+}
+
+bool zf_crypto_compute_public_key_from_private(const uint8_t private_key[ZF_PRIVATE_KEY_LEN],
+                                               uint8_t public_x[ZF_PUBLIC_KEY_LEN],
+                                               uint8_t public_y[ZF_PUBLIC_KEY_LEN]) {
+    UNUSED(private_key);
+    if (!public_x || !public_y) {
+        return false;
+    }
+    memset(public_x, 0x11, ZF_PUBLIC_KEY_LEN);
+    memset(public_y, 0x22, ZF_PUBLIC_KEY_LEN);
+    return true;
+}
+
+bool zf_crypto_sign_hash_raw(const uint8_t private_key[ZF_PRIVATE_KEY_LEN], const uint8_t hash[32],
+                             uint8_t out[ZF_PUBLIC_KEY_LEN * 2U]) {
+    UNUSED(private_key);
+    UNUSED(hash);
+    if (!out) {
+        return false;
+    }
+    memset(out, 0x01, ZF_PUBLIC_KEY_LEN * 2U);
     return true;
 }
 
@@ -1565,16 +1777,18 @@ void mbedtls_sha256_finish(mbedtls_sha256_context *ctx, unsigned char output[32]
 #include "../src/u2f/session.c"
 
 #include "../src/transport/adapter.c"
+#include "../src/zerofido_storage.c"
 #include "../src/zerofido_runtime_config.c"
 #include "../src/u2f/adapter.c"
 #include "../src/transport/dispatch.c"
 #include "../src/transport/usb_hid_session.c"
 #include "../src/transport/usb_hid_worker.c"
+#include "../src/transport/nfc_trace.c"
 #include "../src/transport/nfc_protocol.c"
-#include "../src/transport/nfc_iso4_backport.c"
 #include "../src/transport/nfc_iso_dep.c"
 #include "../src/transport/nfc_session.c"
 #include "../src/transport/nfc_dispatch.c"
+#include "../src/transport/nfc_engine.c"
 #include "../src/transport/nfc_worker.c"
 
 static bool test_transport_auto_accept_enabled(const ZerofidoApp *app) {
@@ -1584,8 +1798,12 @@ static bool test_transport_auto_accept_enabled(const ZerofidoApp *app) {
 uint8_t zf_ctap_build_get_info_response(const ZfResolvedCapabilities *capabilities,
                                         bool client_pin_set, uint8_t *out, size_t out_capacity,
                                         size_t *out_len) {
-    UNUSED(capabilities);
     UNUSED(client_pin_set);
+    g_get_info_builder_called = true;
+    g_get_info_builder_saw_nfc_transport =
+        capabilities && capabilities->nfc_enabled && capabilities->advertise_nfc_transport;
+    g_get_info_builder_saw_usb_transport =
+        capabilities && capabilities->usb_hid_enabled && capabilities->advertise_usb_transport;
     expect(out != NULL && out_capacity > 0 && out_len != NULL,
            "test GetInfo builder should receive an output buffer");
     out[0] = 0xA0;
@@ -1615,12 +1833,10 @@ static void test_nfc_init_app(ZerofidoApp *app, FuriMutex *mutex) {
     app->worker_thread = &g_nfc_worker_thread;
     app->transport_nfc_state_storage.nfc = nfc_alloc();
     app->transport_nfc_state_storage.tx_buffer = bit_buffer_alloc(320U);
-    app->transport_nfc_state_storage.iso4_rx_buffer = bit_buffer_alloc(320U);
-    app->transport_nfc_state_storage.iso4_frame_buffer = bit_buffer_alloc(320U);
-    app->transport_nfc_state_storage.iso4_layer = zf_nfc_iso4_layer_alloc();
     app->transport_nfc_state_storage.iso14443_4a_data = iso14443_4a_alloc();
+    expect(zf_app_transport_arena_acquire(app), "NFC test app should allocate transport arena");
     zf_transport_nfc_attach_arena(&app->transport_nfc_state_storage, app->transport_arena,
-                                  sizeof(app->transport_arena));
+                                  zf_app_transport_arena_capacity(app));
     zf_transport_nfc_prepare_listener(&app->transport_nfc_state_storage);
     app->transport_nfc_state_storage.listener_active = true;
 }
@@ -1645,7 +1861,7 @@ static void test_nfc_listener_profile_is_valid_iso14443_4a(void) {
            "nfc listener should expose a double-size ISO-DEP ATQA");
     expect(base->sak == 0x20, "nfc listener should advertise ISO-DEP without MIFARE Classic");
     expect(ats->tl == 0x05, "nfc listener should expose the Nitrokey-style ATS length");
-    expect(ats->t0 == 0x78, "nfc listener should advertise the Nitrokey-style ATS format byte");
+    expect(ats->t0 == 0x78, "nfc listener should advertise the iOS-compatible FSC ATS format byte");
     expect(ats->ta_1 == 0x91, "nfc listener should expose ATS TA1 from the Nitrokey profile");
     expect(ats->tb_1 == 0xE8, "nfc listener should expose ATS TB1 with long FWT for CTAP2");
     expect(ats->tc_1 == 0x00, "nfc listener should expose ATS TC1 from the Nitrokey profile");
@@ -1657,11 +1873,9 @@ static void test_nfc_listener_profile_is_valid_iso14443_4a(void) {
 
 static void test_nfc_deinit_app(ZerofidoApp *app) {
     iso14443_4a_free(app->transport_nfc_state_storage.iso14443_4a_data);
-    zf_nfc_iso4_layer_free(app->transport_nfc_state_storage.iso4_layer);
-    bit_buffer_free(app->transport_nfc_state_storage.iso4_frame_buffer);
-    bit_buffer_free(app->transport_nfc_state_storage.iso4_rx_buffer);
     bit_buffer_free(app->transport_nfc_state_storage.tx_buffer);
     nfc_free(app->transport_nfc_state_storage.nfc);
+    zf_app_transport_arena_release(app);
 }
 
 static void test_nfc_select_applet(ZerofidoApp *app) {
@@ -1895,6 +2109,74 @@ static void test_nfc_iso4_listener_native_desfire_payload_is_not_parsed_as_apdu(
     test_nfc_deinit_app(&app);
 }
 
+static void test_nfc_desfire_deselect_sleeps_before_next_activation(void) {
+    ZerofidoApp app;
+    FuriMutex mutex = {0};
+    Iso14443_4aListener listener = {0};
+    BitBuffer *buffer = bit_buffer_alloc(16U);
+    Iso14443_4aListenerEventData iso4_data = {.buffer = buffer};
+    Iso14443_4aListenerEvent iso4_event = {
+        .type = Iso14443_4aListenerEventTypeReceivedData,
+        .data = &iso4_data,
+    };
+    Iso14443_3aListenerEventData iso3_data = {.buffer = buffer};
+    Iso14443_3aListenerEvent iso3_event = {
+        .type = Iso14443_3aListenerEventTypeReceivedStandardFrame,
+        .data = &iso3_data,
+    };
+    NfcGenericEvent event = {
+        .protocol = NfcProtocolIso14443_4a,
+        .instance = &listener,
+        .event_data = &iso4_event,
+    };
+
+    test_reset();
+    test_nfc_init_app(&app, &mutex);
+    app.transport_nfc_state_storage.iso4_active = true;
+
+    bit_buffer_append_bytes(buffer, (const uint8_t[]){0x02, 0x60}, 2U);
+    expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
+           "DESFire discovery should receive the native version shim");
+    expect(g_last_nfc_tx_len == 11U && g_last_nfc_tx[0] == 0x02 && g_last_nfc_tx[1] == 0xAF,
+           "DESFire discovery should transmit the working native response");
+    expect(app.transport_nfc_state_storage.iso4_last_tx_valid &&
+               app.transport_nfc_state_storage.iso4_last_tx_len > 0U,
+           "DESFire discovery response should be cached before deselect");
+
+    bit_buffer_reset(buffer);
+    bit_buffer_append_bytes(buffer, (const uint8_t[]){0xC2}, 1U);
+    expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandSleep,
+           "DESFire S-DESELECT should sleep the current activation after ACKing");
+    expect(g_last_nfc_tx_len == 3U && g_last_nfc_tx[0] == 0xC2U,
+           "DESFire S-DESELECT should still receive the ISO-DEP deselect response");
+    expect(!app.transport_nfc_state_storage.iso4_active &&
+               !app.transport_nfc_state_storage.applet_selected,
+           "DESFire S-DESELECT should clear ISO-DEP state before the next activation");
+    expect(!app.transport_nfc_state_storage.iso4_last_tx_valid &&
+               app.transport_nfc_state_storage.iso4_last_tx_len == 0U,
+           "DESFire S-DESELECT should clear stale replay state before the next activation");
+    expect(!zf_transport_nfc_replay_last_iso_response(&app.transport_nfc_state_storage),
+           "DESFire S-DESELECT should not leave the previous response replayable");
+    expect(g_transport_connected_set_count >= 1U && !g_last_transport_connected,
+           "DESFire S-DESELECT should publish a disconnected activation boundary");
+
+    bit_buffer_reset(buffer);
+    bit_buffer_append_bytes(buffer, (const uint8_t[]){0xE0, 0x80}, 2U);
+    event.protocol = NfcProtocolIso14443_3a;
+    event.instance = NULL;
+    event.event_data = &iso3_event;
+    expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
+           "RATS after DESFire S-DESELECT should start a clean activation");
+    expect(app.transport_nfc_state_storage.iso4_active,
+           "RATS after DESFire S-DESELECT should reactivate ISO-DEP");
+    expect(g_last_nfc_tx_len == 7U &&
+               memcmp(g_last_nfc_tx, (const uint8_t[]){0x05, 0x78, 0x91, 0xE8, 0x00}, 5U) == 0,
+           "RATS after DESFire S-DESELECT should transmit the iOS ATS");
+
+    bit_buffer_free(buffer);
+    test_nfc_deinit_app(&app);
+}
+
 static void test_nfc_3a_rats_sends_ats_with_public_tx(void) {
     ZerofidoApp app;
     FuriMutex mutex = {0};
@@ -2103,7 +2385,7 @@ static void test_nfc_3a_r_ack_advances_chained_response_and_r_nak_replays(void) 
         .protocol = NfcProtocolIso14443_3a,
         .event_data = &listener_event,
     };
-    uint8_t response[140U] = {0};
+    uint8_t response[(ZF_NFC_TX_CHAIN_CHUNK_SIZE * 2U) + 88U] = {0};
     uint8_t cached_first[sizeof(g_last_nfc_tx)] = {0};
     size_t cached_first_len = 0U;
 
@@ -2138,9 +2420,20 @@ static void test_nfc_3a_r_ack_advances_chained_response_and_r_nak_replays(void) 
     bit_buffer_append_bytes(buffer, (const uint8_t[]){0xA2}, 1U);
     expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
            "R-ACK should advance to the next queued response I-block");
+    expect(app.transport_nfc_state_storage.iso4_tx_chain_active,
+           "middle chained response block should leave remaining response bytes queued");
+    expect(g_last_nfc_tx_len == ZF_NFC_TX_CHAIN_CHUNK_SIZE + 3U,
+           "middle chained response should fill one configured ISO-DEP chunk plus CRC");
+    expect((g_last_nfc_tx[0] & ZF_NFC_PCB_CHAIN) != 0U,
+           "middle chained response should keep the ISO-DEP chaining bit set");
+
+    bit_buffer_reset(buffer);
+    bit_buffer_append_bytes(buffer, (const uint8_t[]){0xA3}, 1U);
+    expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
+           "second R-ACK should advance to the final queued response I-block");
     expect(!app.transport_nfc_state_storage.iso4_tx_chain_active,
            "final chained response block should clear the queued response");
-    expect(g_last_nfc_tx_len == 49U,
+    expect(g_last_nfc_tx_len == 93U,
            "final chained response should carry remaining bytes plus CRC");
     expect((g_last_nfc_tx[0] & ZF_NFC_PCB_CHAIN) == 0U,
            "final chained response should clear the ISO-DEP chaining bit");
@@ -2149,6 +2442,100 @@ static void test_nfc_3a_r_ack_advances_chained_response_and_r_nak_replays(void) 
            "final chained response should terminate with SW_SUCCESS before CRC");
     expect(test_log_contains("NFC R-ACK chain A2 len=0"),
            "R-ACK chaining should expose the recovery breadcrumb");
+
+    bit_buffer_free(buffer);
+    test_nfc_deinit_app(&app);
+}
+
+static void test_nfc_make_credential_sized_response_uses_single_i_block(void) {
+    ZerofidoApp app;
+    FuriMutex mutex = {0};
+    uint8_t response[176U] = {0};
+    const uint8_t *payload = NULL;
+
+    test_reset();
+    test_nfc_init_app(&app, &mutex);
+    app.transport_nfc_state_storage.iso4_active = true;
+    app.transport_nfc_state_storage.iso_pcb = ZF_NFC_PCB_BLOCK;
+    for (size_t i = 0; i < sizeof(response); ++i) {
+        response[i] = (uint8_t)(0x40U + i);
+    }
+
+    expect(zf_transport_nfc_send_apdu_payload(&app.transport_nfc_state_storage, response,
+                                              sizeof(response), ZF_NFC_SW_SUCCESS),
+           "iOS MakeCredential-sized response should fit one ISO-DEP I-block");
+    expect(!app.transport_nfc_state_storage.iso4_tx_chain_active &&
+               !app.transport_nfc_state_storage.iso4_tx_chain_completed,
+           "MakeCredential-sized response should not enter outbound chaining");
+    expect(g_last_nfc_tx_len == sizeof(response) + 5U,
+           "MakeCredential-sized single I-block should include PCB, SW, and CRC");
+    expect((g_last_nfc_tx[0] & ZF_NFC_PCB_CHAIN) == 0U,
+           "MakeCredential-sized single I-block should not set the chaining bit");
+    payload = test_nfc_payload();
+    expect(test_nfc_payload_len() == sizeof(response) + 2U &&
+               payload[test_nfc_payload_len() - 2U] == 0x90 &&
+               payload[test_nfc_payload_len() - 1U] == 0x00,
+           "MakeCredential-sized single I-block should terminate with SW_SUCCESS");
+
+    test_nfc_deinit_app(&app);
+}
+
+static void test_nfc_terminal_r_ack_after_chained_response_keeps_fido_selected(void) {
+    ZerofidoApp app;
+    FuriMutex mutex = {0};
+    BitBuffer *buffer = bit_buffer_alloc(8U);
+    Iso14443_3aListenerEventData event_data = {.buffer = buffer};
+    Iso14443_3aListenerEvent listener_event = {
+        .type = Iso14443_3aListenerEventTypeReceivedStandardFrame,
+        .data = &event_data,
+    };
+    NfcGenericEvent event = {
+        .protocol = NfcProtocolIso14443_3a,
+        .event_data = &listener_event,
+    };
+    static const uint8_t ctap2_get_info_apdu[] = {0x80, 0x10, 0x00, 0x00, 0x01,
+                                                  ZfCtapeCmdGetInfo};
+    uint8_t response[190U] = {0};
+    const uint8_t *payload = NULL;
+
+    test_reset();
+    test_nfc_init_app(&app, &mutex);
+    test_nfc_select_applet(&app);
+    app.transport_nfc_state_storage.iso4_active = true;
+    app.transport_nfc_state_storage.iso_pcb = ZF_NFC_PCB_BLOCK;
+    for (size_t i = 0; i < sizeof(response); ++i) {
+        response[i] = (uint8_t)i;
+    }
+
+    expect(zf_transport_nfc_begin_chained_apdu_payload(&app.transport_nfc_state_storage, response,
+                                                       sizeof(response), ZF_NFC_SW_SUCCESS),
+           "oversized APDU payload should start ISO-DEP response chaining");
+    expect(app.transport_nfc_state_storage.iso4_tx_chain_active,
+           "first chained block should leave remaining response bytes queued");
+
+    bit_buffer_append_bytes(buffer, (const uint8_t[]){0xA2}, 1U);
+    expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
+           "R-ACK should advance to the final chained response block");
+    expect(app.transport_nfc_state_storage.iso4_tx_chain_completed,
+           "final chained block should wait for the reader's terminal ACK");
+
+    bit_buffer_reset(buffer);
+    bit_buffer_append_bytes(buffer, (const uint8_t[]){0xA3}, 1U);
+    expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
+           "terminal R-ACK should acknowledge the completed chain");
+    expect(!app.transport_nfc_state_storage.iso4_tx_chain_completed,
+           "terminal R-ACK should clear only the completed-chain latch");
+    expect(app.transport_nfc_state_storage.applet_selected,
+           "terminal R-ACK must not deselect the FIDO applet");
+    expect(!app.transport_nfc_state_storage.post_success_cooldown_active,
+           "terminal R-ACK should not arm post-success discovery cooldown");
+
+    expect(zf_transport_nfc_handle_apdu(&app, &app.transport_nfc_state_storage,
+                                        ctap2_get_info_apdu, sizeof(ctap2_get_info_apdu)),
+           "a CTAP APDU after terminal R-ACK should still reach the selected FIDO applet");
+    payload = test_nfc_payload();
+    expect(test_nfc_payload_len() > 2U && payload[0] == ZF_CTAP_SUCCESS,
+           "post-chain CTAP APDU should return a CTAP response instead of 6985");
 
     bit_buffer_free(buffer);
     test_nfc_deinit_app(&app);
@@ -2167,7 +2554,7 @@ static void test_nfc_post_success_cooldown_allows_new_fido_select(void) {
         .protocol = NfcProtocolIso14443_3a,
         .event_data = &listener_event,
     };
-    uint8_t response[140U] = {0};
+    uint8_t response[(ZF_NFC_TX_CHAIN_CHUNK_SIZE * 2U) + 88U] = {0};
 
     test_reset();
     test_nfc_init_app(&app, &mutex);
@@ -2183,27 +2570,40 @@ static void test_nfc_post_success_cooldown_allows_new_fido_select(void) {
            "oversized APDU payload should start ISO-DEP response chaining");
     bit_buffer_append_bytes(buffer, (const uint8_t[]){0xA2}, 1U);
     expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
-           "R-ACK should send the final chained response block");
+           "R-ACK should send the middle chained response block");
+    expect(app.transport_nfc_state_storage.iso4_tx_chain_active,
+           "middle chained block should keep remaining response bytes queued");
+    expect(!app.transport_nfc_state_storage.iso4_tx_chain_completed,
+           "middle chained block should not wait for a terminal ACK yet");
+    expect(!app.transport_nfc_state_storage.post_success_cooldown_active,
+           "cooldown should not start while response bytes remain queued");
+
+    bit_buffer_reset(buffer);
+    bit_buffer_append_bytes(buffer, (const uint8_t[]){0xA3}, 1U);
+    expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
+           "second R-ACK should send the final chained response block");
     expect(app.transport_nfc_state_storage.iso4_tx_chain_completed,
            "final chained block should wait for the reader's terminal ACK");
     expect(!app.transport_nfc_state_storage.post_success_cooldown_active,
            "cooldown should not start until the final block is acknowledged");
 
     bit_buffer_reset(buffer);
-    bit_buffer_append_bytes(buffer, (const uint8_t[]){0xA3}, 1U);
+    bit_buffer_append_bytes(buffer, (const uint8_t[]){0xA2}, 1U);
     expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
            "terminal R-ACK should complete the transaction");
-    expect(app.transport_nfc_state_storage.post_success_cooldown_active,
-           "terminal R-ACK should start the post-success cooldown");
-    expect(app.transport_nfc_state_storage.post_success_probe_sleep_active,
-           "terminal R-ACK should keep post-success probe suppression armed");
-    expect(g_nfc_tx_count == 2U, "terminal R-ACK should not transmit another NFC frame");
+    expect(!app.transport_nfc_state_storage.iso4_tx_chain_completed,
+           "terminal R-ACK should clear the completed-chain latch");
+    expect(!app.transport_nfc_state_storage.post_success_cooldown_active,
+           "terminal R-ACK should not start the post-success cooldown by itself");
+    expect(!app.transport_nfc_state_storage.post_success_probe_sleep_active,
+           "terminal R-ACK should not arm post-success probe suppression by itself");
+    expect(g_nfc_tx_count == 3U, "terminal R-ACK should not transmit another NFC frame");
 
     bit_buffer_reset(buffer);
     bit_buffer_append_bytes(buffer, (const uint8_t[]){0xE0, 0x80}, 2U);
     expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
            "post-success cooldown should still allow a new ISO-DEP activation");
-    expect(g_nfc_tx_count == 3U && g_last_nfc_tx_len == 7U,
+    expect(g_nfc_tx_count == 4U && g_last_nfc_tx_len == 7U,
            "cooldown RATS should transmit ATS so a real authentication can select FIDO");
 
     bit_buffer_reset(buffer);
@@ -2219,7 +2619,7 @@ static void test_nfc_post_success_cooldown_allows_new_fido_select(void) {
            "FIDO SELECT should clear post-success cooldown immediately");
     expect(!app.transport_nfc_state_storage.post_success_probe_sleep_active,
            "FIDO SELECT should clear post-success probe suppression");
-    expect(g_nfc_tx_count == 4U && g_last_nfc_tx[0] == 0x02,
+    expect(g_nfc_tx_count == 5U && g_last_nfc_tx[0] == 0x02,
            "FIDO SELECT during cooldown should transmit the normal select response");
 
     app.transport_nfc_state_storage.post_success_cooldown_active = true;
@@ -2231,7 +2631,7 @@ static void test_nfc_post_success_cooldown_allows_new_fido_select(void) {
     bit_buffer_append_bytes(buffer, (const uint8_t[]){0xE0, 0x80}, 2U);
     expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
            "cooldown should still allow activation before suppressing non-FIDO probes");
-    expect(g_nfc_tx_count == 5U && g_last_nfc_tx_len == 7U,
+    expect(g_nfc_tx_count == 6U && g_last_nfc_tx_len == 7U,
            "cooldown activation should send ATS before the NDEF probe is classified");
 
     bit_buffer_reset(buffer);
@@ -2241,7 +2641,7 @@ static void test_nfc_post_success_cooldown_allows_new_fido_select(void) {
                             14U);
     expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
            "first NDEF SELECT during cooldown should be rejected so Safari can continue to FIDO");
-    expect(g_nfc_tx_count == 6U && g_last_nfc_tx_len == 5U && g_last_nfc_tx[1] == 0x6A &&
+    expect(g_nfc_tx_count == 7U && g_last_nfc_tx_len == 5U && g_last_nfc_tx[1] == 0x6A &&
                g_last_nfc_tx[2] == 0x82,
            "first cooldown NDEF SELECT should transmit the normal not-found response");
 
@@ -2251,16 +2651,30 @@ static void test_nfc_post_success_cooldown_allows_new_fido_select(void) {
                             (const uint8_t[]){0x03, 0x00, 0xA4, 0x04, 0x00, 0x07, 0xD2, 0x76, 0x00,
                                               0x00, 0x85, 0x01, 0x01, 0x00},
                             14U);
-    expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandSleep,
-           "repeated NDEF SELECT during cooldown should sleep instead of looping 6A82");
-    expect(g_nfc_tx_count == 6U, "repeated cooldown NDEF SELECT should not transmit a response");
+    expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
+           "repeated NDEF SELECT during cooldown should stay responsive for same-run auth");
+    expect(g_nfc_tx_count == 8U && g_last_nfc_tx_len == 5U && g_last_nfc_tx[1] == 0x6A &&
+               g_last_nfc_tx[2] == 0x82,
+           "repeated cooldown NDEF SELECT should transmit the normal not-found response");
+
+    bit_buffer_reset(buffer);
+    bit_buffer_append_bytes(buffer,
+                            (const uint8_t[]){0x02, 0x00, 0xA4, 0x04, 0x00, 0x08, 0xA0, 0x00, 0x00,
+                                              0x06, 0x47, 0x2F, 0x00, 0x01},
+                            14U);
+    expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
+           "FIDO SELECT after repeated cooldown NDEF should still start same-run auth");
+    expect(app.transport_nfc_state_storage.applet_selected,
+           "FIDO SELECT after repeated cooldown NDEF should select the applet");
+    expect(g_nfc_tx_count == 9U && g_last_nfc_tx[0] == 0x02,
+           "FIDO SELECT after repeated cooldown NDEF should transmit the select response");
 
     g_fake_tick = app.transport_nfc_state_storage.post_success_cooldown_until_tick + 1U;
     bit_buffer_reset(buffer);
     bit_buffer_append_bytes(buffer, (const uint8_t[]){0xE0, 0x80}, 2U);
     expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
            "expired post-success cooldown should allow normal discovery again");
-    expect(g_nfc_tx_count == 7U && g_last_nfc_tx_len == 7U,
+    expect(g_nfc_tx_count == 10U && g_last_nfc_tx_len == 7U,
            "normal discovery should resume with one ATS transmission after cooldown expiry");
 
     app.transport_nfc_state_storage.post_success_probe_sleep_active = true;
@@ -2272,7 +2686,7 @@ static void test_nfc_post_success_cooldown_allows_new_fido_select(void) {
                             14U);
     expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
            "post-success NDEF SELECT after cooldown expiry should use normal rejection");
-    expect(g_nfc_tx_count == 8U && g_last_nfc_tx_len == 5U && g_last_nfc_tx[1] == 0x6A &&
+    expect(g_nfc_tx_count == 11U && g_last_nfc_tx_len == 5U && g_last_nfc_tx[1] == 0x6A &&
                g_last_nfc_tx[2] == 0x82,
            "expired post-success NDEF SELECT should transmit the normal not-found response");
 
@@ -2293,7 +2707,7 @@ static void test_nfc_3a_empty_i_block_replays_cached_large_response_before_helpe
         .protocol = NfcProtocolIso14443_3a,
         .event_data = &listener_event,
     };
-    uint8_t response[177U] = {0};
+    uint8_t response[ZF_NFC_MAX_TX_FRAME_INF_SIZE - 2U] = {0};
     uint8_t cached_response[sizeof(g_last_nfc_tx)] = {0};
     size_t cached_response_len = 0U;
 
@@ -2307,7 +2721,7 @@ static void test_nfc_3a_empty_i_block_replays_cached_large_response_before_helpe
 
     expect(zf_transport_nfc_send_apdu_payload(&app.transport_nfc_state_storage, response,
                                               sizeof(response), ZF_NFC_SW_SUCCESS),
-           "large single-frame APDU response should be sent and cached");
+           "max safe single-frame APDU response should be sent and cached");
     cached_response_len = g_last_nfc_tx_len;
     memcpy(cached_response, g_last_nfc_tx, cached_response_len);
 
@@ -2345,7 +2759,7 @@ static void test_nfc_3a_empty_i_block_replays_encoded_frame_when_cache_flag_miss
         .protocol = NfcProtocolIso14443_3a,
         .event_data = &listener_event,
     };
-    uint8_t response[177U] = {0};
+    uint8_t response[ZF_NFC_MAX_TX_FRAME_INF_SIZE - 2U] = {0};
     uint8_t cached_response[sizeof(g_last_nfc_tx)] = {0};
     size_t cached_response_len = 0U;
 
@@ -2367,23 +2781,26 @@ static void test_nfc_3a_empty_i_block_replays_encoded_frame_when_cache_flag_miss
 
     expect(zf_transport_nfc_send_apdu_payload(&app.transport_nfc_state_storage, response,
                                               sizeof(response), ZF_NFC_SW_SUCCESS),
-           "large APDU response should leave an encoded ISO-DEP frame available");
+           "max safe APDU response should leave an encoded ISO-DEP frame available");
     cached_response_len = g_last_nfc_tx_len;
     memcpy(cached_response, g_last_nfc_tx, cached_response_len);
 
     app.transport_nfc_state_storage.iso4_last_tx_valid = false;
     app.transport_nfc_state_storage.iso4_last_tx_len = 0U;
-    memset(app.transport_nfc_state_storage.iso4_last_tx, 0,
-           sizeof(app.transport_nfc_state_storage.iso4_last_tx));
+    memset(app.transport_nfc_state_storage.iso4_tx_frame, 0,
+           sizeof(app.transport_nfc_state_storage.iso4_tx_frame));
+
+    const size_t tx_count_before_empty_i = g_nfc_tx_count;
 
     bit_buffer_append_bytes(buffer, (const uint8_t[]){0x02}, 1U);
     expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
-           "empty I-block should fall back to the encoded response frame");
-    expect(g_last_nfc_tx_len == cached_response_len &&
-               memcmp(g_last_nfc_tx, cached_response, cached_response_len) == 0,
-           "encoded frame fallback should replay the large response byte-for-byte");
-    expect(test_log_contains("NFC I-empty replay 02 len=0"),
-           "encoded frame fallback should report an empty-I replay");
+           "empty I-block should not use a stale helper-owned frame cache");
+    expect(g_nfc_tx_count == tx_count_before_empty_i + 1U && g_last_nfc_tx_len == 3U &&
+               g_last_nfc_tx[0] == 0xA2U,
+           "empty I-block without an array replay should receive only a bounded R-ACK");
+    expect(g_last_nfc_tx_len != cached_response_len ||
+               memcmp(g_last_nfc_tx, cached_response, cached_response_len) != 0,
+           "disabled array replay must not fall back to mutable BitBuffer contents");
 
     bit_buffer_free(buffer);
     test_nfc_deinit_app(&app);
@@ -2402,7 +2819,7 @@ static void test_nfc_3a_late_pps_then_r_nak_replays_cached_large_response(void) 
         .protocol = NfcProtocolIso14443_3a,
         .event_data = &listener_event,
     };
-    uint8_t response[177U] = {0};
+    uint8_t response[ZF_NFC_MAX_TX_FRAME_INF_SIZE - 2U] = {0};
     uint8_t cached_response[sizeof(g_last_nfc_tx)] = {0};
     size_t cached_response_len = 0U;
 
@@ -2416,7 +2833,7 @@ static void test_nfc_3a_late_pps_then_r_nak_replays_cached_large_response(void) 
 
     expect(zf_transport_nfc_send_apdu_payload(&app.transport_nfc_state_storage, response,
                                               sizeof(response), ZF_NFC_SW_SUCCESS),
-           "large APDU response should be cached before late PPS recovery");
+           "max safe APDU response should be cached before late PPS recovery");
     cached_response_len = g_last_nfc_tx_len;
     memcpy(cached_response, g_last_nfc_tx, cached_response_len);
 
@@ -2517,6 +2934,30 @@ static void test_nfc_framed_select_response_uses_reader_block_number(void) {
            "framed SELECT APDU should return U2F_V2 plus SW_SUCCESS inside an I-block");
 
     bit_buffer_free(buffer);
+    test_nfc_deinit_app(&app);
+}
+
+static void test_nfc_cache_last_iso_response_handles_frame_buffer_alias(void) {
+    ZerofidoApp app;
+    FuriMutex mutex = {0};
+    const uint8_t frame[] = {0x03, 0x55, 0x32, 0x46, 0x5F, 0x56, 0x32, 0x90, 0x00};
+    uint8_t source[sizeof(frame)] = {0};
+
+    test_reset();
+    test_nfc_init_app(&app, &mutex);
+
+    memcpy(source, frame, sizeof(source));
+    zf_transport_nfc_cache_last_iso_response(&app.transport_nfc_state_storage, source,
+                                             sizeof(source));
+    memset(source, 0, sizeof(source));
+    expect(app.transport_nfc_state_storage.iso4_last_tx_valid &&
+               app.transport_nfc_state_storage.iso4_last_tx_len == sizeof(frame),
+           "last ISO response cache should keep the aliased frame length");
+    expect(memcmp(app.transport_nfc_state_storage.iso4_tx_frame, frame, sizeof(frame)) == 0,
+           "last ISO response cache should be an owned byte-array snapshot");
+    expect(app.transport_nfc_state_storage.tx_frame_len == 0U,
+           "manual cache snapshot must not depend on a prior TX frame");
+
     test_nfc_deinit_app(&app);
 }
 
@@ -2817,6 +3258,11 @@ static void test_nfc_ctap2_get_info_returns_immediately(void) {
     expect(zf_transport_nfc_handle_apdu(&app, &app.transport_nfc_state_storage, ctap2_apdu,
                                         sizeof(ctap2_apdu)),
            "CTAP2 GetInfo APDU should complete immediately after SELECT");
+    expect(g_get_info_builder_called, "NFC GetInfo should use the shared GetInfo builder");
+    expect(g_get_info_builder_saw_nfc_transport,
+           "NFC GetInfo should force-advertise the NFC transport");
+    expect(!g_get_info_builder_saw_usb_transport,
+           "NFC GetInfo should not inherit USB transport advertising");
     payload = test_nfc_payload();
     expect(test_nfc_payload_len() > 2U && test_nfc_payload_len() < 250U,
            "GetInfo response should return the shared CTAP GetInfo payload plus SW");
@@ -2827,6 +3273,8 @@ static void test_nfc_ctap2_get_info_returns_immediately(void) {
            "GetInfo response should terminate with SW_SUCCESS");
     expect(test_log_contains("CTAP2 getInfo"),
            "GetInfo should expose the synchronous NFC breadcrumb");
+    expect(!test_log_contains("apdu-tx-data"),
+           "GetInfo diagnostics should avoid APDU payload previews in the NFC callback");
     expect(g_last_status_text[0] == '\0', "GetInfo NFC diagnostic should not update UI status");
     expect(g_notify_prompt_count == 0U, "NFC CTAP2 GetInfo should not start the prompt light");
 
@@ -2915,6 +3363,97 @@ static void test_nfc_iso4_listener_extended_get_info_is_iso_dep_framed(void) {
     test_nfc_deinit_app(&app);
 }
 
+static void test_nfc_iso4_listener_ctap2_msg_signals_worker_after_unlock(void) {
+    ZerofidoApp app;
+    FuriMutex mutex = {0};
+    Iso14443_4aListener listener = {0};
+    BitBuffer *buffer = bit_buffer_alloc(16U);
+    Iso14443_4aListenerEventData event_data = {.buffer = buffer};
+    Iso14443_4aListenerEvent listener_event = {
+        .type = Iso14443_4aListenerEventTypeReceivedData,
+        .data = &event_data,
+    };
+    NfcGenericEvent event = {
+        .protocol = NfcProtocolIso14443_4a,
+        .instance = &listener,
+        .event_data = &listener_event,
+    };
+
+    test_reset();
+    test_nfc_init_app(&app, &mutex);
+    test_nfc_select_applet(&app);
+    memset(g_last_nfc_tx, 0, sizeof(g_last_nfc_tx));
+    g_last_nfc_tx_bits = 0;
+    g_last_nfc_tx_len = 0;
+    g_nfc_tx_count = 0;
+
+    bit_buffer_append_bytes(buffer,
+                            (const uint8_t[]){0x80, 0x10, ZF_NFC_CTAP_MSG_P1_GET_RESPONSE, 0x00,
+                                              0x00, 0x00, 0x01, ZfCtapeCmdMakeCredential, 0x00,
+                                              0x00},
+                            10U);
+    expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
+           "ISO4 listener CTAP2 MSG should queue worker processing");
+    expect((g_last_thread_flags_set & ZF_NFC_WORKER_EVT_REQUEST) != 0U,
+           "locked ISO4 CTAP2 MSG should signal the persistent NFC worker");
+
+    zf_transport_nfc_process_request(&app);
+    expect(test_log_contains("CTAP2 worker done"),
+           "persistent NFC worker should reach CTAP2 processing");
+
+    bit_buffer_free(buffer);
+    test_nfc_deinit_app(&app);
+}
+
+static void test_nfc_iso4_listener_busy_ctap2_retry_has_minimal_side_effects(void) {
+    ZerofidoApp app;
+    FuriMutex mutex = {0};
+    Iso14443_4aListener listener = {0};
+    BitBuffer *buffer = bit_buffer_alloc(16U);
+    Iso14443_4aListenerEventData event_data = {.buffer = buffer};
+    Iso14443_4aListenerEvent listener_event = {
+        .type = Iso14443_4aListenerEventTypeReceivedData,
+        .data = &event_data,
+    };
+    NfcGenericEvent event = {
+        .protocol = NfcProtocolIso14443_4a,
+        .instance = &listener,
+        .event_data = &listener_event,
+    };
+
+    test_reset();
+    test_nfc_init_app(&app, &mutex);
+    test_nfc_select_applet(&app);
+    g_transport_connected_set_count = 0;
+    memset(g_last_status_text, 0, sizeof(g_last_status_text));
+    memset(g_last_nfc_tx, 0, sizeof(g_last_nfc_tx));
+    g_last_nfc_tx_bits = 0;
+    g_last_nfc_tx_len = 0;
+    g_nfc_tx_count = 0;
+
+    app.transport_nfc_state_storage.processing = true;
+    app.transport_nfc_state_storage.request_pending = false;
+    app.transport_nfc_state_storage.response_ready = false;
+
+    bit_buffer_append_bytes(buffer,
+                            (const uint8_t[]){0x80, 0x10, ZF_NFC_CTAP_MSG_P1_GET_RESPONSE, 0x00,
+                                              0x00, 0x00, 0x01, ZfCtapeCmdMakeCredential, 0x00,
+                                              0x00},
+                            10U);
+    expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
+           "busy ISO4 CTAP2 retry should still return STATUS_UPDATE");
+    expect(g_last_nfc_tx_len >= 5U && g_last_nfc_tx[1] == ZF_NFC_STATUS_PROCESSING &&
+               g_last_nfc_tx[2] == 0x91 && g_last_nfc_tx[3] == 0x00,
+           "busy ISO4 CTAP2 retry should emit processing status plus SW");
+    expect(g_transport_connected_set_count <= 1U,
+           "busy ISO4 CTAP2 retry should avoid per-retry transport UI churn");
+    expect(g_last_status_text[0] == '\0',
+           "busy ISO4 CTAP2 retry should not update the visible APDU status");
+
+    bit_buffer_free(buffer);
+    test_nfc_deinit_app(&app);
+}
+
 static void test_nfc_ctap2_msg_queues_worker_response(void) {
     ZerofidoApp app;
     FuriMutex mutex = {0};
@@ -2939,8 +3478,8 @@ static void test_nfc_ctap2_msg_queues_worker_response(void) {
     expect(app.transport_nfc_state_storage.processing &&
                app.transport_nfc_state_storage.request_pending,
            "queued NFC CTAP2 should leave a worker request pending");
-    expect(g_thread_flags_set_count == 1U && g_last_thread_flags_set == ZF_NFC_WORKER_EVT_REQUEST,
-           "queued NFC CTAP2 should wake the existing NFC worker");
+    expect((g_last_thread_flags_set & ZF_NFC_WORKER_EVT_REQUEST) != 0U,
+           "queued NFC CTAP2 should signal the persistent NFC worker");
 
     zf_transport_nfc_process_request(&app);
     expect(!app.transport_nfc_state_storage.processing &&
@@ -2966,7 +3505,7 @@ static void test_nfc_ctap2_msg_queues_worker_response(void) {
     test_nfc_deinit_app(&app);
 }
 
-static void test_nfc_ctap2_msg_without_get_response_queues_worker_response(void) {
+static void test_nfc_ctap2_msg_without_get_response_returns_direct_response(void) {
     ZerofidoApp app;
     FuriMutex mutex = {0};
     static const uint8_t ctap2_apdu[] = {0x80, 0x10, 0x00, 0x00, 0x01, ZfCtapeCmdMakeCredential};
@@ -2978,36 +3517,362 @@ static void test_nfc_ctap2_msg_without_get_response_queues_worker_response(void)
 
     expect(zf_transport_nfc_handle_apdu(&app, &app.transport_nfc_state_storage, ctap2_apdu,
                                         sizeof(ctap2_apdu)),
-           "NFC CTAP2 MSG without GET_RESPONSE support should queue worker processing");
-    payload = test_nfc_payload();
-    expect(test_nfc_payload_len() == 3U,
-           "queued NFC CTAP2 response should return processing status plus SW");
-    expect(payload[0] == ZF_NFC_STATUS_PROCESSING && payload[1] == 0x91 && payload[2] == 0x00,
-           "queued NFC CTAP2 response should use STATUS_UPDATE");
-    expect(app.transport_nfc_state_storage.processing &&
-               app.transport_nfc_state_storage.request_pending,
-           "queued NFC CTAP2 should leave a worker request pending");
-    expect(g_thread_flags_set_count == 1U && g_last_thread_flags_set == ZF_NFC_WORKER_EVT_REQUEST,
-           "queued NFC CTAP2 should wake the existing NFC worker");
-    zf_transport_nfc_process_request(&app);
-    expect(zf_transport_nfc_handle_apdu(&app, &app.transport_nfc_state_storage, ctap2_apdu,
-                                        sizeof(ctap2_apdu)),
-           "worker-completed NFC CTAP2 without GET_RESPONSE support should expose the response on original APDU retry");
+           "NFC CTAP2 MSG without GET_RESPONSE support should complete directly");
     payload = test_nfc_payload();
     expect(test_nfc_payload_len() == 4U,
-           "worker-completed NFC CTAP2 response should include CTAP body and SW");
+           "direct no-GR NFC CTAP2 should include CTAP body and SW");
     expect(payload[0] == ZF_CTAP_SUCCESS && payload[1] == 0xA0 && payload[2] == 0x90 &&
                payload[3] == 0x00,
-           "worker-completed NFC CTAP2 response should return CTAP OK and SW_SUCCESS");
+           "direct no-GR NFC CTAP2 should return CTAP OK and SW_SUCCESS");
     expect(g_ctap2_saw_transport_auto_accept,
-           "worker NFC CTAP2 should auto-satisfy user presence for bring-up");
+           "direct no-GR NFC CTAP2 should auto-satisfy user presence");
+    expect(!g_ctap2_request_response_overlap,
+           "direct no-GR NFC CTAP2 should not pass the shared arena as both request and response");
     expect(g_notify_prompt_count == 0U,
-           "worker NFC CTAP2 auto-accept should not start the user-presence prompt light");
+           "direct no-GR NFC CTAP2 should not start the user-presence prompt light");
     expect(!app.transport_auto_accept_transaction,
-           "worker NFC CTAP2 should restore the auto-accept override");
+           "direct no-GR NFC CTAP2 should restore the auto-accept override");
     expect(!app.transport_nfc_state_storage.processing &&
-               !app.transport_nfc_state_storage.request_pending,
-           "worker NFC CTAP2 should not leave a background request pending");
+               !app.transport_nfc_state_storage.request_pending &&
+               !app.transport_nfc_state_storage.response_ready,
+           "direct no-GR NFC CTAP2 should not leave a background request");
+    test_nfc_deinit_app(&app);
+}
+
+static void test_nfc_large_ctap2_msg_without_get_response_uses_iso_response_chaining(void) {
+    ZerofidoApp app;
+    FuriMutex mutex = {0};
+    uint8_t ctap2_apdu[45] = {0x80, 0x10, 0x00, 0x00, 0x28, ZfCtapeCmdClientPin};
+    static const uint8_t get_response_apdu[] = {0x00, ZF_NFC_INS_ISO_GET_RESPONSE, 0x00, 0x00,
+                                                0x00};
+    const uint8_t *payload = NULL;
+    const size_t first_chunk_len = ZF_NFC_GET_RESPONSE_CHUNK_SIZE;
+    const size_t response_len = ZF_NFC_MAX_TX_FRAME_INF_SIZE + 50U;
+    const size_t remaining_len = response_len - first_chunk_len;
+
+    test_reset();
+    test_nfc_init_app(&app, &mutex);
+    test_nfc_select_applet(&app);
+    g_ctap2_large_response_len = response_len;
+
+    for (size_t i = 6U; i < sizeof(ctap2_apdu); ++i) {
+        ctap2_apdu[i] = (uint8_t)i;
+    }
+
+    expect(zf_transport_nfc_handle_apdu(&app, &app.transport_nfc_state_storage, ctap2_apdu,
+                                        sizeof(ctap2_apdu)),
+           "large NFC CTAP2 MSG without GET_RESPONSE support should start APDU response chaining");
+    payload = test_nfc_payload();
+    expect(test_nfc_payload_len() == first_chunk_len + 2U,
+           "large no-GR CTAP2 response should return one APDU response page plus SW");
+    expect(payload[0] == ZF_CTAP_SUCCESS && payload[1] == 0xA1,
+           "large no-GR CTAP2 response should start with the CTAP response body");
+    expect(payload[first_chunk_len] == 0x61U &&
+               payload[first_chunk_len + 1U] == (uint8_t)remaining_len,
+           "large no-GR CTAP2 response should advertise remaining bytes with SW_BYTES_REMAINING");
+    expect(g_ctap2_saw_transport_auto_accept,
+           "large no-GR CTAP2 should auto-satisfy user presence");
+    expect(!g_ctap2_request_response_overlap,
+           "large no-GR CTAP2 should copy request bytes away from the response arena");
+    expect(!app.transport_nfc_state_storage.processing &&
+               !app.transport_nfc_state_storage.request_pending &&
+               app.transport_nfc_state_storage.response_ready &&
+               app.transport_nfc_state_storage.response_offset == first_chunk_len &&
+               !app.transport_nfc_state_storage.iso4_tx_chain_active,
+           "large no-GR CTAP2 should stage the remainder for ISO GET RESPONSE");
+
+    size_t remaining_after_page = remaining_len;
+    while (remaining_after_page > ZF_NFC_GET_RESPONSE_CHUNK_SIZE) {
+        expect(zf_transport_nfc_handle_apdu(&app, &app.transport_nfc_state_storage,
+                                            get_response_apdu, sizeof(get_response_apdu)),
+               "large no-GR CTAP2 response should continue through ISO GET RESPONSE");
+        payload = test_nfc_payload();
+        expect(test_nfc_payload_len() == ZF_NFC_GET_RESPONSE_CHUNK_SIZE + 2U,
+               "intermediate no-GR CTAP2 response page should stay within the NFC page budget");
+        expect(payload[ZF_NFC_GET_RESPONSE_CHUNK_SIZE] == 0x61U,
+               "intermediate no-GR CTAP2 response page should advertise more bytes");
+        remaining_after_page -= ZF_NFC_GET_RESPONSE_CHUNK_SIZE;
+    }
+
+    expect(zf_transport_nfc_handle_apdu(&app, &app.transport_nfc_state_storage, get_response_apdu,
+                                        sizeof(get_response_apdu)),
+           "large no-GR CTAP2 response should finish through ISO GET RESPONSE");
+    payload = test_nfc_payload();
+    expect(test_nfc_payload_len() == remaining_after_page + 2U,
+           "final no-GR CTAP2 response page should include remaining bytes plus SW");
+    expect(payload[remaining_after_page] == 0x90U &&
+               payload[remaining_after_page + 1U] == 0x00U,
+           "final no-GR CTAP2 response page should terminate with SW_SUCCESS");
+    expect(!app.transport_nfc_state_storage.response_ready,
+           "final no-GR CTAP2 response page should clear the staged response");
+
+    test_nfc_deinit_app(&app);
+}
+
+static void test_nfc_packed_attestation_sized_extended_response_finishes_iso_dep_chain(void) {
+    ZerofidoApp app;
+    FuriMutex mutex = {0};
+    BitBuffer *buffer = bit_buffer_alloc(8U);
+    Iso14443_3aListenerEventData event_data = {.buffer = buffer};
+    Iso14443_3aListenerEvent listener_event = {
+        .type = Iso14443_3aListenerEventTypeReceivedStandardFrame,
+        .data = &event_data,
+    };
+    NfcGenericEvent event = {
+        .protocol = NfcProtocolIso14443_3a,
+        .event_data = &listener_event,
+    };
+    static uint8_t response[822U] = {0};
+    const size_t total_len = sizeof(response) + 2U;
+    const size_t full_chunks = total_len / ZF_NFC_TX_CHAIN_CHUNK_SIZE;
+    const size_t final_payload_len = total_len - (full_chunks * ZF_NFC_TX_CHAIN_CHUNK_SIZE);
+    const uint8_t *payload = NULL;
+
+    test_reset();
+    test_nfc_init_app(&app, &mutex);
+    app.transport_nfc_state_storage.iso4_active = true;
+    app.transport_nfc_state_storage.iso_pcb = ZF_NFC_PCB_BLOCK;
+    for (size_t i = 0; i < sizeof(response); ++i) {
+        response[i] = (uint8_t)(0x30U + i);
+    }
+
+    expect(zf_transport_nfc_begin_chained_apdu_payload(&app.transport_nfc_state_storage, response,
+                                                       sizeof(response), ZF_NFC_SW_SUCCESS),
+           "packed attestation sized response should start ISO-DEP response chaining");
+    expect(test_nfc_payload_len() == ZF_NFC_TX_CHAIN_CHUNK_SIZE,
+           "packed attestation chain should send a bounded first ISO-DEP payload");
+    expect((g_last_nfc_tx[0] & ZF_NFC_PCB_CHAIN) != 0U,
+           "packed attestation first block should set the chaining bit");
+
+    for (size_t ack_index = 0U; ack_index < full_chunks; ++ack_index) {
+        const uint8_t ack = (ack_index % 2U) == 0U ? 0xA2U : 0xA3U;
+
+        bit_buffer_reset(buffer);
+        bit_buffer_append_bytes(buffer, &ack, 1U);
+        expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
+               "packed attestation R-ACK should advance the ISO-DEP response chain");
+    }
+
+    payload = test_nfc_payload();
+    expect(!app.transport_nfc_state_storage.iso4_tx_chain_active &&
+               app.transport_nfc_state_storage.iso4_tx_chain_completed,
+           "packed attestation final block should wait for the terminal reader ACK");
+    expect(test_nfc_payload_len() == final_payload_len,
+           "packed attestation final block should carry only remaining bytes and SW");
+    expect((g_last_nfc_tx[0] & ZF_NFC_PCB_CHAIN) == 0U,
+           "packed attestation final block should clear the chaining bit");
+    expect(payload[final_payload_len - 2U] == 0x90U && payload[final_payload_len - 1U] == 0x00U,
+           "packed attestation final block should terminate with SW_SUCCESS");
+
+    bit_buffer_reset(buffer);
+    bit_buffer_append_bytes(buffer, (const uint8_t[]){0xA2U}, 1U);
+    expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
+           "packed attestation terminal R-ACK should complete the ISO-DEP transaction");
+    expect(!app.transport_nfc_state_storage.iso4_tx_chain_completed,
+           "packed attestation terminal R-ACK should clear the completed-chain latch");
+
+    bit_buffer_free(buffer);
+    test_nfc_deinit_app(&app);
+}
+
+static void test_nfc_large_extended_ctap2_msg_without_get_response_uses_extended_response(void) {
+    ZerofidoApp app;
+    FuriMutex mutex = {0};
+    BitBuffer *buffer = bit_buffer_alloc(8U);
+    Iso14443_3aListenerEventData event_data = {.buffer = buffer};
+    Iso14443_3aListenerEvent listener_event = {
+        .type = Iso14443_3aListenerEventTypeReceivedStandardFrame,
+        .data = &event_data,
+    };
+    NfcGenericEvent event = {
+        .protocol = NfcProtocolIso14443_3a,
+        .event_data = &listener_event,
+    };
+    uint8_t ctap2_apdu[47] = {0x80, 0x10, 0x00, 0x00, 0x00, 0x00, 0x28,
+                              ZfCtapeCmdClientPin};
+    const uint8_t *payload = NULL;
+    const size_t response_len = ZF_NFC_MAX_TX_FRAME_INF_SIZE + 50U;
+    uint8_t first_pcb = 0U;
+
+    test_reset();
+    test_nfc_init_app(&app, &mutex);
+    test_nfc_select_applet(&app);
+    g_ctap2_large_response_len = response_len;
+
+    for (size_t i = 8U; i < sizeof(ctap2_apdu); ++i) {
+        ctap2_apdu[i] = (uint8_t)i;
+    }
+
+    expect(zf_transport_nfc_handle_apdu(&app, &app.transport_nfc_state_storage, ctap2_apdu,
+                                        sizeof(ctap2_apdu)),
+           "large extended NFC CTAP2 MSG should start an extended APDU response");
+    payload = test_nfc_payload();
+    expect(test_nfc_payload_len() == ZF_NFC_TX_CHAIN_CHUNK_SIZE,
+           "large extended CTAP2 response should use bounded ISO-DEP response chunks");
+    expect(payload[0] == ZF_CTAP_SUCCESS && payload[1] == 0xA1,
+           "large extended CTAP2 response should start with the CTAP response body");
+    expect((g_last_nfc_tx[0] & ZF_NFC_PCB_CHAIN) != 0U,
+           "large extended CTAP2 response should continue via ISO-DEP chaining");
+    expect(app.transport_nfc_state_storage.iso4_tx_chain_active &&
+               !app.transport_nfc_state_storage.response_ready,
+           "large extended CTAP2 response must not use short APDU GET RESPONSE chaining");
+    expect(test_log_contains("CTAP2 direct ext"),
+           "large extended CTAP2 response should expose the extended-response breadcrumb");
+    first_pcb = g_last_nfc_tx[0];
+
+    bit_buffer_append_bytes(buffer, (const uint8_t[]){0xA3U}, 1U);
+    expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
+           "extended CTAP2 R-ACK should advance the ISO-DEP response chain");
+    expect(g_last_nfc_tx[0] != first_pcb,
+           "extended CTAP2 R-ACK should transmit the next chained I-block");
+
+    bit_buffer_free(buffer);
+    test_nfc_deinit_app(&app);
+}
+
+static void test_nfc_chained_ctap2_request_acknowledges_next_block_number(void) {
+    ZerofidoApp app;
+    FuriMutex mutex = {0};
+    BitBuffer *buffer = bit_buffer_alloc(160U);
+    Iso14443_3aListenerEventData event_data = {.buffer = buffer};
+    Iso14443_3aListenerEvent listener_event = {
+        .type = Iso14443_3aListenerEventTypeReceivedStandardFrame,
+        .data = &event_data,
+    };
+    NfcGenericEvent event = {
+        .protocol = NfcProtocolIso14443_3a,
+        .event_data = &listener_event,
+    };
+    uint8_t chained_frame[126U] = {0x12U, 0x80U, 0x10U, 0x00U, 0x00U, 0x00U, 0x00U,
+                                   0xA5U};
+    const char *chain_log = NULL;
+    const char *ack_log = NULL;
+
+    test_reset();
+    test_nfc_init_app(&app, &mutex);
+    test_nfc_select_applet(&app);
+    app.transport_nfc_state_storage.iso4_active = true;
+    for (size_t i = 8U; i < sizeof(chained_frame); ++i) {
+        chained_frame[i] = (uint8_t)i;
+    }
+
+    bit_buffer_append_bytes(buffer, chained_frame, sizeof(chained_frame));
+    expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
+           "first chained NFC CTAP2 APDU block should be accepted");
+    expect(g_nfc_tx_count > 0U && g_last_nfc_tx_len == 3U && g_last_nfc_tx[0] == 0xA2U,
+           "I-chain block number 0 should be acknowledged with the working iOS R-ACK A2");
+    expect(app.transport_nfc_state_storage.command_chain_active,
+           "first chained NFC CTAP2 APDU block should leave command assembly active");
+    expect(test_log_contains("NFC I-chain 12"),
+           "chained NFC CTAP2 APDU should expose the I-chain breadcrumb");
+    chain_log = strstr(g_log_text, "NFC I-chain 12");
+    ack_log = strstr(g_log_text, "iso-tx len=1 head=A2");
+    expect(chain_log && ack_log && chain_log < ack_log,
+           "iOS receive-chain ACK should preserve the previous working command order");
+
+    bit_buffer_free(buffer);
+    test_nfc_deinit_app(&app);
+}
+
+static void test_nfc_duplicate_chained_i_block_does_not_corrupt_assembled_apdu(void) {
+    ZerofidoApp app;
+    FuriMutex mutex = {0};
+    uint8_t apdu[174U] = {0x80, 0x10, 0x00, 0x00, 0x00, 0x00, 0xA5,
+                          ZfCtapeCmdMakeCredential};
+    const size_t first_len = 125U;
+    const uint8_t *payload = NULL;
+
+    test_reset();
+    test_nfc_init_app(&app, &mutex);
+    test_nfc_select_applet(&app);
+    app.transport_nfc_state_storage.iso4_active = true;
+    app.transport_nfc_state_storage.iso_pcb = ZF_NFC_PCB_BLOCK;
+
+    for (size_t i = 8U; i < 172U; ++i) {
+        apdu[i] = (uint8_t)i;
+    }
+
+    furi_mutex_acquire(&mutex, FuriWaitForever);
+    expect(zf_transport_nfc_handle_iso4_payload_locked(&app, &app.transport_nfc_state_storage,
+                                                       apdu, first_len, 0x12, true,
+                                                       false) == NfcCommandContinue,
+           "first chained I-block should be accepted");
+    expect(mutex.depth == 0U, "first chained I-block should release the callback mutex");
+    expect(app.transport_nfc_state_storage.command_chain_active &&
+               app.transport_nfc_state_storage.request_len == first_len,
+           "first chained I-block should seed APDU assembly");
+
+    furi_mutex_acquire(&mutex, FuriWaitForever);
+    expect(zf_transport_nfc_handle_iso4_payload_locked(&app, &app.transport_nfc_state_storage,
+                                                       apdu, first_len, 0x12, true,
+                                                       false) == NfcCommandContinue,
+           "retransmitted chained I-block should be acknowledged");
+    expect(mutex.depth == 0U, "duplicate chained I-block should release the callback mutex");
+    expect(app.transport_nfc_state_storage.command_chain_active &&
+               app.transport_nfc_state_storage.request_len == first_len,
+           "duplicate chained I-block must not be appended twice");
+    expect(test_log_contains("NFC I-chain dup"),
+           "duplicate chained I-block should expose a replay breadcrumb");
+
+    furi_mutex_acquire(&mutex, FuriWaitForever);
+    expect(zf_transport_nfc_handle_iso4_payload_locked(
+               &app, &app.transport_nfc_state_storage, &apdu[first_len],
+               sizeof(apdu) - first_len, 0x02, false, false) == NfcCommandContinue,
+           "terminal I-block should complete APDU assembly after a duplicate");
+    expect(mutex.depth == 0U, "terminal I-block should release the callback mutex");
+    payload = test_nfc_payload();
+    expect(test_nfc_payload_len() == 4U && payload[0] == ZF_CTAP_SUCCESS &&
+               payload[1] == 0xA0 && payload[2] == 0x90 && payload[3] == 0x00,
+           "deduplicated no-GR CTAP2 APDU should complete directly");
+    expect(!app.transport_nfc_state_storage.processing &&
+               !app.transport_nfc_state_storage.request_pending &&
+               !app.transport_nfc_state_storage.response_ready,
+           "deduplicated no-GR APDU should not leave background worker state");
+
+    test_nfc_deinit_app(&app);
+}
+
+static void test_nfc_duplicate_chained_i_block_stall_resets_exchange(void) {
+    ZerofidoApp app;
+    FuriMutex mutex = {0};
+    uint8_t apdu[126U] = {0x80, 0x10, 0x00, 0x00, 0x00, 0x00, 0xA5,
+                          ZfCtapeCmdMakeCredential};
+    NfcCommand command = NfcCommandContinue;
+
+    test_reset();
+    test_nfc_init_app(&app, &mutex);
+    test_nfc_select_applet(&app);
+    app.transport_nfc_state_storage.iso4_active = true;
+    app.transport_nfc_state_storage.iso_pcb = ZF_NFC_PCB_BLOCK;
+
+    for (size_t i = 8U; i < sizeof(apdu); ++i) {
+        apdu[i] = (uint8_t)i;
+    }
+
+    furi_mutex_acquire(&mutex, FuriWaitForever);
+    expect(zf_transport_nfc_handle_iso4_payload_locked(&app, &app.transport_nfc_state_storage,
+                                                       apdu, sizeof(apdu), 0x12, true,
+                                                       false) == NfcCommandContinue,
+           "first chained I-block should start APDU assembly");
+    expect(app.transport_nfc_state_storage.command_chain_active &&
+               app.transport_nfc_state_storage.request_len == sizeof(apdu),
+           "first chained I-block should be retained");
+
+    for (size_t i = 0U; i < 9U; ++i) {
+        furi_mutex_acquire(&mutex, FuriWaitForever);
+        command = zf_transport_nfc_handle_iso4_payload_locked(
+            &app, &app.transport_nfc_state_storage, apdu, sizeof(apdu), 0x12, true, false);
+    }
+
+    expect(command == NfcCommandReset,
+           "repeated duplicate chained I-blocks should break the RF exchange");
+    expect(mutex.depth == 0U, "stalled chained I-block reset should release the callback mutex");
+    expect(!app.transport_nfc_state_storage.command_chain_active &&
+               app.transport_nfc_state_storage.request_len == 0U &&
+               !app.transport_nfc_state_storage.rx_chain_last_valid,
+           "stalled chained I-block reset should discard partial APDU assembly");
+    expect(test_log_contains("NFC I-chain stall"),
+           "stalled chained I-block reset should expose a diagnostic breadcrumb");
 
     test_nfc_deinit_app(&app);
 }
@@ -3359,7 +4224,7 @@ static void test_nfc_get_response_reports_remaining_bytes(void) {
     test_nfc_init_app(&app, &mutex);
     test_nfc_select_applet(&app);
 
-    memset(app.transport_arena, 0xAB, sizeof(app.transport_arena));
+    memset(app.transport_arena, 0xAB, zf_app_transport_arena_capacity(&app));
     app.transport_nfc_state_storage.response_ready = true;
     app.transport_nfc_state_storage.response_len = 300;
     app.transport_nfc_state_storage.response_offset = 0;
@@ -4439,11 +5304,11 @@ static void test_usb_restore_keeps_previous_config_after_restore_failure(void) {
     expect(app.previous_usb == NULL, "successful restore should clear previous USB config");
 }
 
-static void test_usb_worker_waits_forever_while_idle_and_polls_while_assembling(void) {
+static void test_usb_worker_polls_while_idle_and_assembling(void) {
     ZfTransportState transport = {0};
 
-    expect(zf_transport_worker_next_timeout(&transport) == FuriWaitForever,
-           "idle USB worker should wait indefinitely for events");
+    expect(zf_transport_worker_next_timeout(&transport) == ZF_WORKER_POLL_MS,
+           "idle USB worker should poll for queued HID requests without a wakeup");
     transport.active = true;
     expect(zf_transport_worker_next_timeout(&transport) == ZF_WORKER_POLL_MS,
            "active USB assembly still needs timeout polling");
@@ -4459,6 +5324,36 @@ static void test_nfc_worker_waits_forever_while_idle(void) {
     expect(zf_transport_nfc_worker(&app) == 0, "NFC worker should exit cleanly on stop");
     expect(g_last_thread_wait_timeout == FuriWaitForever,
            "idle NFC worker should wait indefinitely for request or stop events");
+}
+
+static void test_nfc_worker_releases_transport_arena_on_listener_alloc_failure(void) {
+    ZerofidoApp app = {0};
+
+    test_reset();
+    g_nfc_listener_alloc_result = false;
+
+    expect(zf_transport_nfc_worker(&app) == 0, "NFC worker should exit cleanly on listener OOM");
+    expect(app.transport_arena == NULL,
+           "NFC listener failure should release the transport arena");
+    expect(app.transport_arena_size == 0,
+           "NFC listener failure should clear the transport arena size");
+    expect(strcmp(g_last_status_text, "NFC listener failed") == 0,
+           "NFC listener failure should publish a status message");
+}
+
+static void test_nfc_worker_releases_transport_arena_on_resource_alloc_failure(void) {
+    ZerofidoApp app = {0};
+
+    test_reset();
+    g_nfc_alloc_result = false;
+
+    expect(zf_transport_nfc_worker(&app) == 0, "NFC worker should exit cleanly on resource OOM");
+    expect(app.transport_arena == NULL,
+           "NFC resource failure should release the transport arena");
+    expect(app.transport_arena_size == 0,
+           "NFC resource failure should clear the transport arena size");
+    expect(strcmp(g_last_status_text, "NFC init failed") == 0,
+           "NFC resource failure should publish a status message");
 }
 
 static void test_transport_worker_processes_disconnect_when_coalesced_with_interaction(void) {
@@ -4618,7 +5513,7 @@ static void test_transport_fragment_expires_on_session_tick(void) {
            "expired assembly should report MSG_TIMEOUT");
 }
 
-static void test_transport_request_wakeup_drains_all_queued_packets(void) {
+static void test_transport_request_wakeup_processes_one_complete_transaction(void) {
     ZerofidoApp app = {0};
     ZfTransportState transport = {0};
     uint8_t packet[ZF_CTAPHID_PACKET_SIZE] = {0};
@@ -4646,14 +5541,14 @@ static void test_transport_request_wakeup_drains_all_queued_packets(void) {
 
     zf_transport_handle_request(&app, &transport, ZF_WORKER_EVT_REQUEST, packet);
 
-    expect(g_hid_request_index == g_hid_request_count,
-           "request wakeup should drain every queued HID packet");
-    expect(g_hid_response_count == 2,
-           "each drained INIT request should produce its own HID response");
+    expect(g_hid_request_index == 1,
+           "request wakeup should leave later complete transactions for a later worker pass");
+    expect(g_hid_response_count == 1,
+           "one worker pass should produce one complete HID response");
     expect(g_last_hid_response[4] == ZF_CTAPHID_INIT,
-           "the last drained packet should still complete normally");
-    expect(memcmp(&g_last_hid_response[7], nonce_b, sizeof(nonce_b)) == 0,
-           "the final INIT response should echo the final queued request nonce");
+           "the first queued packet should complete normally");
+    expect(memcmp(&g_last_hid_response[7], nonce_a, sizeof(nonce_a)) == 0,
+           "the first INIT response should echo the first queued request nonce");
 }
 
 static void test_transport_request_without_wakeup_marks_connected_and_processes_packet(void) {
@@ -4685,6 +5580,117 @@ static void test_transport_request_without_wakeup_marks_connected_and_processes_
            "fallback request processing should complete the INIT transaction");
     expect(memcmp(&g_last_hid_response[7], nonce, sizeof(nonce)) == 0,
            "fallback request processing should echo the INIT nonce");
+}
+
+static void test_transport_worker_idle_poll_processes_immediate_u2f_invalid_cla(void) {
+    ZerofidoApp app = {0};
+    static const uint8_t nonce[8] = {0x1B, 0x61, 0x8C, 0x6B, 0xC8, 0xC7, 0x07, 0x42};
+    const uint32_t broadcast_cid = ZF_BROADCAST_CID;
+    const uint32_t cid = 0x9DD5F6E9U;
+    const uint8_t request[] = {0x6D, U2F_CMD_VERSION, 0x00, 0x00, 0x00, 0x00, 0x00};
+
+    test_reset();
+    app.transport_adapter = &zf_transport_usb_hid_adapter;
+    zf_runtime_config_load_defaults(&app.runtime_config);
+    zf_runtime_config_resolve_capabilities(&app.runtime_config, &app.capabilities);
+    app.capabilities_resolved = true;
+    g_random_values[0] = cid;
+    g_random_count = 1;
+
+    memcpy(g_hid_request_packets[0], &broadcast_cid, sizeof(broadcast_cid));
+    g_hid_request_packets[0][4] = ZF_CTAPHID_INIT;
+    g_hid_request_packets[0][5] = 0x00;
+    g_hid_request_packets[0][6] = 0x08;
+    memcpy(&g_hid_request_packets[0][7], nonce, sizeof(nonce));
+    g_hid_request_packet_lens[0] = 15;
+
+    memcpy(g_hid_request_packets[1], &cid, sizeof(cid));
+    g_hid_request_packets[1][4] = ZF_CTAPHID_MSG;
+    g_hid_request_packets[1][5] = 0x00;
+    g_hid_request_packets[1][6] = sizeof(request);
+    memcpy(&g_hid_request_packets[1][7], request, sizeof(request));
+    g_hid_request_packet_lens[1] = 7 + sizeof(request);
+    g_hid_request_count = 2;
+
+    g_thread_flag_results[0] = FuriFlagErrorTimeout;
+    g_thread_flag_results[1] = FuriFlagErrorTimeout;
+    g_thread_flag_results[2] = ZF_WORKER_EVT_STOP;
+    g_thread_flag_result_count = 3;
+
+    expect(zf_transport_usb_hid_worker(&app) == 0, "worker should exit cleanly in native harness");
+    expect(g_hid_request_index == g_hid_request_count,
+           "idle polls should drain the queued INIT and immediate U2F MSG over separate passes");
+    expect(g_hid_response_count == 2,
+           "idle poll should answer both the INIT and invalid-CLA U2F MSG");
+    expect(g_last_hid_response_len == ZF_CTAPHID_PACKET_SIZE,
+           "invalid-CLA U2F MSG should emit a HID response frame");
+    expect(memcmp(g_last_hid_response, &cid, sizeof(cid)) == 0,
+           "invalid-CLA U2F MSG should reply on the assigned CID");
+    expect(g_last_hid_response[4] == ZF_CTAPHID_MSG,
+           "invalid-CLA U2F APDU should respond on CTAPHID_MSG");
+    expect(g_last_hid_response[5] == 0x00 && g_last_hid_response[6] == 0x02,
+           "invalid-CLA U2F APDU should return a two-byte status word");
+    expect(g_last_hid_response[7] == 0x6E && g_last_hid_response[8] == 0x00,
+           "invalid-CLA U2F APDU should return SW_CLA_NOT_SUPPORTED");
+    expect(g_last_thread_wait_timeout == ZF_WORKER_POLL_MS,
+           "worker should use a bounded poll timeout while idle");
+}
+
+static void test_transport_worker_idle_poll_processes_immediate_u2f_version_data(void) {
+    ZerofidoApp app = {0};
+    static const uint8_t nonce[8] = {0x36, 0xBB, 0x45, 0xBF, 0x98, 0xB6, 0x3C, 0xF0};
+    const uint32_t broadcast_cid = ZF_BROADCAST_CID;
+    const uint32_t cid = 0xF0EE7690U;
+    const uint8_t request[] = {
+        0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x22, 0x59, 0x38, 0xE9, 0x9C, 0xC9,
+        0x69, 0x5E, 0x75, 0x61, 0x77, 0xE6, 0x71, 0x37, 0xB5, 0x88, 0xD2, 0xE5,
+        0x4A, 0x5E, 0xCA, 0xEF, 0x4A, 0x29, 0x1E, 0x7B, 0xA1, 0x11, 0x5D, 0x0C,
+        0xA5, 0xE2, 0x70, 0xAD, 0x92,
+    };
+
+    test_reset();
+    app.transport_adapter = &zf_transport_usb_hid_adapter;
+    zf_runtime_config_load_defaults(&app.runtime_config);
+    zf_runtime_config_resolve_capabilities(&app.runtime_config, &app.capabilities);
+    app.capabilities_resolved = true;
+    g_random_values[0] = cid;
+    g_random_count = 1;
+
+    memcpy(g_hid_request_packets[0], &broadcast_cid, sizeof(broadcast_cid));
+    g_hid_request_packets[0][4] = ZF_CTAPHID_INIT;
+    g_hid_request_packets[0][5] = 0x00;
+    g_hid_request_packets[0][6] = 0x08;
+    memcpy(&g_hid_request_packets[0][7], nonce, sizeof(nonce));
+    g_hid_request_packet_lens[0] = 15;
+
+    memcpy(g_hid_request_packets[1], &cid, sizeof(cid));
+    g_hid_request_packets[1][4] = ZF_CTAPHID_MSG;
+    g_hid_request_packets[1][5] = 0x00;
+    g_hid_request_packets[1][6] = sizeof(request);
+    memcpy(&g_hid_request_packets[1][7], request, sizeof(request));
+    g_hid_request_packet_lens[1] = 7 + sizeof(request);
+    g_hid_request_count = 2;
+
+    g_thread_flag_results[0] = FuriFlagErrorTimeout;
+    g_thread_flag_results[1] = FuriFlagErrorTimeout;
+    g_thread_flag_results[2] = ZF_WORKER_EVT_STOP;
+    g_thread_flag_result_count = 3;
+
+    expect(zf_transport_usb_hid_worker(&app) == 0, "worker should exit cleanly in native harness");
+    expect(g_hid_request_index == g_hid_request_count,
+           "idle polls should drain the queued INIT and U2F VERSION-with-data MSG");
+    expect(g_hid_response_count == 2,
+           "idle poll should answer both the INIT and VERSION-with-data U2F MSG");
+    expect(g_last_hid_response_len == ZF_CTAPHID_PACKET_SIZE,
+           "VERSION-with-data U2F MSG should emit a HID response frame");
+    expect(memcmp(g_last_hid_response, &cid, sizeof(cid)) == 0,
+           "VERSION-with-data U2F MSG should reply on the assigned CID");
+    expect(g_last_hid_response[4] == ZF_CTAPHID_MSG,
+           "VERSION-with-data U2F APDU should respond on CTAPHID_MSG");
+    expect(g_last_hid_response[5] == 0x00 && g_last_hid_response[6] == 0x02,
+           "VERSION-with-data U2F APDU should return a two-byte status word");
+    expect(g_last_hid_response[7] == 0x67 && g_last_hid_response[8] == 0x00,
+           "VERSION-with-data U2F APDU should return SW_WRONG_LENGTH");
 }
 
 static void test_transport_request_wakeup_invalid_seq_allows_followup_init(void) {
@@ -4731,8 +5737,13 @@ static void test_transport_request_wakeup_invalid_seq_allows_followup_init(void)
 
     zf_transport_handle_request(&app, &transport, ZF_WORKER_EVT_REQUEST, packet);
 
-    expect(g_hid_request_index == g_hid_request_count,
-           "request wakeup should drain the invalid-seq queue");
+    expect(g_hid_request_index < g_hid_request_count,
+           "request wakeup should leave later queued packets for a later worker pass");
+
+    while (g_hid_request_index < g_hid_request_count) {
+        zf_transport_handle_request(&app, &transport, ZF_WORKER_EVT_REQUEST, packet);
+    }
+
     expect(g_last_hid_response[4] == ZF_CTAPHID_INIT,
            "follow-up INIT should succeed after queued invalid sequence reset");
     expect(memcmp(&g_last_hid_response[7], nonce, sizeof(nonce)) == 0,
@@ -5275,18 +6286,22 @@ int main(void) {
     test_nfc_iso4_listener_event_decodes_block_and_sends_framed_response();
     test_nfc_iso4_listener_raw60_returns_unsupported_via_send_block();
     test_nfc_iso4_listener_native_desfire_payload_is_not_parsed_as_apdu();
+    test_nfc_desfire_deselect_sleeps_before_next_activation();
     test_nfc_3a_rats_sends_ats_with_public_tx();
     test_nfc_3a_repeated_rats_resends_ats_instead_of_iso4_block();
     test_nfc_3a_reqa_data_resets_active_iso_dep_session();
     test_nfc_3a_iso_dep_select_decodes_and_responds();
     test_nfc_3a_r_nak_replays_last_iso_response();
     test_nfc_3a_r_ack_advances_chained_response_and_r_nak_replays();
+    test_nfc_make_credential_sized_response_uses_single_i_block();
+    test_nfc_terminal_r_ack_after_chained_response_keeps_fido_selected();
     test_nfc_post_success_cooldown_allows_new_fido_select();
     test_nfc_3a_empty_i_block_replays_cached_large_response_before_helper();
     test_nfc_3a_empty_i_block_replays_encoded_frame_when_cache_flag_missing();
     test_nfc_3a_late_pps_then_r_nak_replays_cached_large_response();
     test_nfc_3a_late_pps_frame_is_acknowledged();
     test_nfc_framed_select_response_uses_reader_block_number();
+    test_nfc_cache_last_iso_response_handles_frame_buffer_alias();
     test_nfc_unadvertised_cid_frame_is_ignored();
     test_nfc_ndef_type4_select_is_rejected_for_fido_only_surface();
     test_nfc_applet_select_is_required_before_ctap2();
@@ -5300,8 +6315,16 @@ int main(void) {
     test_nfc_ctap2_get_info_returns_immediately();
     test_nfc_ctap2_get_info_accepts_webkit_extended_apdu();
     test_nfc_iso4_listener_extended_get_info_is_iso_dep_framed();
+    test_nfc_iso4_listener_ctap2_msg_signals_worker_after_unlock();
+    test_nfc_iso4_listener_busy_ctap2_retry_has_minimal_side_effects();
     test_nfc_ctap2_msg_queues_worker_response();
-    test_nfc_ctap2_msg_without_get_response_queues_worker_response();
+    test_nfc_ctap2_msg_without_get_response_returns_direct_response();
+    test_nfc_large_ctap2_msg_without_get_response_uses_iso_response_chaining();
+    test_nfc_packed_attestation_sized_extended_response_finishes_iso_dep_chain();
+    test_nfc_large_extended_ctap2_msg_without_get_response_uses_extended_response();
+    test_nfc_chained_ctap2_request_acknowledges_next_block_number();
+    test_nfc_duplicate_chained_i_block_does_not_corrupt_assembled_apdu();
+    test_nfc_duplicate_chained_i_block_stall_resets_exchange();
     test_nfc_ctap2_msg_rejects_invalid_p1_p2();
     test_nfc_ctap2_get_info_rejects_invalid_p1_p2();
     test_nfc_locked_ctap2_get_info_does_not_reenter_ui_mutex();
@@ -5352,16 +6375,20 @@ int main(void) {
     test_transport_processing_other_cid_short_init_returns_busy();
     test_transport_processing_broadcast_init_recovers_channel();
     test_usb_restore_keeps_previous_config_after_restore_failure();
-    test_usb_worker_waits_forever_while_idle_and_polls_while_assembling();
+    test_usb_worker_polls_while_idle_and_assembling();
     test_nfc_worker_waits_forever_while_idle();
+    test_nfc_worker_releases_transport_arena_on_listener_alloc_failure();
+    test_nfc_worker_releases_transport_arena_on_resource_alloc_failure();
     test_transport_worker_processes_disconnect_when_coalesced_with_interaction();
     test_wait_for_interaction_processes_disconnect_when_coalesced_with_completion();
     test_wait_for_interaction_sends_immediate_keepalive();
     test_wait_for_interaction_repeats_keepalive_on_timeout();
     test_wait_for_interaction_omits_keepalive_for_u2f_msg();
     test_transport_fragment_expires_on_session_tick();
-    test_transport_request_wakeup_drains_all_queued_packets();
+    test_transport_request_wakeup_processes_one_complete_transaction();
     test_transport_request_without_wakeup_marks_connected_and_processes_packet();
+    test_transport_worker_idle_poll_processes_immediate_u2f_invalid_cla();
+    test_transport_worker_idle_poll_processes_immediate_u2f_version_data();
     test_transport_request_wakeup_invalid_seq_allows_followup_init();
     test_transport_same_cid_init_like_invalid_seq_allows_followup_init();
     test_transport_out_of_order_continuation_returns_invalid_seq();

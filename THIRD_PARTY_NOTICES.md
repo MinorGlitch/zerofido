@@ -23,6 +23,12 @@ or vendored source.
 | oslex | MIT classifier | Transitive Python dependency of `ufbt`. |
 | mslex | Apache-2.0 | Transitive Python dependency of `oslex`. |
 
+## Vendored Source
+
+| Component | Observed license metadata | Notes |
+| --- | --- | --- |
+| micro-ecc | BSD-2-Clause | Vendored under `src/crypto/micro_ecc/` as the fixed P-256 backend. Source fetched from `github.com/kmackay/micro-ecc`; local build enables only `secp256r1`. |
+
 ## Native Test Headers
 
 The headers under `tests/native/include/` are native-regression shims that mirror the shape of

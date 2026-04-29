@@ -1,3 +1,5 @@
+"""Tests for the security-state semantics audit verifier."""
+
 from __future__ import annotations
 
 import importlib.util

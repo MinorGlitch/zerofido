@@ -31,4 +31,5 @@ typedef struct {
     uint32_t lc;
 } U2fParsedApdu;
 
+/* Internal APDU parser used by validation and response encoders. */
 bool u2f_parse_apdu_header(const uint8_t *buf, uint16_t len, bool allow_short, U2fParsedApdu *apdu);

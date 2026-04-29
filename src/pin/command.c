@@ -79,6 +79,8 @@ static const char *zf_pin_status_name(uint8_t status) {
         return "PNONE";
     case ZF_CTAP_ERR_PIN_POLICY_VIOLATION:
         return "PPOL";
+    case ZF_CTAP_ERR_UNAUTHORIZED_PERMISSION:
+        return "UPERM";
     case ZF_CTAP_ERR_OTHER:
         return "OTHER";
     default:
@@ -90,23 +92,43 @@ static void zf_pin_log_result(const char *tag, uint8_t status) {
     FURI_LOG_I("ZeroFIDO:CTAP", "cmd=%s status=%s", tag ? tag : "CP", zf_pin_status_name(status));
 }
 #else
+#define ZF_PIN_DIAG(...) \
+    do {                 \
+    } while(false)
+
 static void zf_pin_log_result(const char *tag, uint8_t status) {
     (void)tag;
     (void)status;
 }
 #endif
 
-uint8_t zerofido_pin_handle_command(ZerofidoApp *app, const uint8_t *request, size_t request_len,
-                                    uint8_t *out, size_t out_capacity, size_t *out_len) {
+#if ZF_RELEASE_DIAGNOSTICS
+#define ZF_PIN_DIAG(...) FURI_LOG_I("ZeroFIDO:CTAP", __VA_ARGS__)
+#endif
+
+/*
+ * Handles one CTAP clientPIN command using a private state snapshot. Operations
+ * mutate the snapshot, then publish it under ui_mutex; scratch contains parsed
+ * CBOR, protocol keys, decrypted PIN material, and tokens and is zeroed before
+ * release.
+ */
+uint8_t zerofido_pin_handle_command_with_session(ZerofidoApp *app, ZfTransportSessionId session_id,
+                                                 const uint8_t *request, size_t request_len,
+                                                 uint8_t *out, size_t out_capacity,
+                                                 size_t *out_len) {
     ZfClientPinCommandScratch *scratch = zf_pin_command_scratch(app);
+    ZfResolvedCapabilities capabilities;
     ZfClientPinRequest *parsed = NULL;
     ZfClientPinState *state = NULL;
     const char *diagnostic_tag = "CP-PARSE";
+    bool pin_set_before = false;
     uint8_t status = ZF_CTAP_ERR_OTHER;
 
     if (!scratch) {
+        ZF_PIN_DIAG("cmd=CP scratch oom");
         return ZF_CTAP_ERR_OTHER;
     }
+    ZF_PIN_DIAG("cmd=CP scratch ok");
     parsed = &scratch->request;
     state = &scratch->state;
 
@@ -115,7 +137,18 @@ uint8_t zerofido_pin_handle_command(ZerofidoApp *app, const uint8_t *request, si
         goto cleanup;
     }
     diagnostic_tag = zerofido_pin_subcommand_tag(parsed->subcommand);
+    ZF_PIN_DIAG("cmd=%s parsed", diagnostic_tag);
     zf_pin_snapshot_state(app, state);
+    pin_set_before = state->pin_set;
+    ZF_PIN_DIAG("cmd=%s state pin=%u retries=%u block=%u", diagnostic_tag,
+                state->pin_set ? 1U : 0U, (unsigned)state->pin_retries,
+                state->pin_auth_blocked ? 1U : 0U);
+    zf_runtime_get_effective_capabilities(app, &capabilities);
+    if (parsed->has_pin_protocol && parsed->pin_protocol == ZF_PIN_PROTOCOL_V2 &&
+        !capabilities.pin_uv_auth_protocol_2_enabled) {
+        status = ZF_CTAP_ERR_INVALID_PARAMETER;
+        goto cleanup;
+    }
 
     switch (parsed->subcommand) {
     case ZF_CLIENT_PIN_SUBCMD_GET_RETRIES:
@@ -128,12 +161,17 @@ uint8_t zerofido_pin_handle_command(ZerofidoApp *app, const uint8_t *request, si
         status = zf_client_pin_handle_set_pin(app->storage, state, parsed, scratch, out_len);
         break;
     case ZF_CLIENT_PIN_SUBCMD_GET_PIN_TOKEN:
-        status = zf_client_pin_handle_get_pin_token(app->storage, state, parsed, scratch, false,
-                                                    out, out_capacity, out_len);
+        status = zf_client_pin_handle_get_pin_token(app, app->storage, state, parsed, scratch, false,
+                                                    capabilities.client_pin_token_requires_consent,
+                                                    session_id, out, out_capacity, out_len);
         break;
     case ZF_CLIENT_PIN_SUBCMD_GET_PIN_UV_AUTH_TOKEN_USING_PIN_WITH_PERMISSIONS:
-        status = zf_client_pin_handle_get_pin_token(app->storage, state, parsed, scratch, true, out,
-                                                    out_capacity, out_len);
+        if (!capabilities.pin_uv_auth_token_enabled) {
+            status = ZF_CTAP_ERR_INVALID_SUBCOMMAND;
+            break;
+        }
+        status = zf_client_pin_handle_get_pin_token(app, app->storage, state, parsed, scratch, true,
+                                                    true, session_id, out, out_capacity, out_len);
         break;
     case ZF_CLIENT_PIN_SUBCMD_CHANGE_PIN:
         status = zf_client_pin_handle_change_pin(app->storage, state, parsed, scratch, out_len);
@@ -143,9 +181,18 @@ uint8_t zerofido_pin_handle_command(ZerofidoApp *app, const uint8_t *request, si
         break;
     }
     zf_pin_publish_state(app, state);
+    if (status == ZF_CTAP_SUCCESS && pin_set_before != state->pin_set) {
+        zf_runtime_config_refresh_capabilities(app);
+    }
 cleanup:
     zf_pin_log_result(diagnostic_tag, status);
     zf_crypto_secure_zero(scratch, sizeof(*scratch));
     zf_app_command_scratch_release(app);
     return status;
+}
+
+uint8_t zerofido_pin_handle_command(ZerofidoApp *app, const uint8_t *request, size_t request_len,
+                                    uint8_t *out, size_t out_capacity, size_t *out_len) {
+    return zerofido_pin_handle_command_with_session(app, 0, request, request_len, out, out_capacity,
+                                                    out_len);
 }

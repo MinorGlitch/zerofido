@@ -22,93 +22,7 @@
 #include "../../ctap/parse/internal.h"
 #include "../../zerofido_cbor.h"
 
-static bool zf_client_pin_parse_key_agreement(ZfCborCursor *cursor, ZfClientPinRequest *request) {
-    size_t pairs = 0;
-    bool saw_kty = false;
-    bool saw_alg = false;
-    bool saw_crv = false;
-    bool saw_x = false;
-    bool saw_y = false;
-
-    if (!zf_cbor_read_map_start(cursor, &pairs)) {
-        return false;
-    }
-
-    for (size_t i = 0; i < pairs; ++i) {
-        int64_t key = 0;
-        if (!zf_cbor_read_int(cursor, &key)) {
-            return false;
-        }
-
-        switch (key) {
-        case 1: {
-            int64_t kty = 0;
-            if (saw_kty) {
-                return false;
-            }
-            if (!zf_cbor_read_int(cursor, &kty) || kty != 2) {
-                return false;
-            }
-            saw_kty = true;
-            break;
-        }
-        case 3: {
-            int64_t alg = 0;
-            if (saw_alg) {
-                return false;
-            }
-            if (!zf_cbor_read_int(cursor, &alg) || alg != -25) {
-                return false;
-            }
-            saw_alg = true;
-            break;
-        }
-        case -1: {
-            int64_t crv = 0;
-            if (saw_crv) {
-                return false;
-            }
-            if (!zf_cbor_read_int(cursor, &crv) || crv != 1) {
-                return false;
-            }
-            saw_crv = true;
-            break;
-        }
-        case -2: {
-            size_t size = 0;
-            if (saw_x) {
-                return false;
-            }
-            if (!zf_ctap_cbor_read_bytes_copy(cursor, request->platform_x,
-                                              sizeof(request->platform_x), &size) ||
-                size != sizeof(request->platform_x)) {
-                return false;
-            }
-            saw_x = true;
-            break;
-        }
-        case -3: {
-            size_t size = 0;
-            if (saw_y) {
-                return false;
-            }
-            if (!zf_ctap_cbor_read_bytes_copy(cursor, request->platform_y,
-                                              sizeof(request->platform_y), &size) ||
-                size != sizeof(request->platform_y)) {
-                return false;
-            }
-            saw_y = true;
-            break;
-        }
-        default:
-            return false;
-        }
-    }
-
-    request->has_key_agreement = saw_kty && saw_alg && saw_crv && saw_x && saw_y;
-    return request->has_key_agreement;
-}
-
+/* Only discovery commands can omit pinProtocol; crypto-bearing commands cannot. */
 static bool zf_client_pin_subcommand_requires_pin_protocol(uint64_t subcommand) {
     switch (subcommand) {
     case ZF_CLIENT_PIN_SUBCMD_GET_RETRIES:
@@ -124,6 +38,11 @@ static bool zf_client_pin_subcommand_requires_pin_protocol(uint64_t subcommand) 
     }
 }
 
+/*
+ * Decodes the ClientPIN map into a flat request structure while preserving
+ * which optional fields were present. Unknown keys are skipped as allowed by
+ * CBOR extensibility, but duplicate known keys and trailing bytes fail closed.
+ */
 uint8_t zf_client_pin_parse_request(const uint8_t *data, size_t size, ZfClientPinRequest *request) {
     ZfCborCursor cursor;
     size_t pairs = 0;
@@ -158,7 +77,9 @@ uint8_t zf_client_pin_parse_request(const uint8_t *data, size_t size, ZfClientPi
             request->has_subcommand = true;
             break;
         case 3:
-            if (!zf_client_pin_parse_key_agreement(&cursor, request)) {
+            request->has_key_agreement = zf_ctap_parse_cose_p256_key_agreement(
+                &cursor, request->platform_x, request->platform_y);
+            if (!request->has_key_agreement) {
                 return ZF_CTAP_ERR_INVALID_CBOR;
             }
             break;
@@ -208,7 +129,8 @@ uint8_t zf_client_pin_parse_request(const uint8_t *data, size_t size, ZfClientPi
     if (!request->has_subcommand) {
         return ZF_CTAP_ERR_MISSING_PARAMETER;
     }
-    if (request->has_pin_protocol && request->pin_protocol != ZF_PIN_PROTOCOL_V1) {
+    if (request->has_pin_protocol && request->pin_protocol != ZF_PIN_PROTOCOL_V1 &&
+        request->pin_protocol != ZF_PIN_PROTOCOL_V2) {
         return ZF_CTAP_ERR_INVALID_PARAMETER;
     }
     if (zf_client_pin_subcommand_requires_pin_protocol(request->subcommand) &&
@@ -222,6 +144,7 @@ uint8_t zf_client_pin_parse_request(const uint8_t *data, size_t size, ZfClientPi
     return ZF_CTAP_SUCCESS;
 }
 
+/* Short diagnostic labels keep host conformance output compact and searchable. */
 const char *zerofido_pin_subcommand_tag(uint64_t subcommand) {
     switch (subcommand) {
     case ZF_CLIENT_PIN_SUBCMD_GET_RETRIES:

@@ -1,3 +1,9 @@
+"""C maintenance wrapper for formatting, clang-tidy, cppcheck, and host tests.
+
+The helper adapts UFBT's generated compile database into forms usable by desktop
+LLVM tools, then keeps all C verification commands behind one stable CLI.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -33,6 +39,7 @@ CPP_CHECK_ARG_EXACT = {"-std=c11", "-std=gnu11"}
 
 
 def run(cmd: list[str], *, cwd: Path = ROOT, check: bool = True) -> int:
+    """Run a command with Homebrew LLVM first on PATH and echo it for logs."""
     print("+", " ".join(cmd))
     env = os.environ.copy()
     env["PATH"] = "/opt/homebrew/opt/llvm/bin:" + env.get("PATH", "")
@@ -43,6 +50,7 @@ def run(cmd: list[str], *, cwd: Path = ROOT, check: bool = True) -> int:
 
 
 def require_tool(name: str) -> str:
+    """Find a required static-analysis tool, including common macOS fallback paths."""
     path = shutil.which(name)
     if path:
         return path
@@ -79,6 +87,7 @@ def load_files(patterns: tuple[str, ...]) -> list[str]:
 
 
 def compile_commands_are_stale() -> bool:
+    """Return true when source inputs are newer than the UFBT compile database."""
     if not COMPILE_COMMANDS.exists():
         return True
 
@@ -127,6 +136,7 @@ def load_command_args(entry: dict[str, object]) -> list[str]:
 
 
 def build_clang_tidy_compile_commands(clang: str) -> Path:
+    """Rewrite UFBT GCC commands into clang-compatible clang-tidy commands."""
     data = load_compile_commands()
     rewritten: list[dict[str, object]] = []
     toolchain_root = detect_toolchain_root(data)
@@ -168,6 +178,7 @@ def build_clang_tidy_compile_commands(clang: str) -> Path:
 
 
 def detect_toolchain_root(data: list[dict[str, object]]) -> Path | None:
+    """Infer the ARM GCC toolchain root from the generated compile database."""
     if not data:
         return None
 
@@ -194,6 +205,7 @@ def build_toolchain_include_args(toolchain_root: Path | None) -> list[str]:
 
 
 def build_cppcheck_args() -> list[str]:
+    """Extract portable preprocessor flags from the first compile command."""
     data = load_compile_commands()
     if not data:
         return []

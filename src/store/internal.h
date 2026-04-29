@@ -25,6 +25,10 @@
 
 #define ZF_STORE_RECORD_MAX_SIZE 768
 
+/*
+ * Shared record-path builders keep primary, temp, backup, and counter-floor
+ * files in one app-data directory with predictable suffixes.
+ */
 static inline bool zf_store_has_suffix(const char *value, const char *suffix) {
     size_t value_len = strlen(value);
     size_t suffix_len = strlen(suffix);

@@ -56,6 +56,11 @@ enum {
     ZF_TRANSPORT_ACTION_CANCEL_PENDING_INTERACTION = (1U << 0),
 };
 
+/*
+ * CTAPHID session state assembles 64-byte packets into one protocol message,
+ * tracks allocated channels and locks, and exposes control-packet handling for
+ * long-running CBOR commands.
+ */
 typedef struct {
     uint32_t cid;
     uint32_t last_used;

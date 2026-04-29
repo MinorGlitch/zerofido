@@ -97,6 +97,12 @@ static const uint8_t *u2f_validate_request_status(const uint8_t *buf, uint16_t r
     return u2f_apdu_state_not_supported;
 }
 
+/*
+ * Parses the U2F APDU envelope forms accepted by the transport. Extended APDUs
+ * carry the command payload; short VERSION-style APDUs are accepted only when
+ * allow_short is set. Le is parsed for validation but ignored by U2F command
+ * handling.
+ */
 bool u2f_parse_apdu_header(const uint8_t *buf, uint16_t len, bool allow_short,
                            U2fParsedApdu *apdu) {
     if (len < 4) {

@@ -1,3 +1,10 @@
+"""Validate the security/state-semantics audit ledger.
+
+This focuses on ClientPIN, credential state, counters, storage semantics, and
+metadata rows, ensuring each ledger entry cites the expected inventory claims,
+proof IDs, manifest scenarios, and slice ownership.
+"""
+
 from __future__ import annotations
 
 import argparse

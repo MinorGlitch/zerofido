@@ -36,10 +36,17 @@ typedef struct {
     uint8_t (*poll_cbor_control)(ZerofidoApp *app, ZfTransportSessionId current_session_id);
 } ZfTransportAdapterOps;
 
+/*
+ * Transport adapters let CTAP/U2F command code be agnostic to USB HID versus
+ * NFC. Each adapter owns its worker loop, response publication, keepalive/cancel
+ * polling, and local user-interaction waiting semantics.
+ */
 #ifndef ZF_NFC_ONLY
 extern const ZfTransportAdapterOps zf_transport_usb_hid_adapter;
 #endif
+#if !defined(ZF_USB_ONLY)
 extern const ZfTransportAdapterOps zf_transport_nfc_adapter;
+#endif
 
 void zf_transport_stop(ZerofidoApp *app);
 void zf_transport_send_dispatch_result(ZerofidoApp *app, const ZfProtocolDispatchRequest *request,

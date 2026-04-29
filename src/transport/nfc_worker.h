@@ -31,13 +31,29 @@
 
 #include "../zerofido_types.h"
 #include "dispatch.h"
+#include "nfc_trace.h"
 
 #define ZF_NFC_WORKER_EVT_STOP (1U << 0)
 #define ZF_NFC_WORKER_EVT_REQUEST (1U << 1)
-#define ZF_NFC_LAST_TX_CAPACITY 320U
+#define ZF_NFC_WORKER_EVT_TRACE (1U << 2)
+#define ZF_NFC_TX_FRAME_CAPACITY 256U
+#define ZF_NFC_LAST_TX_CAPACITY ZF_NFC_TX_FRAME_CAPACITY
 
 typedef struct ZerofidoApp ZerofidoApp;
-typedef struct ZfNfcIso4Layer ZfNfcIso4Layer;
+
+typedef enum {
+    ZfNfcReaderProfileIos = 0,
+    ZfNfcReaderProfileAndroid = 1,
+} ZfNfcReaderProfileKind;
+
+typedef struct {
+    ZfNfcReaderProfileKind kind;
+    uint8_t ats[5];
+    size_t ats_len;
+    bool r_ack_uses_incoming_block;
+    uint8_t rx_chain_duplicate_limit;
+    size_t max_rx_chain_len;
+} ZfNfcReaderProfile;
 
 typedef enum {
     ZfNfcRequestKindNone = 0,
@@ -59,11 +75,9 @@ typedef enum {
 typedef struct {
     Nfc *nfc;
     NfcListener *listener;
+    FuriMessageQueue *trace_queue;
     Iso14443_4aListener *iso4_listener;
-    ZfNfcIso4Layer *iso4_layer;
     BitBuffer *tx_buffer;
-    BitBuffer *iso4_rx_buffer;
-    BitBuffer *iso4_frame_buffer;
     Iso14443_4aData *iso14443_4a_data;
     bool listener_active;
     bool stopping;
@@ -84,14 +98,19 @@ typedef struct {
     bool post_success_cooldown_active;
     bool post_success_probe_sleep_active;
     bool iso_cid_present;
-    uint8_t iso4_last_tx[ZF_NFC_LAST_TX_CAPACITY];
+    bool rx_chain_last_valid;
+    uint8_t iso4_tx_frame[ZF_NFC_TX_FRAME_CAPACITY];
     const uint8_t *iso4_tx_chain_data;
     uint8_t iso_pcb;
     uint8_t iso_cid;
     uint8_t desfire_probe_frame;
+    uint8_t rx_chain_last_pcb;
+    uint8_t rx_chain_duplicate_count;
     size_t iso4_last_tx_len;
     size_t iso4_tx_chain_len;
     size_t iso4_tx_chain_offset;
+    size_t rx_chain_last_offset;
+    size_t rx_chain_last_len;
     size_t request_len;
     size_t response_len;
     size_t response_offset;
@@ -109,11 +128,14 @@ typedef struct {
     uint32_t post_success_cooldown_until_tick;
     uint8_t *arena;
     size_t arena_capacity;
+    ZfNfcReaderProfile reader_profile;
+    size_t tx_frame_len;
 } ZfNfcTransportState;
 
 /* Adapter entry points for the NFC transport implementation. */
 int32_t zf_transport_nfc_worker(void *context);
-bool zf_transport_nfc_wake_request_worker(ZerofidoApp *app, ZfNfcTransportState *state);
+bool zf_transport_nfc_wake_request_worker(ZerofidoApp *app, ZfNfcTransportState *state,
+                                          bool caller_holds_ui_mutex);
 void zf_transport_nfc_stop(ZerofidoApp *app);
 void zf_transport_nfc_send_dispatch_result(ZerofidoApp *app,
                                            const ZfProtocolDispatchRequest *request,

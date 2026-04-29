@@ -21,9 +21,35 @@
 
 #include "../../zerofido_crypto.h"
 
-bool zf_ctap_text_equals(const uint8_t *ptr, size_t size, const char *text) {
-    size_t expected = strlen(text);
-    return size == expected && memcmp(ptr, text, size) == 0;
+ZfCtapTextKey zf_ctap_classify_text_key(const uint8_t *ptr, size_t size) {
+    typedef struct {
+        uint8_t size;
+        uint8_t key;
+        char text[11];
+    } ZfCtapTextKeyEntry;
+
+    static const ZfCtapTextKeyEntry keys[] = {
+        {3, ZfCtapTextKeyAlg, "alg"},
+        {11, ZfCtapTextKeyCredProtect, {'c', 'r', 'e', 'd', 'P', 'r', 'o', 't', 'e', 'c', 't'}},
+        {11, ZfCtapTextKeyDisplayName, {'d', 'i', 's', 'p', 'l', 'a', 'y', 'N', 'a', 'm', 'e'}},
+        {11, ZfCtapTextKeyHmacSecret, {'h', 'm', 'a', 'c', '-', 's', 'e', 'c', 'r', 'e', 't'}},
+        {4, ZfCtapTextKeyIcon, "icon"},
+        {2, ZfCtapTextKeyId, "id"},
+        {4, ZfCtapTextKeyName, "name"},
+        {10, ZfCtapTextKeyPublicKey, "public-key"},
+        {2, ZfCtapTextKeyRk, "rk"},
+        {4, ZfCtapTextKeyType, "type"},
+        {2, ZfCtapTextKeyUp, "up"},
+        {2, ZfCtapTextKeyUv, "uv"},
+    };
+
+    for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); ++i) {
+        if (size == keys[i].size && memcmp(ptr, keys[i].text, size) == 0) {
+            return (ZfCtapTextKey)keys[i].key;
+        }
+    }
+
+    return ZfCtapTextKeyUnknown;
 }
 
 bool zf_ctap_mark_seen_key(uint16_t *seen_keys, uint64_t key) {
@@ -40,80 +66,12 @@ bool zf_ctap_mark_seen_key(uint16_t *seen_keys, uint64_t key) {
     return true;
 }
 
-static bool zf_ctap_utf8_is_valid(const uint8_t *ptr, size_t size) {
-    for (size_t i = 0; i < size;) {
-        uint8_t lead = ptr[i];
-
-        if (lead <= 0x7F) {
-            ++i;
-            continue;
-        }
-        if (lead >= 0xC2 && lead <= 0xDF) {
-            if (i + 1 >= size || (ptr[i + 1] & 0xC0U) != 0x80U) {
-                return false;
-            }
-            i += 2;
-            continue;
-        }
-        if (lead == 0xE0) {
-            if (i + 2 >= size || ptr[i + 1] < 0xA0 || ptr[i + 1] > 0xBF ||
-                (ptr[i + 2] & 0xC0U) != 0x80U) {
-                return false;
-            }
-            i += 3;
-            continue;
-        }
-        if ((lead >= 0xE1 && lead <= 0xEC) || (lead >= 0xEE && lead <= 0xEF)) {
-            if (i + 2 >= size || (ptr[i + 1] & 0xC0U) != 0x80U || (ptr[i + 2] & 0xC0U) != 0x80U) {
-                return false;
-            }
-            i += 3;
-            continue;
-        }
-        if (lead == 0xED) {
-            if (i + 2 >= size || ptr[i + 1] < 0x80 || ptr[i + 1] > 0x9F ||
-                (ptr[i + 2] & 0xC0U) != 0x80U) {
-                return false;
-            }
-            i += 3;
-            continue;
-        }
-        if (lead == 0xF0) {
-            if (i + 3 >= size || ptr[i + 1] < 0x90 || ptr[i + 1] > 0xBF ||
-                (ptr[i + 2] & 0xC0U) != 0x80U || (ptr[i + 3] & 0xC0U) != 0x80U) {
-                return false;
-            }
-            i += 4;
-            continue;
-        }
-        if (lead >= 0xF1 && lead <= 0xF3) {
-            if (i + 3 >= size || (ptr[i + 1] & 0xC0U) != 0x80U || (ptr[i + 2] & 0xC0U) != 0x80U ||
-                (ptr[i + 3] & 0xC0U) != 0x80U) {
-                return false;
-            }
-            i += 4;
-            continue;
-        }
-        if (lead == 0xF4) {
-            if (i + 3 >= size || ptr[i + 1] < 0x80 || ptr[i + 1] > 0x8F ||
-                (ptr[i + 2] & 0xC0U) != 0x80U || (ptr[i + 3] & 0xC0U) != 0x80U) {
-                return false;
-            }
-            i += 4;
-            continue;
-        }
-        return false;
-    }
-
-    return true;
-}
-
 bool zf_ctap_cbor_read_text_copy(ZfCborCursor *cursor, char *out, size_t out_size) {
     const uint8_t *ptr = NULL;
     size_t size = 0;
 
     if (!zf_cbor_read_text_ptr(cursor, &ptr, &size) || size >= out_size ||
-        memchr(ptr, '\0', size) != NULL || !zf_ctap_utf8_is_valid(ptr, size)) {
+        memchr(ptr, '\0', size) != NULL) {
         return false;
     }
 
@@ -126,8 +84,7 @@ bool zf_ctap_cbor_read_text_discard(ZfCborCursor *cursor) {
     const uint8_t *ptr = NULL;
     size_t size = 0;
 
-    return zf_cbor_read_text_ptr(cursor, &ptr, &size) && memchr(ptr, '\0', size) == NULL &&
-           zf_ctap_utf8_is_valid(ptr, size);
+    return zf_cbor_read_text_ptr(cursor, &ptr, &size) && memchr(ptr, '\0', size) == NULL;
 }
 
 bool zf_ctap_cbor_read_bytes_copy(ZfCborCursor *cursor, uint8_t *out, size_t out_capacity,
@@ -142,6 +99,76 @@ bool zf_ctap_cbor_read_bytes_copy(ZfCborCursor *cursor, uint8_t *out, size_t out
     memcpy(out, ptr, size);
     *out_size = size;
     return true;
+}
+
+bool zf_ctap_parse_cose_p256_key_agreement(ZfCborCursor *cursor, uint8_t x[ZF_PUBLIC_KEY_LEN],
+                                           uint8_t y[ZF_PUBLIC_KEY_LEN]) {
+    size_t pairs = 0;
+    bool saw_kty = false;
+    bool saw_alg = false;
+    bool saw_crv = false;
+    bool saw_x = false;
+    bool saw_y = false;
+
+    if (!zf_cbor_read_map_start(cursor, &pairs)) {
+        return false;
+    }
+
+    for (size_t i = 0; i < pairs; ++i) {
+        int64_t key = 0;
+        if (!zf_cbor_read_int(cursor, &key)) {
+            return false;
+        }
+
+        switch (key) {
+        case 1: {
+            int64_t kty = 0;
+            if (saw_kty || !zf_cbor_read_int(cursor, &kty) || kty != 2) {
+                return false;
+            }
+            saw_kty = true;
+            break;
+        }
+        case 3: {
+            int64_t alg = 0;
+            if (saw_alg || !zf_cbor_read_int(cursor, &alg) || alg != -25) {
+                return false;
+            }
+            saw_alg = true;
+            break;
+        }
+        case -1: {
+            int64_t crv = 0;
+            if (saw_crv || !zf_cbor_read_int(cursor, &crv) || crv != 1) {
+                return false;
+            }
+            saw_crv = true;
+            break;
+        }
+        case -2: {
+            size_t size = 0;
+            if (saw_x || !zf_ctap_cbor_read_bytes_copy(cursor, x, ZF_PUBLIC_KEY_LEN, &size) ||
+                size != ZF_PUBLIC_KEY_LEN) {
+                return false;
+            }
+            saw_x = true;
+            break;
+        }
+        case -3: {
+            size_t size = 0;
+            if (saw_y || !zf_ctap_cbor_read_bytes_copy(cursor, y, ZF_PUBLIC_KEY_LEN, &size) ||
+                size != ZF_PUBLIC_KEY_LEN) {
+                return false;
+            }
+            saw_y = true;
+            break;
+        }
+        default:
+            return false;
+        }
+    }
+
+    return saw_kty && saw_alg && saw_crv && saw_x && saw_y;
 }
 
 uint8_t zf_ctap_parse_options_map(ZfCborCursor *cursor, bool *up, bool *has_up, bool *uv,
@@ -163,37 +190,40 @@ uint8_t zf_ctap_parse_options_map(ZfCborCursor *cursor, bool *up, bool *has_up, 
             return ZF_CTAP_ERR_INVALID_CBOR;
         }
 
-        if (zf_ctap_text_equals(key, key_size, "up")) {
+        switch (zf_ctap_classify_text_key(key, key_size)) {
+        case ZfCtapTextKeyUp:
             if (saw_up) {
                 return ZF_CTAP_ERR_INVALID_CBOR;
             }
             *up = value;
             *has_up = true;
             saw_up = true;
-        } else if (zf_ctap_text_equals(key, key_size, "uv")) {
+            break;
+        case ZfCtapTextKeyUv:
             if (saw_uv) {
                 return ZF_CTAP_ERR_INVALID_CBOR;
             }
             *uv = value;
             *has_uv = true;
             saw_uv = true;
-        } else if (zf_ctap_text_equals(key, key_size, "rk")) {
+            break;
+        case ZfCtapTextKeyRk:
             if (saw_rk) {
                 return ZF_CTAP_ERR_INVALID_CBOR;
             }
             *rk = value;
             *has_rk = true;
             saw_rk = true;
-        } else if (value) {
-            return ZF_CTAP_ERR_UNSUPPORTED_OPTION;
+            break;
+        default:
+            break;
         }
     }
 
     return ZF_CTAP_SUCCESS;
 }
 
-uint8_t zf_ctap_parse_make_credential_extensions_map(ZfCborCursor *cursor,
-                                                     bool *has_cred_protect,
+uint8_t zf_ctap_parse_make_credential_extensions_map(ZfCborCursor *cursor, bool *has_cred_protect,
                                                      uint8_t *cred_protect,
                                                      bool *hmac_secret_requested) {
     size_t pairs = 0;
@@ -212,7 +242,8 @@ uint8_t zf_ctap_parse_make_credential_extensions_map(ZfCborCursor *cursor,
             return ZF_CTAP_ERR_INVALID_CBOR;
         }
 
-        if (zf_ctap_text_equals(key, key_size, "credProtect")) {
+        switch (zf_ctap_classify_text_key(key, key_size)) {
+        case ZfCtapTextKeyCredProtect: {
             uint64_t raw = 0;
             if (saw_cred_protect || !zf_cbor_read_uint(cursor, &raw)) {
                 return ZF_CTAP_ERR_INVALID_CBOR;
@@ -227,7 +258,7 @@ uint8_t zf_ctap_parse_make_credential_extensions_map(ZfCborCursor *cursor,
             continue;
         }
 
-        if (zf_ctap_text_equals(key, key_size, "hmac-secret")) {
+        case ZfCtapTextKeyHmacSecret: {
             bool requested = false;
             if (saw_hmac_secret || !zf_cbor_read_bool(cursor, &requested)) {
                 return ZF_CTAP_ERR_INVALID_CBOR;
@@ -237,8 +268,11 @@ uint8_t zf_ctap_parse_make_credential_extensions_map(ZfCborCursor *cursor,
             continue;
         }
 
-        if (!zf_cbor_skip(cursor)) {
-            return ZF_CTAP_ERR_INVALID_CBOR;
+        default:
+            if (!zf_cbor_skip(cursor)) {
+                return ZF_CTAP_ERR_INVALID_CBOR;
+            }
+            break;
         }
     }
 
@@ -264,7 +298,8 @@ static bool zf_ctap_parse_credential_descriptor(ZfCborCursor *cursor,
             return false;
         }
 
-        if (zf_ctap_text_equals(key, key_size, "id")) {
+        switch (zf_ctap_classify_text_key(key, key_size)) {
+        case ZfCtapTextKeyId: {
             if (saw_id) {
                 return false;
             }
@@ -273,17 +308,15 @@ static bool zf_ctap_parse_credential_descriptor(ZfCborCursor *cursor,
             if (!zf_cbor_read_bytes_ptr(cursor, &id_ptr, &id_size)) {
                 return false;
             }
-            if (!descriptor || id_size == 0 || id_size > ZF_MAX_DESCRIPTOR_ID_LEN ||
-                id_size > UINT16_MAX) {
+            if (!descriptor || id_size == 0 || id_size > ZF_MAX_DESCRIPTOR_ID_LEN) {
                 return false;
             }
-            descriptor->credential_id_len = (uint16_t)id_size;
             zf_crypto_sha256(id_ptr, id_size, descriptor->credential_id_digest);
             saw_id = true;
             continue;
         }
 
-        if (zf_ctap_text_equals(key, key_size, "type")) {
+        case ZfCtapTextKeyType: {
             if (saw_type) {
                 return false;
             }
@@ -293,12 +326,16 @@ static bool zf_ctap_parse_credential_descriptor(ZfCborCursor *cursor,
                 return false;
             }
             saw_type = true;
-            public_key = zf_ctap_text_equals(type_ptr, type_size, "public-key");
+            public_key =
+                zf_ctap_classify_text_key(type_ptr, type_size) == ZfCtapTextKeyPublicKey;
             continue;
         }
 
-        if (!zf_cbor_skip(cursor)) {
-            return false;
+        default:
+            if (!zf_cbor_skip(cursor)) {
+                return false;
+            }
+            break;
         }
     }
 
@@ -330,7 +367,8 @@ uint8_t zf_ctap_parse_pubkey_cred_params(ZfCborCursor *cursor, bool *es256_suppo
                 return ZF_CTAP_ERR_INVALID_CBOR;
             }
 
-            if (zf_ctap_text_equals(key, key_size, "alg")) {
+            switch (zf_ctap_classify_text_key(key, key_size)) {
+            case ZfCtapTextKeyAlg:
                 if (have_alg) {
                     return ZF_CTAP_ERR_INVALID_CBOR;
                 }
@@ -339,9 +377,8 @@ uint8_t zf_ctap_parse_pubkey_cred_params(ZfCborCursor *cursor, bool *es256_suppo
                 }
                 have_alg = true;
                 continue;
-            }
 
-            if (zf_ctap_text_equals(key, key_size, "type")) {
+            case ZfCtapTextKeyType: {
                 if (have_type) {
                     return ZF_CTAP_ERR_INVALID_CBOR;
                 }
@@ -351,12 +388,16 @@ uint8_t zf_ctap_parse_pubkey_cred_params(ZfCborCursor *cursor, bool *es256_suppo
                     return ZF_CTAP_ERR_INVALID_CBOR;
                 }
                 have_type = true;
-                public_key = zf_ctap_text_equals(value, value_size, "public-key");
+                public_key =
+                    zf_ctap_classify_text_key(value, value_size) == ZfCtapTextKeyPublicKey;
                 continue;
             }
 
-            if (!zf_cbor_skip(cursor)) {
-                return ZF_CTAP_ERR_INVALID_CBOR;
+            default:
+                if (!zf_cbor_skip(cursor)) {
+                    return ZF_CTAP_ERR_INVALID_CBOR;
+                }
+                break;
             }
         }
 
@@ -374,11 +415,7 @@ uint8_t zf_ctap_parse_pubkey_cred_params(ZfCborCursor *cursor, bool *es256_suppo
     return ZF_CTAP_SUCCESS;
 }
 
-/*
- * Descriptor IDs are stored as SHA-256 digests plus original length in
- * caller-provided storage. Duplicate descriptors with the same length and
- * digest are rejected.
- */
+/* Descriptor IDs are stored as SHA-256 digests in caller-provided storage. */
 uint8_t zf_ctap_parse_descriptor_array(ZfCborCursor *cursor, ZfCredentialDescriptorList *list) {
     size_t items = 0;
 
@@ -396,9 +433,6 @@ uint8_t zf_ctap_parse_descriptor_array(ZfCborCursor *cursor, ZfCredentialDescrip
         if (!zf_ctap_parse_credential_descriptor(cursor, &parsed, &include_entry)) {
             return ZF_CTAP_ERR_INVALID_CBOR;
         }
-        if (parsed.credential_id_len == 0) {
-            return ZF_CTAP_ERR_INVALID_CBOR;
-        }
         if (!include_entry) {
             continue;
         }
@@ -407,8 +441,7 @@ uint8_t zf_ctap_parse_descriptor_array(ZfCborCursor *cursor, ZfCredentialDescrip
         }
         for (size_t i = 0; i < list->count; ++i) {
             const ZfCredentialDescriptor *existing = &list->entries[i];
-            if (existing->credential_id_len == parsed.credential_id_len &&
-                memcmp(existing->credential_id_digest, parsed.credential_id_digest,
+            if (memcmp(existing->credential_id_digest, parsed.credential_id_digest,
                        sizeof(existing->credential_id_digest)) == 0) {
                 return ZF_CTAP_ERR_INVALID_PARAMETER;
             }
@@ -432,8 +465,7 @@ bool zf_ctap_descriptor_list_contains_id(const ZfCredentialDescriptorList *list,
     zf_crypto_sha256(credential_id, credential_id_len, credential_id_digest);
     for (size_t i = 0; i < list->count; ++i) {
         const ZfCredentialDescriptor *entry = &list->entries[i];
-        if (entry->credential_id_len == credential_id_len &&
-            memcmp(entry->credential_id_digest, credential_id_digest,
+        if (memcmp(entry->credential_id_digest, credential_id_digest,
                    sizeof(entry->credential_id_digest)) == 0) {
             zf_crypto_secure_zero(credential_id_digest, sizeof(credential_id_digest));
             return true;

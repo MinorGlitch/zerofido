@@ -24,6 +24,11 @@
 
 typedef struct ZerofidoApp ZerofidoApp;
 
+/*
+ * USB HID worker entry points implement the transport adapter contract. The
+ * worker owns the USB interface while running and funnels HID packets through
+ * usb_hid_session before protocol dispatch.
+ */
 int32_t zf_transport_usb_hid_worker(void *context);
 void zf_transport_usb_hid_stop(ZerofidoApp *app);
 void zf_transport_usb_hid_send_dispatch_result(ZerofidoApp *app,

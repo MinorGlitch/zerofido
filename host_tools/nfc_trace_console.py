@@ -1,3 +1,10 @@
+"""Tail ZeroFIDO NFC trace lines from the Flipper serial console.
+
+The console reconnects automatically, optionally raises the firmware log level,
+and filters output to the NFC trace tag by default so contactless APDU/ISO-DEP
+debugging is easier to follow.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -18,6 +25,7 @@ def timestamp() -> str:
 
 
 def resolve_port(port_arg: str) -> str | None:
+    """Return an explicit port or choose the most likely Flipper CDC device."""
     if port_arg != "auto":
         return port_arg
 
@@ -59,6 +67,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def emit(line: str, output_file) -> None:
+    """Write one line to stdout and the optional capture file."""
     sys.stdout.write(line)
     sys.stdout.flush()
     if output_file:
@@ -67,10 +76,12 @@ def emit(line: str, output_file) -> None:
 
 
 def should_emit(line: str, include_all: bool) -> bool:
+    """Filter serial output to ZeroFIDO NFC trace lines unless --all was set."""
     return include_all or TRACE_TAG in line
 
 
 def tail_serial(args: argparse.Namespace, output_file) -> None:
+    """Reconnect forever and stream decoded serial lines."""
     pending = ""
 
     while True:

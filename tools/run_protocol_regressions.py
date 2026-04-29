@@ -1,3 +1,9 @@
+"""Compile and run the host-native protocol regression binaries.
+
+The script builds the CTAP/PIN/store regression suite and the transport/U2F
+suite with the same fake Flipper headers used by CI, then executes both binaries.
+"""
+
 from __future__ import annotations
 
 import shutil
@@ -15,11 +21,13 @@ POLICY_SOURCE = ROOT / "src" / "ctap" / "policy.c"
 
 
 def run(cmd: list[str]) -> None:
+    """Echo and run one compiler or test command in the repository root."""
     print("+", " ".join(cmd))
     subprocess.run(cmd, cwd=ROOT, check=True)
 
 
 def main() -> None:
+    """Build both native regression binaries and fail on the first error."""
     compiler = shutil.which("cc") or shutil.which("clang") or shutil.which("gcc")
     if not compiler:
         raise SystemExit("missing host C compiler")

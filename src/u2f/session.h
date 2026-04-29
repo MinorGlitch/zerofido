@@ -39,6 +39,11 @@ typedef struct U2fData U2fData;
 
 typedef void (*U2fEvtCallback)(U2fNotifyEvent evt, void *context);
 
+/*
+ * U2F owns the legacy APDU-level state: attestation assets, device key,
+ * monotonic counter, and one-shot user-presence flag. The transport layer
+ * supplies raw APDUs and consumes the encoded APDU response in-place.
+ */
 U2fData *u2f_alloc(void);
 
 bool u2f_init(U2fData *instance);

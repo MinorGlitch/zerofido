@@ -21,6 +21,7 @@
 #include "../core/assertion_queue.h"
 #include "../core/internal.h"
 #include "../parse.h"
+#include "../policy.h"
 #include "../../u2f/adapter.h"
 #include "../../u2f/persistence.h"
 #include "../../zerofido_app_i.h"
@@ -29,6 +30,10 @@
 #include "../../zerofido_pin.h"
 #include "../../zerofido_store.h"
 
+/*
+ * Reset requires an empty payload and a local approval gesture, then enters the
+ * maintenance lock so transport requests cannot observe half-wiped state.
+ */
 uint8_t zf_ctap_handle_reset(ZerofidoApp *app, ZfTransportSessionId session_id,
                              size_t request_len, size_t *out_len) {
     uint8_t status = zf_ctap_require_empty_payload(request_len);
@@ -53,7 +58,8 @@ uint8_t zf_ctap_handle_reset(ZerofidoApp *app, ZfTransportSessionId session_id,
     zf_ctap_assertion_queue_clear(app);
     furi_mutex_release(app->ui_mutex);
 
-    bool wiped = zf_store_wipe_app_data(app->storage) && u2f_data_wipe(app->storage);
+    zf_u2f_adapter_deinit(app);
+    bool wiped = u2f_data_wipe(app->storage) && zf_store_wipe_app_data(app->storage);
     ZfClientPinState next_pin_state = {0};
     ZfPinInitResult pin_init = wiped
                                    ? zerofido_pin_init_with_result(app->storage, &next_pin_state)
@@ -70,16 +76,17 @@ uint8_t zf_ctap_handle_reset(ZerofidoApp *app, ZfTransportSessionId session_id,
     }
     furi_mutex_release(app->ui_mutex);
     zf_crypto_secure_zero(&next_pin_state, sizeof(next_pin_state));
+    if (wiped) {
+        zf_runtime_config_refresh_capabilities(app);
+    }
 
     if (!wiped || pin_init != ZfPinInitOk) {
         status = ZF_CTAP_ERR_OTHER;
         goto cleanup;
     }
 
-    zf_u2f_adapter_deinit(app);
-    if (app->capabilities.u2f_enabled && !zf_u2f_adapter_init(app)) {
-        status = ZF_CTAP_ERR_OTHER;
-        goto cleanup;
+    if (app->capabilities.u2f_enabled) {
+        (void)zf_u2f_adapter_init(app);
     }
 
     zerofido_notify_reset(app);

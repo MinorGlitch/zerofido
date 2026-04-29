@@ -26,6 +26,10 @@
 
 typedef struct ZerofidoApp ZerofidoApp;
 
+/*
+ * Shared CTAP command utilities: scratch allocation, maintenance locking, PIN
+ * auth enforcement, and idle checks used by several command handlers.
+ */
 void *zf_ctap_command_scratch(ZerofidoApp *app, size_t size);
 bool zf_ctap_begin_maintenance(ZerofidoApp *app);
 void zf_ctap_end_maintenance(ZerofidoApp *app);

@@ -1,3 +1,10 @@
+"""ZeroFIDO conformance scenario orchestrator.
+
+The suite watches for a matching HID device, runs ordered scenario phases on a
+worker thread, handles manual checkpoints and browser handoff, then maps each
+scenario result back to the audit rows declared in the manifest.
+"""
+
 from __future__ import annotations
 
 import base64
@@ -206,6 +213,10 @@ class ConformanceSuiteService:
         for cbor_key, metadata_field in expected_metadata_fields.items():
             expected = get_info.get(metadata_field)
             if expected is None:
+                if cbor_key in decoded:
+                    raise RuntimeError(
+                        f"unexpected GetInfo {metadata_field}: {decoded.get(cbor_key)!r}, expected omission"
+                    )
                 continue
             actual = decoded.get(cbor_key)
             if actual != expected:
@@ -227,9 +238,21 @@ class ConformanceSuiteService:
         uv_option = options.get("uv")
         if uv_option not in (None, False):
             raise RuntimeError(f"GetInfo option 'uv' was {uv_option!r}, expected False or omission")
-        for forbidden in ("ep", "pinUvAuthToken", "makeCredUvNotRqd"):
+        for forbidden in ("ep",):
             if forbidden in options:
                 raise RuntimeError(f"GetInfo unexpectedly advertised unsupported option {forbidden!r}")
+        metadata_options = get_info.get("options") if isinstance(get_info.get("options"), dict) else {}
+        for profile_option in ("pinUvAuthToken", "makeCredUvNotRqd"):
+            expected = metadata_options.get(profile_option)
+            if expected is None:
+                if profile_option in options:
+                    raise RuntimeError(
+                        f"GetInfo unexpectedly advertised unsupported option {profile_option!r}"
+                    )
+            elif options.get(profile_option) != expected:
+                raise RuntimeError(
+                    f"GetInfo option {profile_option!r} was {options.get(profile_option)!r}, expected {expected!r}"
+                )
         return {
             "versions": versions,
             "extensions": extensions,
@@ -977,7 +1000,8 @@ class ConformanceSuiteService:
             if row["required"]:
                 required_statuses.append(verdict)
 
-        if error or any(status == "failed" for status in required_statuses):
+        failed_scenarios = [result for result in results if result.get("status") == "failed"]
+        if error or failed_scenarios or any(status == "failed" for status in required_statuses):
             gate_result = "failed"
         elif any(status in {"blocked", "not_covered"} for status in required_statuses):
             gate_result = "blocked"
@@ -1585,20 +1609,8 @@ class ConformanceSuiteService:
             if first_parsed["ctap_status"] != 0x00:
                 raise RuntimeError("initial allow-list multi-match GetAssertion failed")
             first_decoded = first_parsed.get("decoded") or {}
-            first_auth_data = first_parsed.get("auth_data") or {}
-            number_of_credentials = first_decoded.get(5)
-            if not isinstance(number_of_credentials, int) or number_of_credentials < 2:
-                raise RuntimeError("initial allow-list multi-match GetAssertion did not advertise multiple credentials")
-
-            other_cid = probe.allocate_cid(device, 3000, False)
-            wrong_cid_response_cid, wrong_cid_response_cmd, wrong_cid_response_payload = probe.transact(
-                device, other_cid, probe.CBOR, bytes([probe.CTAP_GET_NEXT_ASSERTION]), 3000, False, trace
-            )
-            if wrong_cid_response_cmd != probe.CBOR or wrong_cid_response_cid != other_cid:
-                raise RuntimeError("cross-channel GetNextAssertion transport reply was malformed")
-            wrong_cid_parsed = probe.decode_ctap_response_payload(wrong_cid_response_payload)
-            if wrong_cid_parsed["ctap_status"] != 0x0B:
-                raise RuntimeError("cross-channel GetNextAssertion was not rejected with INVALID_CHANNEL")
+            if 5 in first_decoded:
+                raise RuntimeError("allow-list multi-match GetAssertion unexpectedly advertised multiple credentials")
 
             response_cid, response_cmd, response_payload = probe.transact(
                 device, cid, probe.CBOR, bytes([probe.CTAP_GET_NEXT_ASSERTION]), 3000, False, trace
@@ -1606,23 +1618,14 @@ class ConformanceSuiteService:
             if response_cmd != probe.CBOR or response_cid != cid:
                 raise RuntimeError("GetNextAssertion transport reply was malformed")
             next_parsed = probe.parse_get_assertion_ctap_payload(response_payload)
-            if next_parsed["ctap_status"] != 0x00:
-                raise RuntimeError("GetNextAssertion did not return a second assertion")
-            next_decoded = next_parsed.get("decoded") or {}
-            next_auth_data = next_parsed.get("auth_data") or {}
-            if 5 in next_decoded:
-                raise RuntimeError("GetNextAssertion unexpectedly returned numberOfCredentials")
-            if next_auth_data.get("user_present") != first_auth_data.get("user_present"):
-                raise RuntimeError("GetNextAssertion did not preserve the original UP state")
-            if next_auth_data.get("user_verified") != first_auth_data.get("user_verified"):
-                raise RuntimeError("GetNextAssertion did not preserve the original UV state")
+            if next_parsed["ctap_status"] != 0x30:
+                raise RuntimeError("allow-list multi-match GetAssertion unexpectedly opened GetNextAssertion state")
             return {
                 "status": "passed",
-                "summary": "GetNextAssertion stayed caller-bound and preserved queued assertion state",
+                "summary": "allow-list multi-match GetAssertion omitted numberOfCredentials and did not open GetNextAssertion",
                 "details": {
                     "initial": first_parsed,
                     "next": next_parsed,
-                    "wrong_cid": wrong_cid_parsed,
                     "initial_payload_hex": first_payload.hex(),
                 },
                 "evidence": {"trace": trace},

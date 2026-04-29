@@ -22,6 +22,10 @@
 
 #include "common.h"
 
+/*
+ * APDU validation is shared by USB HID MSG and NFC U2F paths. It checks the
+ * fixed U2F header shape and reports ISO7816 status words in response buffers.
+ */
 uint16_t u2f_validate_request(uint8_t *buf, uint16_t request_len);
 uint16_t u2f_validate_request_into_response(const uint8_t *request, uint16_t request_len,
                                             uint8_t *response, uint16_t response_capacity);

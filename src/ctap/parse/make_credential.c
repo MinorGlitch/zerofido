@@ -52,36 +52,37 @@ static uint8_t zf_parse_make_credential_rp(ZfCborCursor *cursor, ZfMakeCredentia
             return ZF_CTAP_ERR_INVALID_CBOR;
         }
 
-        if (zf_ctap_text_equals(field, field_size, "name")) {
+        switch (zf_ctap_classify_text_key(field, field_size)) {
+        case ZfCtapTextKeyName:
             if (saw_name || !zf_ctap_cbor_read_text_discard(cursor)) {
                 return ZF_CTAP_ERR_INVALID_CBOR;
             }
             saw_name = true;
             continue;
-        }
 
-        if (zf_ctap_text_equals(field, field_size, "icon")) {
+        case ZfCtapTextKeyIcon:
             if (saw_icon || !zf_ctap_cbor_read_text_discard(cursor)) {
                 return ZF_CTAP_ERR_INVALID_CBOR;
             }
             saw_icon = true;
             continue;
-        }
 
-        if (!zf_ctap_text_equals(field, field_size, "id")) {
+        case ZfCtapTextKeyId:
+            if (saw_id) {
+                return ZF_CTAP_ERR_INVALID_CBOR;
+            }
+            if (!zf_ctap_cbor_read_text_copy(cursor, request->rp_id, sizeof(request->rp_id))) {
+                return ZF_CTAP_ERR_INVALID_CBOR;
+            }
+            saw_id = true;
+            continue;
+
+        default:
             if (!zf_cbor_skip(cursor)) {
                 return ZF_CTAP_ERR_INVALID_CBOR;
             }
             continue;
         }
-
-        if (saw_id) {
-            return ZF_CTAP_ERR_INVALID_CBOR;
-        }
-        if (!zf_ctap_cbor_read_text_copy(cursor, request->rp_id, sizeof(request->rp_id))) {
-            return ZF_CTAP_ERR_INVALID_CBOR;
-        }
-        saw_id = true;
     }
 
     return ZF_CTAP_SUCCESS;
@@ -107,7 +108,8 @@ static uint8_t zf_parse_make_credential_user(ZfCborCursor *cursor,
             return ZF_CTAP_ERR_INVALID_CBOR;
         }
 
-        if (zf_ctap_text_equals(field, field_size, "id")) {
+        switch (zf_ctap_classify_text_key(field, field_size)) {
+        case ZfCtapTextKeyId:
             if (saw_id) {
                 return ZF_CTAP_ERR_INVALID_CBOR;
             }
@@ -118,9 +120,8 @@ static uint8_t zf_parse_make_credential_user(ZfCborCursor *cursor,
             request->has_user_id = true;
             saw_id = true;
             continue;
-        }
 
-        if (zf_ctap_text_equals(field, field_size, "name")) {
+        case ZfCtapTextKeyName:
             if (saw_name) {
                 return ZF_CTAP_ERR_INVALID_CBOR;
             }
@@ -130,9 +131,8 @@ static uint8_t zf_parse_make_credential_user(ZfCborCursor *cursor,
             }
             saw_name = true;
             continue;
-        }
 
-        if (zf_ctap_text_equals(field, field_size, "displayName")) {
+        case ZfCtapTextKeyDisplayName:
             if (saw_display_name) {
                 return ZF_CTAP_ERR_INVALID_CBOR;
             }
@@ -142,18 +142,19 @@ static uint8_t zf_parse_make_credential_user(ZfCborCursor *cursor,
             }
             saw_display_name = true;
             continue;
-        }
 
-        if (zf_ctap_text_equals(field, field_size, "icon")) {
+        case ZfCtapTextKeyIcon:
             if (saw_icon || !zf_ctap_cbor_read_text_discard(cursor)) {
                 return ZF_CTAP_ERR_INVALID_CBOR;
             }
             saw_icon = true;
             continue;
-        }
 
-        if (!zf_cbor_skip(cursor)) {
-            return ZF_CTAP_ERR_INVALID_CBOR;
+        default:
+            if (!zf_cbor_skip(cursor)) {
+                return ZF_CTAP_ERR_INVALID_CBOR;
+            }
+            break;
         }
     }
 
@@ -178,9 +179,9 @@ static uint8_t zf_parse_make_credential_exclude_list(ZfCborCursor *cursor,
 
 static uint8_t zf_parse_make_credential_extensions(ZfCborCursor *cursor,
                                                    ZfMakeCredentialRequest *request) {
-    return zf_ctap_parse_make_credential_extensions_map(
-        cursor, &request->has_cred_protect, &request->cred_protect,
-        &request->hmac_secret_requested);
+    return zf_ctap_parse_make_credential_extensions_map(cursor, &request->has_cred_protect,
+                                                        &request->cred_protect,
+                                                        &request->hmac_secret_requested);
 }
 
 static uint8_t zf_parse_make_credential_options(ZfCborCursor *cursor,
@@ -210,6 +211,37 @@ static uint8_t zf_parse_make_credential_pin_protocol(ZfCborCursor *cursor,
     return ZF_CTAP_SUCCESS;
 }
 
+static uint8_t zf_parse_make_credential_attestation_formats(ZfCborCursor *cursor,
+                                                            ZfMakeCredentialRequest *request) {
+    size_t count = 0;
+
+    if (!zf_cbor_read_array_start(cursor, &count)) {
+        return ZF_CTAP_ERR_INVALID_CBOR;
+    }
+
+    for (size_t i = 0; i < count; ++i) {
+        const uint8_t *format = NULL;
+        size_t format_size = 0;
+
+        if (!zf_cbor_read_text_ptr(cursor, &format, &format_size) ||
+            memchr(format, '\0', format_size) != NULL) {
+            return ZF_CTAP_ERR_INVALID_CBOR;
+        }
+        if (request->has_attestation_format_preference) {
+            continue;
+        }
+        if (format_size == 4U && memcmp(format, "none", 4U) == 0) {
+            request->preferred_attestation_mode = ZfAttestationModeNone;
+            request->has_attestation_format_preference = true;
+        } else if (format_size == 6U && memcmp(format, "packed", 6U) == 0) {
+            request->preferred_attestation_mode = ZfAttestationModePacked;
+            request->has_attestation_format_preference = true;
+        }
+    }
+
+    return ZF_CTAP_SUCCESS;
+}
+
 static uint8_t zf_parse_make_credential_field(ZfCborCursor *cursor,
                                               ZfMakeCredentialRequest *request, uint64_t key) {
     switch (key) {
@@ -231,6 +263,8 @@ static uint8_t zf_parse_make_credential_field(ZfCborCursor *cursor,
         return zf_parse_make_credential_pin_auth(cursor, request);
     case 9:
         return zf_parse_make_credential_pin_protocol(cursor, request);
+    case 11:
+        return zf_parse_make_credential_attestation_formats(cursor, request);
     default:
         if (!zf_cbor_skip(cursor)) {
             return ZF_CTAP_ERR_INVALID_CBOR;

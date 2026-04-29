@@ -1,3 +1,11 @@
+"""CTAPHID/FIDO probe helpers and CLI.
+
+This module is both an executable diagnostic tool and a small reusable library
+for conformance scenarios: it owns HID discovery, CTAPHID channel allocation,
+packet fragmentation/reassembly, CTAP2/U2F/ClientPIN request builders, and
+response decoders used by the host-side suite.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -12,6 +20,7 @@ import struct
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from cryptography.hazmat.backends import default_backend
@@ -60,6 +69,7 @@ U2F_AUTH_DONT_ENFORCE = 0x08
 U2F_SW_NO_ERROR = bytes.fromhex("9000")
 U2F_SW_CONDITIONS_NOT_SATISFIED = bytes.fromhex("6985")
 U2F_SW_WRONG_LENGTH = bytes.fromhex("6700")
+U2F_SW_WRONG_DATA = bytes.fromhex("6a80")
 U2F_SW_INS_NOT_SUPPORTED = bytes.fromhex("6d00")
 U2F_SW_CLA_NOT_SUPPORTED = bytes.fromhex("6e00")
 
@@ -123,6 +133,11 @@ def parse_args() -> argparse.Namespace:
             "exhaustcids",
             "shortinit",
             "bench",
+            "u2fversion",
+            "u2fregister",
+            "u2fauthinvalid",
+            "u2finvalidcla",
+            "u2fversiondata",
         ],
         default="getinfo",
         help="Command to send to the first matching FIDO HID device",
@@ -211,6 +226,20 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=10,
         help="Number of timing samples to collect in bench mode",
+    )
+    parser.add_argument(
+        "--u2f-cert-out",
+        help="Write the attestation certificate from a u2fregister response to this DER file",
+    )
+    parser.add_argument(
+        "--fido2-cert-out",
+        help="Write the packed attestation certificate from a makecredential response to this DER file",
+    )
+    parser.add_argument(
+        "--u2f-invalid-cla",
+        type=lambda value: int(value, 0),
+        default=0x6D,
+        help="CLA byte for u2finvalidcla; defaults to the FIDO conformance F-2 value 0x6d",
     )
     return parser.parse_args()
 
@@ -696,6 +725,12 @@ def run_make_credential(device: hid.device, timeout_ms: int, verbose: bool, args
     if not response_payload:
         raise RuntimeError("empty MakeCredential response")
 
+    if args.fido2_cert_out:
+        cert_der = extract_make_credential_attestation_certificate(response_payload)
+        cert_out = Path(args.fido2_cert_out)
+        cert_out.write_bytes(cert_der)
+        print(f"attestation_certificate_path={cert_out}")
+        print(f"attestation_certificate_len={len(cert_der)}")
     print_ctap_response(response_payload)
     return 0
 
@@ -1139,10 +1174,67 @@ def u2f_status_word_name(status_words: bytes) -> str | None:
         U2F_SW_NO_ERROR: "SW_NO_ERROR",
         U2F_SW_CONDITIONS_NOT_SATISFIED: "SW_CONDITIONS_NOT_SATISFIED",
         U2F_SW_WRONG_LENGTH: "SW_WRONG_LENGTH",
+        U2F_SW_WRONG_DATA: "SW_WRONG_DATA",
         U2F_SW_INS_NOT_SUPPORTED: "SW_INS_NOT_SUPPORTED",
         U2F_SW_CLA_NOT_SUPPORTED: "SW_CLA_NOT_SUPPORTED",
     }
     return names.get(status_words)
+
+
+def _read_der_tlv_length(data: bytes, offset: int) -> tuple[int, int]:
+    if offset >= len(data) or data[offset] != 0x30:
+        raise RuntimeError("U2F register response does not contain an attestation certificate")
+    if offset + 2 > len(data):
+        raise RuntimeError("U2F attestation certificate is truncated")
+    first_len = data[offset + 1]
+    if first_len < 0x80:
+        return offset + 2, first_len
+    len_len = first_len & 0x7F
+    if len_len == 0 or len_len > 4 or offset + 2 + len_len > len(data):
+        raise RuntimeError("U2F attestation certificate has invalid DER length")
+    value_len = int.from_bytes(data[offset + 2 : offset + 2 + len_len], "big")
+    return offset + 2 + len_len, value_len
+
+
+def extract_u2f_attestation_certificate(response_payload: bytes) -> bytes:
+    if len(response_payload) < 70:
+        raise RuntimeError("U2F register response too short")
+    status_words = response_payload[-2:]
+    if status_words != U2F_SW_NO_ERROR:
+        raise RuntimeError(f"U2F register failed with status {status_words.hex()}")
+    key_handle_len = response_payload[66]
+    cert_offset = 67 + key_handle_len
+    value_offset, value_len = _read_der_tlv_length(response_payload, cert_offset)
+    cert_end = value_offset + value_len
+    if cert_end > len(response_payload) - 2:
+        raise RuntimeError("U2F attestation certificate overruns register response")
+    return response_payload[cert_offset:cert_end]
+
+
+def extract_make_credential_attestation_certificate(response_payload: bytes) -> bytes:
+    if not response_payload:
+        raise RuntimeError("MakeCredential response is empty")
+    if response_payload[0] != 0:
+        raise RuntimeError(f"MakeCredential failed with CTAP status 0x{response_payload[0]:02x}")
+    try:
+        decoded = cbor2.loads(response_payload[1:])
+    except Exception as exc:
+        raise RuntimeError(f"MakeCredential response is not valid CBOR: {exc}") from exc
+    if not isinstance(decoded, dict):
+        raise RuntimeError("MakeCredential response body is not a CBOR map")
+    att_stmt = decoded.get(3)
+    if not isinstance(att_stmt, dict):
+        raise RuntimeError("MakeCredential response does not contain attStmt")
+    x5c = att_stmt.get("x5c")
+    if not isinstance(x5c, list) or not x5c:
+        raise RuntimeError("MakeCredential attStmt does not contain x5c")
+    cert_der = x5c[0]
+    if not isinstance(cert_der, bytes) or not cert_der:
+        raise RuntimeError("MakeCredential x5c[0] is not a DER certificate")
+    value_offset, value_len = _read_der_tlv_length(cert_der, 0)
+    if value_offset + value_len != len(cert_der):
+        raise RuntimeError("MakeCredential x5c[0] has trailing or truncated DER data")
+    return cert_der
 
 
 def parse_auth_data(auth_data: bytes) -> dict[str, Any]:
@@ -1175,6 +1267,13 @@ def parse_make_credential_ctap_payload(payload: bytes) -> dict[str, Any]:
         auth_data = decoded.get(2)
         if isinstance(auth_data, bytes):
             parsed["auth_data"] = parse_auth_data(auth_data)
+        try:
+            cert_der = extract_make_credential_attestation_certificate(payload)
+        except RuntimeError:
+            pass
+        else:
+            parsed["attestation_certificate_len"] = len(cert_der)
+            parsed["attestation_certificate_sha256"] = hashlib.sha256(cert_der).hexdigest()
     return parsed
 
 
@@ -1377,6 +1476,21 @@ def build_u2f_version_apdu() -> bytes:
     return bytes([0x00, U2F_VERSION, 0x00, 0x00, 0x00, 0x00, 0x00])
 
 
+def build_u2f_invalid_cla_version_apdu(cla: int = 0x6D) -> bytes:
+    if cla < 0 or cla > 0xFF:
+        raise ValueError("U2F invalid CLA must fit in one byte")
+    return bytes([cla, U2F_VERSION, 0x00, 0x00, 0x00, 0x00, 0x00])
+
+
+def build_u2f_version_with_data_apdu(data: bytes) -> bytes:
+    if len(data) > 0xFFFF:
+        raise ValueError("U2F VERSION data buffer too long")
+    return (
+        bytes([0x00, U2F_VERSION, 0x00, 0x00, 0x00, (len(data) >> 8) & 0xFF, len(data) & 0xFF])
+        + data
+    )
+
+
 def build_u2f_register_apdu(challenge: bytes, app_id: bytes) -> bytes:
     if len(challenge) != 32 or len(app_id) != 32:
         raise ValueError("U2F register challenge and app_id must be 32 bytes")
@@ -1412,6 +1526,111 @@ def extract_u2f_key_handle(response_payload: bytes) -> bytes:
     if key_handle_end > len(response_payload) - 2:
         raise RuntimeError("U2F register key handle length is invalid")
     return response_payload[key_handle_start:key_handle_end]
+
+
+def run_u2f_register(device: hid.device, timeout_ms: int, verbose: bool, args: argparse.Namespace) -> int:
+    nonce = os.urandom(8)
+    _, _, init_payload = transact(device, BROADCAST_CID, INIT, nonce, timeout_ms, verbose)
+    cid = expect_init_response(BROADCAST_CID, INIT, init_payload, nonce)
+    challenge = hashlib.sha256(b"zerofido-probe-u2f-register").digest()
+    app_id = hashlib.sha256(b"zerofido-probe-u2f-app").digest()
+    response_cid, response_cmd, response_payload = transact(
+        device, cid, MSG, build_u2f_register_apdu(challenge, app_id), timeout_ms, verbose
+    )
+    if response_cmd == ERROR:
+        raise RuntimeError(f"CTAPHID error during U2F register: 0x{response_payload[0]:02x}")
+    if response_cmd != MSG:
+        raise RuntimeError(f"unexpected U2F response cmd 0x{response_cmd:02x}")
+    if response_cid != cid:
+        raise RuntimeError(f"unexpected U2F response cid 0x{response_cid:08x}")
+
+    cert_der = extract_u2f_attestation_certificate(response_payload)
+    decoded = decode_u2f_response_payload(response_payload)
+    decoded["key_handle_hex"] = extract_u2f_key_handle(response_payload).hex()
+    decoded["attestation_certificate_len"] = len(cert_der)
+    if args.u2f_cert_out:
+        cert_out = Path(args.u2f_cert_out)
+        cert_out.write_bytes(cert_der)
+        decoded["attestation_certificate_path"] = str(cert_out)
+    print(json.dumps(decoded, indent=2, sort_keys=True))
+    return 0
+
+
+def run_u2f_version(device: hid.device, timeout_ms: int, verbose: bool) -> int:
+    nonce = os.urandom(8)
+    _, _, init_payload = transact(device, BROADCAST_CID, INIT, nonce, timeout_ms, verbose)
+    cid = expect_init_response(BROADCAST_CID, INIT, init_payload, nonce)
+    response_cid, response_cmd, response_payload = transact(
+        device, cid, MSG, build_u2f_version_apdu(), timeout_ms, verbose
+    )
+    if response_cmd == ERROR:
+        raise RuntimeError(f"CTAPHID error during U2F VERSION: 0x{response_payload[0]:02x}")
+    if response_cmd != MSG:
+        raise RuntimeError(f"unexpected U2F VERSION response cmd 0x{response_cmd:02x}")
+    if response_cid != cid:
+        raise RuntimeError(f"unexpected U2F VERSION response cid 0x{response_cid:08x}")
+    print(json.dumps(decode_u2f_response_payload(response_payload), indent=2, sort_keys=True))
+    return 0
+
+
+def run_u2f_invalid_cla(device: hid.device, timeout_ms: int, verbose: bool, cla: int) -> int:
+    nonce = os.urandom(8)
+    _, _, init_payload = transact(device, BROADCAST_CID, INIT, nonce, timeout_ms, verbose)
+    cid = expect_init_response(BROADCAST_CID, INIT, init_payload, nonce)
+    response_cid, response_cmd, response_payload = transact(
+        device, cid, MSG, build_u2f_invalid_cla_version_apdu(cla), timeout_ms, verbose
+    )
+    if response_cmd == ERROR:
+        raise RuntimeError(f"CTAPHID error during invalid-CLA U2F VERSION: 0x{response_payload[0]:02x}")
+    if response_cmd != MSG:
+        raise RuntimeError(f"unexpected invalid-CLA U2F VERSION response cmd 0x{response_cmd:02x}")
+    if response_cid != cid:
+        raise RuntimeError(f"unexpected invalid-CLA U2F VERSION response cid 0x{response_cid:08x}")
+    print(json.dumps(decode_u2f_response_payload(response_payload), indent=2, sort_keys=True))
+    return 0
+
+
+def run_u2f_version_data(device: hid.device, timeout_ms: int, verbose: bool) -> int:
+    nonce = os.urandom(8)
+    _, _, init_payload = transact(device, BROADCAST_CID, INIT, nonce, timeout_ms, verbose)
+    cid = expect_init_response(BROADCAST_CID, INIT, init_payload, nonce)
+    data = bytes.fromhex("5938e99cc9695e756177e67137b588d2e54a5ecaef4a291e7ba1115d0ca5e270ad92")
+    response_cid, response_cmd, response_payload = transact(
+        device, cid, MSG, build_u2f_version_with_data_apdu(data), timeout_ms, verbose
+    )
+    if response_cmd == ERROR:
+        raise RuntimeError(f"CTAPHID error during U2F VERSION-with-data: 0x{response_payload[0]:02x}")
+    if response_cmd != MSG:
+        raise RuntimeError(f"unexpected U2F VERSION-with-data response cmd 0x{response_cmd:02x}")
+    if response_cid != cid:
+        raise RuntimeError(f"unexpected U2F VERSION-with-data response cid 0x{response_cid:08x}")
+    print(json.dumps(decode_u2f_response_payload(response_payload), indent=2, sort_keys=True))
+    return 0
+
+
+def run_u2f_auth_invalid(device: hid.device, timeout_ms: int, verbose: bool) -> int:
+    nonce = os.urandom(8)
+    _, _, init_payload = transact(device, BROADCAST_CID, INIT, nonce, timeout_ms, verbose)
+    cid = expect_init_response(BROADCAST_CID, INIT, init_payload, nonce)
+    challenge = hashlib.sha256(b"zerofido-probe-u2f-invalid-auth-challenge").digest()
+    app_id = hashlib.sha256(b"zerofido-probe-u2f-invalid-auth-app").digest()
+    key_handle = bytes(range(64))
+    response_cid, response_cmd, response_payload = transact(
+        device,
+        cid,
+        MSG,
+        build_u2f_authenticate_apdu(challenge, app_id, key_handle, mode=U2F_AUTH_CHECK_ONLY),
+        timeout_ms,
+        verbose,
+    )
+    if response_cmd == ERROR:
+        raise RuntimeError(f"CTAPHID error during invalid U2F authenticate: 0x{response_payload[0]:02x}")
+    if response_cmd != MSG:
+        raise RuntimeError(f"unexpected invalid U2F authenticate response cmd 0x{response_cmd:02x}")
+    if response_cid != cid:
+        raise RuntimeError(f"unexpected invalid U2F authenticate response cid 0x{response_cid:08x}")
+    print(json.dumps(decode_u2f_response_payload(response_payload), indent=2, sort_keys=True))
+    return 0
 
 
 def summarize_exchange(
@@ -1454,7 +1673,11 @@ def get_local_hostname() -> str:
 def open_device(args: argparse.Namespace) -> hid.device:
     device = hid.device()
     if args.path:
-        device.open_path(args.path.encode() if isinstance(args.path, str) else args.path)
+        raw_path = args.path.encode() if isinstance(args.path, str) else args.path
+        try:
+            device.open_path(raw_path)
+        except Exception as exc:
+            raise RuntimeError(f"could not open FIDO HID device at {raw_path!r}: {exc}") from exc
         device.set_nonblocking(False)
         return device
 
@@ -1463,7 +1686,14 @@ def open_device(args: argparse.Namespace) -> hid.device:
         raise RuntimeError("no matching FIDO HID device found")
     if args.verbose:
         print_devices(devices)
-    device.open_path(devices[0].path)
+    try:
+        device.open_path(devices[0].path)
+    except Exception as exc:
+        raise RuntimeError(
+            f"could not open FIDO HID device at {devices[0].path!r}: {exc}. "
+            "Close other FIDO clients and reconnect or restart the authenticator if macOS still "
+            "holds the interface."
+        ) from exc
     device.set_nonblocking(False)
     return device
 
@@ -1513,6 +1743,16 @@ def main() -> int:
             return run_short_init(device, args.timeout_ms, args.verbose, args.short_init_len)
         if args.cmd == "bench":
             return run_bench(device, args.timeout_ms, args.verbose, args.iterations)
+        if args.cmd == "u2fversion":
+            return run_u2f_version(device, args.timeout_ms, args.verbose)
+        if args.cmd == "u2fregister":
+            return run_u2f_register(device, args.timeout_ms, args.verbose, args)
+        if args.cmd == "u2fauthinvalid":
+            return run_u2f_auth_invalid(device, args.timeout_ms, args.verbose)
+        if args.cmd == "u2finvalidcla":
+            return run_u2f_invalid_cla(device, args.timeout_ms, args.verbose, args.u2f_invalid_cla)
+        if args.cmd == "u2fversiondata":
+            return run_u2f_version_data(device, args.timeout_ms, args.verbose)
         return run_get_assertion(
             device,
             args.timeout_ms,

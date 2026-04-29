@@ -24,6 +24,11 @@
 
 typedef struct ZerofidoApp ZerofidoApp;
 
+/*
+ * Approval helpers translate CTAP requirements into UI interactions and return
+ * CTAP status codes. Empty pinAuth probes deliberately ask for touch before
+ * reporting the pinAuth-specific failure required by conformance tests.
+ */
 uint8_t zf_ctap_request_approval(ZerofidoApp *app, const char *operation, const char *rp_id,
                                  const char *user_text, ZfTransportSessionId session_id);
 uint8_t zf_ctap_request_assertion_selection(ZerofidoApp *app, const char *rp_id,

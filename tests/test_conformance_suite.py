@@ -1,3 +1,5 @@
+"""Tests for conformance-suite command construction and fixture handling."""
+
 from __future__ import annotations
 
 import copy
@@ -71,6 +73,43 @@ class ConformanceSuiteTests(unittest.TestCase):
 
         self.assertEqual(report["gate_result"], "blocked")
 
+    def test_build_report_fails_for_unmapped_scenario_failure(self) -> None:
+        service = ConformanceSuiteService()
+        matched = MatchedDevice(
+            ctaphid_probe.HidDeviceInfo(
+                path=b"dummy",
+                vendor_id=0x0483,
+                product_id=0x5741,
+                usage_page=0xF1D0,
+                usage=0x01,
+                product_string="ZeroFIDO",
+                serial_number="fixture-1",
+            )
+        )
+        report = service._build_report(
+            "run-3",
+            "unit_test",
+            matched,
+            [
+                {
+                    "id": "unmapped_failure",
+                    "phase": "unit",
+                    "rows": [],
+                    "status": "failed",
+                    "summary": "unmapped failed",
+                    "error": "boom",
+                    "details": {},
+                    "evidence": {},
+                    "started_at": "2026-04-22T00:00:00Z",
+                    "ended_at": "2026-04-22T00:00:01Z",
+                    "duration_ms": 1,
+                }
+            ],
+            None,
+        )
+
+        self.assertEqual(report["gate_result"], "failed")
+
     def test_validate_static_metadata_rejects_built_in_uv_claims(self) -> None:
         service = ConformanceSuiteService()
         metadata = service._load_static_metadata()
@@ -95,10 +134,6 @@ class ConformanceSuiteTests(unittest.TestCase):
             },
             5: metadata["authenticatorGetInfo"]["maxMsgSize"],
             6: metadata["authenticatorGetInfo"]["pinUvAuthProtocols"],
-            9: metadata["authenticatorGetInfo"]["transports"],
-            10: metadata["authenticatorGetInfo"]["algorithms"],
-            13: metadata["authenticatorGetInfo"]["minPINLength"],
-            14: metadata["authenticatorGetInfo"]["firmwareVersion"],
         }
 
         validated = service._validate_get_info_response(decoded, metadata)
@@ -121,16 +156,12 @@ class ConformanceSuiteTests(unittest.TestCase):
             },
             5: metadata["authenticatorGetInfo"]["maxMsgSize"],
             6: metadata["authenticatorGetInfo"]["pinUvAuthProtocols"],
-            9: metadata["authenticatorGetInfo"]["transports"],
-            10: metadata["authenticatorGetInfo"]["algorithms"],
-            13: metadata["authenticatorGetInfo"]["minPINLength"],
-            14: metadata["authenticatorGetInfo"]["firmwareVersion"],
         }
 
         with self.assertRaisesRegex(RuntimeError, "unsupported option 'ep'"):
             service._validate_get_info_response(decoded, metadata)
 
-    def test_validate_get_info_response_rejects_missing_min_pin_length(self) -> None:
+    def test_validate_get_info_response_rejects_unexpected_min_pin_length(self) -> None:
         service = ConformanceSuiteService()
         metadata = service._load_static_metadata()
         decoded = {
@@ -146,9 +177,7 @@ class ConformanceSuiteTests(unittest.TestCase):
             },
             5: metadata["authenticatorGetInfo"]["maxMsgSize"],
             6: metadata["authenticatorGetInfo"]["pinUvAuthProtocols"],
-            9: metadata["authenticatorGetInfo"]["transports"],
-            10: metadata["authenticatorGetInfo"]["algorithms"],
-            14: metadata["authenticatorGetInfo"]["firmwareVersion"],
+            13: 4,
         }
 
         with self.assertRaisesRegex(RuntimeError, "minPINLength"):
@@ -171,14 +200,45 @@ class ConformanceSuiteTests(unittest.TestCase):
             },
             5: metadata["authenticatorGetInfo"]["maxMsgSize"],
             6: metadata["authenticatorGetInfo"]["pinUvAuthProtocols"],
+        }
+
+        with self.assertRaisesRegex(RuntimeError, "unsupported option 'pinUvAuthToken'"):
+            service._validate_get_info_response(decoded, metadata)
+
+    def test_validate_get_info_response_accepts_experimental_2_1_options_when_metadata_matches(self) -> None:
+        service = ConformanceSuiteService()
+        metadata = service._load_static_metadata()
+        metadata["authenticatorGetInfo"]["versions"] = ["FIDO_2_1", "FIDO_2_0", "U2F_V2"]
+        metadata["authenticatorGetInfo"]["options"]["pinUvAuthToken"] = True
+        metadata["authenticatorGetInfo"]["options"]["makeCredUvNotRqd"] = True
+        metadata["authenticatorGetInfo"]["options"]["clientPin"] = True
+        metadata["authenticatorGetInfo"]["pinUvAuthProtocols"] = [2, 1]
+        metadata["authenticatorGetInfo"]["transports"] = ["usb"]
+        metadata["authenticatorGetInfo"]["algorithms"] = [{"type": "public-key", "alg": -7}]
+        metadata["authenticatorGetInfo"]["minPINLength"] = 4
+        metadata["authenticatorGetInfo"]["firmwareVersion"] = 10000
+        decoded = {
+            1: metadata["authenticatorGetInfo"]["versions"],
+            2: metadata["authenticatorGetInfo"]["extensions"],
+            3: bytes.fromhex(metadata["aaguid"].replace("-", "")),
+            4: {
+                "rk": True,
+                "up": True,
+                "plat": False,
+                "clientPin": True,
+                "pinUvAuthToken": True,
+                "makeCredUvNotRqd": True,
+            },
+            5: metadata["authenticatorGetInfo"]["maxMsgSize"],
+            6: metadata["authenticatorGetInfo"]["pinUvAuthProtocols"],
             9: metadata["authenticatorGetInfo"]["transports"],
             10: metadata["authenticatorGetInfo"]["algorithms"],
             13: metadata["authenticatorGetInfo"]["minPINLength"],
             14: metadata["authenticatorGetInfo"]["firmwareVersion"],
         }
 
-        with self.assertRaisesRegex(RuntimeError, "unsupported option 'pinUvAuthToken'"):
-            service._validate_get_info_response(decoded, metadata)
+        validated = service._validate_get_info_response(decoded, metadata)
+        self.assertTrue(validated["options"]["pinUvAuthToken"])
 
     def test_validate_browser_register_result_rejects_none_attestation_x5c_leak(self) -> None:
         service = ConformanceSuiteService()

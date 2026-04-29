@@ -19,12 +19,69 @@
 
 #include <string.h>
 
+#include "attestation/local.h"
 #include "zerofido_crypto.h"
+#include "zerofido_telemetry.h"
+
+#define ZF_ATTESTATION_DATA_DIR ZF_APP_DATA_DIR "/fido2"
+#define ZF_ATTESTATION_ASSETS_DIR ZF_ATTESTATION_DATA_DIR "/attestation"
+#define ZF_ATTESTATION_CERT_FILE ZF_ATTESTATION_ASSETS_DIR "/cert.der"
+#define ZF_ATTESTATION_CERT_FILE_TMP ZF_ATTESTATION_ASSETS_DIR "/cert.der.tmp"
+#define ZF_ATTESTATION_CERT_KEY_FILE ZF_ATTESTATION_ASSETS_DIR "/cert_key.fido2"
+#define ZF_ATTESTATION_CERT_KEY_FILE_TMP ZF_ATTESTATION_ASSETS_DIR "/cert_key.fido2.tmp"
+
+#define ZF_ATTESTATION_CERT_KEY_FILE_TYPE "ZeroFIDO FIDO2 Attestation Key File"
 
 static const uint8_t zf_attestation_aaguid[ZF_AAGUID_LEN] = {
     0xb5, 0x1a, 0x97, 0x6a, 0x0b, 0x02, 0x40, 0xaa, 0x9d, 0x8a, 0x36, 0xc8, 0xb9, 0x1b, 0xbd, 0x1a,
 };
 static const char zf_attestation_aaguid_string[] = "b51a976a-0b02-40aa-9d8a-36c8b91bbd1a";
+static int8_t zf_attestation_consistency_cache = -1;
+static size_t zf_attestation_leaf_cert_len_cache = 0;
+
+#if ZF_DEV_ATTESTATION
+static bool zf_attestation_parse_der_length(const uint8_t *input, size_t input_len,
+                                            size_t *header_len, size_t *value_len) {
+    if (!input || input_len < 2 || !header_len || !value_len) {
+        return false;
+    }
+
+    if ((input[1] & 0x80U) == 0) {
+        *header_len = 2;
+        *value_len = input[1];
+        return *value_len <= input_len - *header_len;
+    }
+
+    size_t length_octets = input[1] & 0x7FU;
+    if (length_octets == 0 || length_octets > sizeof(size_t) || length_octets > input_len - 2U) {
+        return false;
+    }
+
+    size_t length = 0;
+    for (size_t i = 0; i < length_octets; ++i) {
+        length = (length << 8) | input[2 + i];
+    }
+
+    *header_len = 2 + length_octets;
+    *value_len = length;
+    return *value_len <= input_len - *header_len;
+}
+
+static bool zf_attestation_contains(const uint8_t *haystack, size_t haystack_len,
+                                    const uint8_t *needle, size_t needle_len) {
+    if (!haystack || !needle || needle_len == 0 || haystack_len < needle_len) {
+        return false;
+    }
+
+    for (size_t i = 0; i <= haystack_len - needle_len; ++i) {
+        if (memcmp(&haystack[i], needle, needle_len) == 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 static const uint8_t zf_attestation_aaguid_extension[] = {
     0x06, 0x0b, 0x2b, 0x06, 0x01, 0x04, 0x01, 0x82, 0xe5, 0x1c, 0x01,
     0x01, 0x04, 0x04, 0x12, 0x04, 0x10, 0xb5, 0x1a, 0x97, 0x6a, 0x0b,
@@ -150,50 +207,6 @@ static const uint8_t zf_attestation_root_cert[] = {
     0x54, 0x8e, 0xb1,
 };
 
-static int8_t zf_attestation_consistency_cache = -1;
-
-static bool zf_attestation_contains(const uint8_t *haystack, size_t haystack_len,
-                                    const uint8_t *needle, size_t needle_len) {
-    if (!haystack || !needle || needle_len == 0 || haystack_len < needle_len) {
-        return false;
-    }
-
-    for (size_t i = 0; i <= haystack_len - needle_len; ++i) {
-        if (memcmp(&haystack[i], needle, needle_len) == 0) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-static bool zf_attestation_parse_der_length(const uint8_t *input, size_t input_len,
-                                            size_t *header_len, size_t *value_len) {
-    if (!input || input_len < 2 || !header_len || !value_len) {
-        return false;
-    }
-
-    if ((input[1] & 0x80U) == 0) {
-        *header_len = 2;
-        *value_len = input[1];
-        return *value_len <= input_len - *header_len;
-    }
-
-    size_t length_octets = input[1] & 0x7FU;
-    if (length_octets == 0 || length_octets > sizeof(size_t) || length_octets > input_len - 2U) {
-        return false;
-    }
-
-    size_t length = 0;
-    for (size_t i = 0; i < length_octets; ++i) {
-        length = (length << 8) | input[2 + i];
-    }
-
-    *header_len = 2 + length_octets;
-    *value_len = length;
-    return *value_len <= input_len - *header_len;
-}
-
 static bool zf_attestation_extract_leaf_signature(const uint8_t **out_tbs, size_t *out_tbs_len,
                                                   const uint8_t **out_signature,
                                                   size_t *out_signature_len) {
@@ -267,6 +280,45 @@ static bool zf_attestation_extract_leaf_signature(const uint8_t **out_tbs, size_
     *out_signature_len = signature_value_len - 1;
     return true;
 }
+#endif
+
+#if !ZF_DEV_ATTESTATION
+static const uint8_t zf_attestation_local_subject[] = {
+    0x30, 0x72, 0x31, 0x0B, 0x30, 0x09, 0x06, 0x03, 0x55, 0x04, 0x06, 0x13, 0x02, 'B',  'G',
+    0x31, 0x11, 0x30, 0x0F, 0x06, 0x03, 0x55, 0x04, 0x0A, 0x0C, 0x08, 'Z',  'e',  'r',  'o',
+    'F',  'I',  'D',  'O',  0x31, 0x22, 0x30, 0x20, 0x06, 0x03, 0x55, 0x04, 0x0B, 0x0C, 0x19,
+    'A',  'u',  't',  'h',  'e',  'n',  't',  'i',  'c',  'a',  't',  'o',  'r',  ' ',
+    'A',  't',  't',  'e',  's',  't',  'a',  't',  'i',  'o',  'n',  0x31, 0x2C, 0x30,
+    0x2A, 0x06, 0x03, 0x55, 0x04, 0x03, 0x0C, 0x23, 'Z',  'e',  'r',  'o',  'F',  'I',
+    'D',  'O',  ' ',  'L',  'o',  'c',  'a',  'l',  ' ',  'S',  'o',  'f',  't',  'w',
+    'a',  'r',  'e',  ' ',  'A',  't',  't',  'e',  's',  't',  'a',  't',  'i',  'o',
+    'n',
+};
+
+static const uint8_t zf_attestation_local_extensions[] = {
+    0x30, 0x41, 0x30, 0x0C, 0x06, 0x03, 0x55, 0x1D, 0x13, 0x01, 0x01, 0xFF, 0x04, 0x02,
+    0x30, 0x00, 0x30, 0x0E, 0x06, 0x03, 0x55, 0x1D, 0x0F, 0x01, 0x01, 0xFF, 0x04, 0x04,
+    0x03, 0x02, 0x07, 0x80, 0x30, 0x21, 0x06, 0x0B, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82,
+    0xE5, 0x1C, 0x01, 0x01, 0x04, 0x04, 0x12, 0x04, 0x10, 0xb5, 0x1a, 0x97, 0x6a,
+    0x0b, 0x02, 0x40, 0xaa, 0x9d, 0x8a, 0x36, 0xc8, 0xb9, 0x1b, 0xbd, 0x1a,
+};
+
+static const ZfLocalAttestationProfile zf_attestation_local_profile = {
+    .data_dir = ZF_ATTESTATION_DATA_DIR,
+    .assets_dir = ZF_ATTESTATION_ASSETS_DIR,
+    .cert_file = ZF_ATTESTATION_CERT_FILE,
+    .cert_temp_file = ZF_ATTESTATION_CERT_FILE_TMP,
+    .key_file = ZF_ATTESTATION_CERT_KEY_FILE,
+    .key_temp_file = ZF_ATTESTATION_CERT_KEY_FILE_TMP,
+    .key_file_type = ZF_ATTESTATION_CERT_KEY_FILE_TYPE,
+    .subject_der = zf_attestation_local_subject,
+    .subject_der_len = sizeof(zf_attestation_local_subject),
+    .extensions_der = zf_attestation_local_extensions,
+    .extensions_der_len = sizeof(zf_attestation_local_extensions),
+    .identity = zf_attestation_aaguid,
+    .identity_len = sizeof(zf_attestation_aaguid),
+};
+#endif
 
 const uint8_t *zf_attestation_get_aaguid(void) {
     return zf_attestation_aaguid;
@@ -276,6 +328,91 @@ const char *zf_attestation_get_aaguid_string(void) {
     return zf_attestation_aaguid_string;
 }
 
+static bool zf_attestation_probe_leaf_cert_der_len(size_t *out_len) {
+    if (!out_len) {
+        return false;
+    }
+#if ZF_DEV_ATTESTATION
+    *out_len = sizeof(zf_attestation_cert);
+    return true;
+#else
+    return zf_local_attestation_get_cert_size(&zf_attestation_local_profile, out_len);
+#endif
+}
+
+bool zf_attestation_get_leaf_cert_der_len(size_t *out_len) {
+    size_t cert_len = 0;
+
+    if (!out_len) {
+        return false;
+    }
+    if (zf_attestation_leaf_cert_len_cache > 0U) {
+        *out_len = zf_attestation_leaf_cert_len_cache;
+        return true;
+    }
+    if (!zf_attestation_probe_leaf_cert_der_len(&cert_len) || cert_len == 0U ||
+        cert_len > ZF_ATTESTATION_CERT_MAX_SIZE) {
+        *out_len = 0;
+        return false;
+    }
+    zf_attestation_leaf_cert_len_cache = cert_len;
+    *out_len = cert_len;
+    return true;
+}
+
+/*
+ * Ensures attestation material exists and is internally consistent. Dev builds
+ * validate compiled-in assets; non-dev builds generate/load local per-device
+ * assets under the app data directory.
+ */
+bool zf_attestation_ensure_ready(void) {
+    bool ok = false;
+
+    if (zf_attestation_consistency_cache > 0) {
+        return zf_attestation_consistency_cache != 0;
+    }
+
+    zf_telemetry_log("attestation ensure before");
+#if ZF_DEV_ATTESTATION
+    ok = zf_attestation_validate_consistency();
+#else
+    ok = zf_local_attestation_ensure_assets(&zf_attestation_local_profile);
+#endif
+    if (ok) {
+        size_t cert_len = 0;
+        ok = zf_attestation_get_leaf_cert_der_len(&cert_len);
+    }
+    if (ok) {
+        zf_attestation_consistency_cache = 1;
+    }
+    zf_telemetry_log(ok ? "attestation ensure after ok" : "attestation ensure after failed");
+    return ok;
+}
+
+bool zf_attestation_load_leaf_cert_der(uint8_t *out, size_t out_capacity, size_t *out_len) {
+    bool ok = false;
+
+    if (!out || !out_len) {
+        return false;
+    }
+    zf_telemetry_log("attestation cert before");
+#if ZF_DEV_ATTESTATION
+    if (sizeof(zf_attestation_cert) > out_capacity) {
+        *out_len = 0;
+        zf_telemetry_log("attestation cert after failed");
+        return false;
+    }
+    memcpy(out, zf_attestation_cert, sizeof(zf_attestation_cert));
+    *out_len = sizeof(zf_attestation_cert);
+    ok = true;
+#else
+    ok = zf_local_attestation_load_cert(&zf_attestation_local_profile, out, out_capacity, out_len);
+#endif
+    zf_telemetry_log(ok ? "attestation cert after ok" : "attestation cert after failed");
+    return ok;
+}
+
+#if ZF_DEV_ATTESTATION
 const uint8_t *zf_attestation_get_leaf_cert_der(size_t *out_len) {
     *out_len = sizeof(zf_attestation_cert);
     return zf_attestation_cert;
@@ -294,18 +431,58 @@ size_t zf_attestation_get_cert_chain(const uint8_t **certs, size_t *cert_lens, s
     cert_lens[0] = sizeof(zf_attestation_cert);
     return 1;
 }
+#endif
 
 bool zf_attestation_sign_input(const uint8_t *input, size_t input_len, uint8_t *out,
                                size_t out_capacity, size_t *out_len) {
     uint8_t hash[32];
+    bool ok = false;
 
-    if (!input || input_len == 0) {
+    if (!input || input_len == 0 || !out || !out_len) {
         return false;
     }
 
+    zf_telemetry_log("attestation sign before");
     zf_crypto_sha256(input, input_len, hash);
-    return zf_crypto_sign_hash_with_private_key(zf_attestation_private_key, hash, out, out_capacity,
-                                                out_len);
+#if ZF_DEV_ATTESTATION
+    ok = zf_crypto_sign_hash_with_private_key(zf_attestation_private_key, hash, out, out_capacity,
+                                              out_len);
+#else
+    uint8_t private_key[ZF_PRIVATE_KEY_LEN];
+    ok = zf_local_attestation_load_private_key(&zf_attestation_local_profile, private_key) &&
+         zf_crypto_sign_hash_with_private_key(private_key, hash, out, out_capacity, out_len);
+    zf_crypto_secure_zero(private_key, sizeof(private_key));
+#endif
+    zf_crypto_secure_zero(hash, sizeof(hash));
+    zf_telemetry_log(ok ? "attestation sign after ok" : "attestation sign after failed");
+    return ok;
+}
+
+bool zf_attestation_sign_parts(const uint8_t *first, size_t first_len, const uint8_t *second,
+                               size_t second_len, uint8_t *out, size_t out_capacity,
+                               size_t *out_len) {
+    uint8_t hash[32];
+    bool ok = false;
+
+    if ((!first && first_len > 0U) || (!second && second_len > 0U) ||
+        first_len + second_len == 0U || !out || !out_len) {
+        return false;
+    }
+
+    zf_telemetry_log("attestation sign before");
+    zf_crypto_sha256_concat(first, first_len, second, second_len, hash);
+#if ZF_DEV_ATTESTATION
+    ok = zf_crypto_sign_hash_with_private_key(zf_attestation_private_key, hash, out, out_capacity,
+                                              out_len);
+#else
+    uint8_t private_key[ZF_PRIVATE_KEY_LEN];
+    ok = zf_local_attestation_load_private_key(&zf_attestation_local_profile, private_key) &&
+         zf_crypto_sign_hash_with_private_key(private_key, hash, out, out_capacity, out_len);
+    zf_crypto_secure_zero(private_key, sizeof(private_key));
+#endif
+    zf_crypto_secure_zero(hash, sizeof(hash));
+    zf_telemetry_log(ok ? "attestation sign after ok" : "attestation sign after failed");
+    return ok;
 }
 
 bool zf_attestation_validate_consistency(void) {
@@ -313,6 +490,7 @@ bool zf_attestation_validate_consistency(void) {
         return zf_attestation_consistency_cache != 0;
     }
 
+#if ZF_DEV_ATTESTATION
     const uint8_t *leaf_tbs = NULL;
     const uint8_t *leaf_signature = NULL;
     size_t leaf_tbs_len = 0;
@@ -367,6 +545,10 @@ bool zf_attestation_validate_consistency(void) {
                                                    zf_attestation_root_public_y, leaf_tbs_hash,
                                                    leaf_signature, leaf_signature_len);
     }
+#else
+    bool ok = sizeof(zf_attestation_aaguid) == ZF_AAGUID_LEN &&
+              sizeof(zf_attestation_aaguid_string) == 37;
+#endif
 
     zf_attestation_consistency_cache = ok ? 1 : 0;
 
@@ -375,4 +557,5 @@ bool zf_attestation_validate_consistency(void) {
 
 void zf_attestation_reset_consistency_cache(void) {
     zf_attestation_consistency_cache = -1;
+    zf_attestation_leaf_cert_len_cache = 0;
 }

@@ -23,6 +23,8 @@
 #include "../zerofido_ctap.h"
 #include "../zerofido_notify.h"
 #include "../zerofido_runtime_config.h"
+#include "../zerofido_telemetry.h"
+#include "../zerofido_ui.h"
 #include "../u2f/adapter.h"
 
 static bool zf_transport_dispatch_was_interrupted(const ZfTransportState *transport,
@@ -74,9 +76,11 @@ static void zf_transport_dispatch_u2f(ZerofidoApp *app, const ZfProtocolDispatch
 static void zf_transport_dispatch_cbor(ZerofidoApp *app, const ZfProtocolDispatchRequest *request,
                                        ZfProtocolDispatchResult *result) {
     zf_transport_dispatch_begin(result, result->response, result->response_capacity);
+    zf_telemetry_log("ctap transport before");
     result->response_len =
         zerofido_handle_ctap2(app, request->session_id, request->payload, request->payload_len,
                               result->response, result->response_capacity);
+    zf_telemetry_log("ctap transport after");
 }
 
 static void zf_transport_dispatch_wink(ZerofidoApp *app, ZfProtocolDispatchResult *result) {
@@ -93,6 +97,11 @@ static void zf_transport_dispatch_abort_if_interrupted(ZfTransportState *transpo
     transport->processing = false;
 }
 
+/*
+ * Routes a fully assembled transport message into the selected protocol. The
+ * processing generation/session guards let workers discard late responses after
+ * CANCEL, channel resync, disconnect, or a new NFC selection.
+ */
 void zf_transport_dispatch_complete_message(ZerofidoApp *app, ZfTransportState *transport,
                                             ZfTransportSessionId session_id,
                                             ZfTransportProtocolKind protocol,
@@ -106,6 +115,13 @@ void zf_transport_dispatch_complete_message(ZerofidoApp *app, ZfTransportState *
     };
     ZfProtocolDispatchResult result = {0};
     uint32_t generation = transport->processing_generation + 1;
+
+    if (!zf_app_transport_arena_acquire(app)) {
+        zf_telemetry_log_oom("dispatch transport arena", ZF_TRANSPORT_ARENA_SIZE);
+        zf_transport_session_send_error(session_id, ZF_HID_ERR_OTHER);
+        return;
+    }
+
     result.response = app->transport_arena;
     result.response_capacity = ZF_MAX_MSG_SIZE;
 
@@ -160,6 +176,9 @@ void zf_transport_dispatch_complete_message(ZerofidoApp *app, ZfTransportState *
     }
 
     zf_transport_send_dispatch_result(app, &request, &result);
+    if (request.protocol == ZfTransportProtocolKindCtap2) {
+        zerofido_ui_refresh_status(app);
+    }
 
     zf_transport_dispatch_abort_if_interrupted(transport, generation);
 }

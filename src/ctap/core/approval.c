@@ -21,6 +21,7 @@
 #include "../../zerofido_app_i.h"
 #include "../../zerofido_ui.h"
 
+/* Maps terminal UI interaction states to CTAP status codes. */
 static uint8_t zf_ctap_status_from_interaction_state(ZfApprovalState state,
                                                      bool timeout_is_denied) {
     switch (state) {
@@ -37,6 +38,7 @@ static uint8_t zf_ctap_status_from_interaction_state(ZfApprovalState state,
     }
 }
 
+/* Requests a single approve/deny interaction from the UI layer. */
 uint8_t zf_ctap_request_approval(ZerofidoApp *app, const char *operation, const char *rp_id,
                                  const char *user_text, ZfTransportSessionId session_id) {
     bool approved = false;
@@ -51,6 +53,7 @@ uint8_t zf_ctap_request_approval(ZerofidoApp *app, const char *operation, const 
     return zf_ctap_status_from_interaction_state(zerofido_ui_get_interaction_state(app), false);
 }
 
+/* Requests account selection for multi-credential getAssertion results. */
 uint8_t zf_ctap_request_assertion_selection(ZerofidoApp *app, const char *rp_id,
                                             const uint16_t *match_indices, size_t match_count,
                                             ZfTransportSessionId session_id,
@@ -63,6 +66,10 @@ uint8_t zf_ctap_request_assertion_selection(ZerofidoApp *app, const char *rp_id,
     return ZF_CTAP_SUCCESS;
 }
 
+/*
+ * CTAP requires empty pinAuth probes to wait for touch before returning the PIN
+ * state error, which prevents silent probing without user presence.
+ */
 uint8_t zf_ctap_handle_empty_pin_auth_probe(ZerofidoApp *app, ZfTransportSessionId session_id,
                                             const char *operation, const char *rp_id,
                                             const char *user_text) {

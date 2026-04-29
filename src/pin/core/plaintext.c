@@ -25,13 +25,14 @@
 
 static bool zf_pin_validate_utf8(const uint8_t *pin, size_t pin_len, size_t *out_count);
 
+enum { ZF_MAX_PIN_UTF8_BYTES = ZF_PIN_NEW_PIN_BLOCK_MAX_LEN - 1U };
+
 bool zf_pin_new_pin_enc_length_is_valid(size_t length) {
-    return length >= 64 && length <= sizeof(((ZfClientPinRequest *)0)->new_pin_enc) &&
-           (length % 16U) == 0U;
+    return length >= 64 && length <= ZF_PIN_NEW_PIN_BLOCK_MAX_LEN && (length % 16U) == 0U;
 }
 
 static uint8_t zf_pin_validate_plaintext_length(size_t pin_len) {
-    if (pin_len < ZF_MIN_PIN_LENGTH || pin_len > 63) {
+    if (pin_len < ZF_MIN_PIN_LENGTH || pin_len > ZF_MAX_PIN_UTF8_BYTES) {
         return ZF_CTAP_ERR_PIN_POLICY_VIOLATION;
     }
     return ZF_CTAP_SUCCESS;
@@ -40,7 +41,7 @@ static uint8_t zf_pin_validate_plaintext_length(size_t pin_len) {
 static uint8_t zf_pin_validate_plaintext_policy(const uint8_t *pin, size_t pin_len) {
     size_t pin_codepoints = 0;
 
-    if (pin_len > 63) {
+    if (pin_len > ZF_MAX_PIN_UTF8_BYTES) {
         return ZF_CTAP_ERR_PIN_POLICY_VIOLATION;
     }
     if (!zf_pin_validate_utf8(pin, pin_len, &pin_codepoints)) {
@@ -50,6 +51,11 @@ static uint8_t zf_pin_validate_plaintext_policy(const uint8_t *pin, size_t pin_l
     return zf_pin_validate_plaintext_length(pin_codepoints);
 }
 
+/*
+ * Minimal strict UTF-8 validator used for CTAP PIN policy. It counts Unicode
+ * code points, rejects overlong encodings and surrogate code points, and does
+ * not normalize or case-fold input.
+ */
 static bool zf_pin_validate_utf8(const uint8_t *pin, size_t pin_len, size_t *out_count) {
     size_t count = 0;
 
@@ -139,12 +145,17 @@ static size_t zf_pin_unpadded_length(const uint8_t *data, size_t size) {
     return len;
 }
 
+/*
+ * CTAP encrypted PIN plaintext is a NUL-terminated UTF-8 PIN followed only by
+ * zero padding. This extracts the unpadded PIN length; policy validation runs
+ * separately on that slice.
+ */
 bool zf_pin_validate_plaintext_block(const uint8_t *data, size_t size, size_t *out_len) {
     size_t pin_len = zf_pin_unpadded_length(data, size);
     if (pin_len == size) {
         return false;
     }
-    if (pin_len > 63) {
+    if (pin_len > ZF_MAX_PIN_UTF8_BYTES) {
         return false;
     }
 

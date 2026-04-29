@@ -54,14 +54,9 @@ static uint16_t zf_u2f_adapter_reply_version(uint8_t *response, size_t response_
     return sizeof(zf_u2f_adapter_version_response);
 }
 
-static bool zf_u2f_adapter_ensure_attestation_assets(const uint8_t *cert, size_t cert_len,
-                                                     const uint8_t *cert_key, size_t cert_key_len) {
+bool zf_u2f_adapter_ensure_attestation_assets(void) {
     uint8_t loaded_cert_key[ZF_PRIVATE_KEY_LEN];
     bool assets_ready = false;
-
-    if (cert_key_len != sizeof(loaded_cert_key)) {
-        return false;
-    }
 
     zf_crypto_secure_zero(loaded_cert_key, sizeof(loaded_cert_key));
     if (u2f_data_check(true) && u2f_data_cert_check() && u2f_data_cert_key_load(loaded_cert_key) &&
@@ -74,7 +69,17 @@ static bool zf_u2f_adapter_ensure_attestation_assets(const uint8_t *cert, size_t
         return true;
     }
 
-    return u2f_data_bootstrap_attestation_assets(cert, cert_len, cert_key, cert_key_len);
+#if ZF_DEV_ATTESTATION
+    {
+        size_t cert_len = 0;
+        const uint8_t *cert = zf_attestation_get_leaf_cert_der(&cert_len);
+        const uint8_t *cert_key = zf_attestation_get_leaf_private_key();
+
+        return u2f_data_bootstrap_attestation_assets(cert, cert_len, cert_key, ZF_PRIVATE_KEY_LEN);
+    }
+#else
+    return u2f_data_generate_attestation_assets();
+#endif
 }
 
 static void zf_u2f_format_app_id(const uint8_t *request, size_t request_len, char *out,
@@ -92,6 +97,11 @@ static void zf_u2f_format_app_id(const uint8_t *request, size_t request_len, cha
              request[ZF_U2F_APP_ID_OFFSET + 6], request[ZF_U2F_APP_ID_OFFSET + 7]);
 }
 
+/*
+ * Prompts only for U2F operations that require user presence: REGISTER and
+ * AUTHENTICATE with enforce-user-presence. Check-only and dont-enforce requests
+ * remain protocol probes and do not consume a touch here.
+ */
 static bool zf_u2f_request_approval(ZerofidoApp *app, ZfTransportSessionId session_id,
                                     const uint8_t *request, uint16_t request_len) {
     const char *operation = NULL;
@@ -143,13 +153,13 @@ static void zf_u2f_event_callback(U2fNotifyEvent evt, void *context) {
 }
 
 bool zf_u2f_adapter_init(ZerofidoApp *app) {
-    size_t cert_len = 0;
-    const uint8_t *cert = zf_attestation_get_leaf_cert_der(&cert_len);
-    const uint8_t *cert_key = zf_attestation_get_leaf_private_key();
     ZfResolvedCapabilities capabilities;
 
     if (!app) {
         return false;
+    }
+    if (app->u2f) {
+        return true;
     }
     zf_runtime_get_effective_capabilities(app, &capabilities);
     if (!capabilities.u2f_enabled) {
@@ -161,11 +171,7 @@ bool zf_u2f_adapter_init(ZerofidoApp *app) {
         return false;
     }
 
-    if (!zf_u2f_adapter_ensure_attestation_assets(cert, cert_len, cert_key, ZF_PRIVATE_KEY_LEN)) {
-        u2f_free(app->u2f);
-        app->u2f = NULL;
-        return false;
-    }
+    (void)zf_u2f_adapter_ensure_attestation_assets();
 
     if (!u2f_init(app->u2f)) {
         u2f_free(app->u2f);
@@ -210,6 +216,11 @@ void zf_u2f_adapter_set_connected(ZerofidoApp *app, bool connected) {
     u2f_set_state(app->u2f, connected ? 1 : 0);
 }
 
+/*
+ * Bridges transport APDUs to the U2F session. The request is copied into the
+ * response buffer for in-place parsing/signing; VERSION can answer before full
+ * U2F init so hosts can still detect the legacy surface.
+ */
 size_t zf_u2f_adapter_handle_msg(ZerofidoApp *app, ZfTransportSessionId session_id,
                                  const uint8_t *request, size_t request_len, uint8_t *response,
                                  size_t response_capacity) {

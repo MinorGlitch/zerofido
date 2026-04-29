@@ -21,15 +21,18 @@
 #include "ctap/policy.h"
 #include "zerofido_app_i.h"
 #include "zerofido_runtime_config.h"
-#include "zerofido_ui.h"
+#include "zerofido_telemetry.h"
 
 #if ZF_RELEASE_DIAGNOSTICS
-static const char *zf_ctap_command_name(ZerofidoApp *app, uint8_t cmd) {
+#define ZF_CTAP_LOG_TAG "ZeroFIDO:CTAP"
+#define ZF_CTAP_DIAG(...) FURI_LOG_I(ZF_CTAP_LOG_TAG, __VA_ARGS__)
+
+static const char *zf_ctap_command_name(uint8_t cmd) {
     switch (cmd) {
     case ZfCtapeCmdGetInfo:
         return "GI";
     case ZfCtapeCmdClientPin:
-        return app->last_ctap_command_tag[0] ? app->last_ctap_command_tag : "CP";
+        return "CP";
     case ZfCtapeCmdReset:
         return "RST";
     case ZfCtapeCmdMakeCredential:
@@ -100,6 +103,8 @@ static const char *zf_ctap_status_name(uint8_t status) {
         return "PTOK";
     case ZF_CTAP_ERR_INVALID_SUBCOMMAND:
         return "SUB";
+    case ZF_CTAP_ERR_UNAUTHORIZED_PERMISSION:
+        return "UPERM";
     case ZF_CTAP_ERR_OTHER:
         return "OTHER";
     default:
@@ -107,37 +112,42 @@ static const char *zf_ctap_status_name(uint8_t status) {
     }
 }
 
-static void zf_ctap_note_result(ZerofidoApp *app, uint8_t cmd, uint8_t status) {
-    char step[24];
-    char text[96];
-
+static void zf_ctap_note_result(ZerofidoApp *app, uint8_t cmd, uint8_t status, size_t body_len) {
     if (!app) {
         return;
     }
     if (app->transport_auto_accept_transaction) {
         return;
     }
-
-    snprintf(step, sizeof(step), "%s %s", zf_ctap_command_name(app, cmd),
-             zf_ctap_status_name(status));
-    if (app->last_ctap_step[0]) {
-        snprintf(text, sizeof(text), "CTAP: %s > %s", app->last_ctap_step, step);
-    } else {
-        snprintf(text, sizeof(text), "CTAP: %s", step);
+    if (cmd == ZfCtapeCmdClientPin) {
+        return;
     }
-    strncpy(app->last_ctap_step, step, sizeof(app->last_ctap_step) - 1);
-    app->last_ctap_step[sizeof(app->last_ctap_step) - 1] = '\0';
-    app->last_ctap_command_tag[0] = '\0';
-    zerofido_ui_set_status(app, text);
+
+    FURI_LOG_I(ZF_CTAP_LOG_TAG, "cmd=%s status=%s body=%u", zf_ctap_command_name(cmd),
+               zf_ctap_status_name(status), (unsigned)body_len);
 }
 #else
-static void zf_ctap_note_result(ZerofidoApp *app, uint8_t cmd, uint8_t status) {
+#define ZF_CTAP_DIAG(...) \
+    do {                  \
+    } while(false)
+
+static void zf_ctap_note_result(ZerofidoApp *app, uint8_t cmd, uint8_t status, size_t body_len) {
     (void)app;
     (void)cmd;
     (void)status;
+    (void)body_len;
 }
 #endif
 
+/*
+ * CTAP2 transport entry point. The incoming buffer is the CTAP command byte
+ * followed by the command-specific CBOR body; the outgoing buffer always starts
+ * with one CTAP status byte followed by the response body on success.
+ *
+ * Runtime capability/profile checks happen before command dispatch so disabled
+ * commands fail without entering stateful handlers. On error, any response body
+ * already written by a lower layer is intentionally discarded.
+ */
 size_t zerofido_handle_ctap2(ZerofidoApp *app, ZfTransportSessionId session_id,
                              const uint8_t *request, size_t request_len, uint8_t *response,
                              size_t response_capacity) {
@@ -152,21 +162,27 @@ size_t zerofido_handle_ctap2(ZerofidoApp *app, ZfTransportSessionId session_id,
     }
 
     cmd = request[0];
+    ZF_CTAP_DIAG("start cmd=%s len=%u", zf_ctap_command_name(cmd), (unsigned)request_len);
     zf_runtime_get_effective_capabilities(app, &capabilities);
     if (!zf_runtime_ctap_command_enabled(app, cmd)) {
         response[0] = ZF_CTAP_ERR_INVALID_COMMAND;
-        zf_ctap_note_result(app, cmd, ZF_CTAP_ERR_INVALID_COMMAND);
+        zf_ctap_note_result(app, cmd, ZF_CTAP_ERR_INVALID_COMMAND, 0U);
         return 1;
     }
 
+    ZF_CTAP_DIAG("dispatch cmd=%s", zf_ctap_command_name(cmd));
+    zf_telemetry_log("ctap dispatch before");
     status = zf_ctap_dispatch_command(app, &capabilities, session_id, cmd, request + 1,
                                       request_len - 1, response + 1, body_capacity, &body_len);
+    zf_telemetry_log("ctap dispatch after");
 
     if (status != ZF_CTAP_SUCCESS) {
         body_len = 0;
     }
 
     response[0] = status;
-    zf_ctap_note_result(app, cmd, status);
+    zf_ctap_note_result(app, cmd, status, body_len);
+    ZF_CTAP_DIAG("done cmd=%s status=%s body=%u", zf_ctap_command_name(cmd),
+                 zf_ctap_status_name(status), (unsigned)body_len);
     return body_len + 1;
 }

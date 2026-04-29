@@ -48,6 +48,11 @@ typedef struct {
     uint8_t transport_error;
 } ZfProtocolDispatchResult;
 
+/*
+ * Common protocol handoff used by USB HID and NFC. Transport code identifies
+ * the protocol kind and arena; this function runs CTAP/U2F/WINK handling and
+ * returns a transport-neutral dispatch result.
+ */
 void zf_transport_dispatch_complete_message(ZerofidoApp *app, ZfTransportState *transport,
                                             ZfTransportSessionId session_id,
                                             ZfTransportProtocolKind protocol,

@@ -1,3 +1,10 @@
+"""Validate the current-state audit frame documents.
+
+Checks that the generated claim inventory, proof taxonomy, and revalidation map
+agree on public claim sources, proof IDs, summary fields, and expected document
+structure.
+"""
+
 from __future__ import annotations
 
 import argparse
