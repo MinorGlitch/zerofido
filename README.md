@@ -8,8 +8,8 @@ ZeroFIDO turns a Flipper Zero into a passkey and security-key app. Install the `
 open the app, and approve sign-ins on services that support FIDO2/WebAuthn or legacy U2F.
 
 The app stores credentials on the Flipper, asks for local approval, supports `ClientPIN`,
-and speaks the CTAP2/FIDO2 protocol used by browsers and security keys. USB HID is the
-desktop browser transport. NFC builds are used for phone flows and conformance work.
+and speaks the CTAP2/FIDO2 protocol used by browsers and security keys. USB HID handles
+desktop browser flows. NFC builds handle phone flows and conformance work.
 
 ZeroFIDO runs on general-purpose Flipper hardware. Treat it as a useful authenticator app
 with software-stored credentials, local approval, and local software attestation. For
@@ -32,9 +32,8 @@ ZeroFIDO builds as an external `.fap` in the Flipper Tools category.
 
 ## Install
 
-Download a release `.fap` when one is published, then copy it to your Flipper SD card under
-the Tools apps folder. You can also install it through qFlipper or Flipper Lab by choosing
-the `.fap` file.
+Download a release `.fap`, then copy it to your Flipper SD card under the Tools apps folder.
+You can also install it through qFlipper or Flipper Lab.
 
 To build from source, install `uv`, then sync the Python tools:
 
@@ -54,8 +53,8 @@ Release builds also default to `ZEROFIDO_RELEASE_DIAGNOSTICS=0` and
 | USB HID only | `ZEROFIDO_PROFILE=usb` | Desktop browser WebAuthn and U2F testing. |
 | Full | `ZEROFIDO_PROFILE=full` | Builds both transports and lets the app choose at runtime. |
 
-Release-default builds do not compile the NFC trace implementation and do not compile the bundled
-development attestation chain. Diagnostic and private-trust builds must opt in explicitly:
+Release-default builds exclude the NFC trace implementation and the bundled development
+attestation chain. Diagnostic and private-trust builds must opt in:
 
 ```bash
 ZEROFIDO_PROFILE=nfc ZEROFIDO_RELEASE_DIAGNOSTICS=1 uv run python -m ufbt
@@ -124,9 +123,8 @@ Run native protocol regressions:
 uv run python tools/run_protocol_regressions.py
 ```
 
-Those native regressions cover packed attestation, runtime `Attest: none`, explicit
-`attestationFormats: ["none"]`, and the no-downgrade behavior when packed attestation is
-required.
+The native harness checks packed attestation, runtime `Attest: none`, explicit
+`attestationFormats: ["none"]`, and required packed-attestation failures.
 
 Run C formatting and analyzers:
 
@@ -204,8 +202,8 @@ uv run python host_tools/size_ledger.py --artifact dist/zerofido.fap --artifact 
 
 ## Release Packaging
 
-Build a release `.fap` for the selected profile and verify that only the app entry point
-remains exported:
+Build a release `.fap` for the selected profile and verify that the app exports only
+`zerofido_main`:
 
 ```bash
 ZEROFIDO_PROFILE=usb \
@@ -237,7 +235,7 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
-The release workflow rebuilds the `nfc`, `usb`, and `full` profiles with
+The release workflow builds the `nfc`, `usb`, and `full` profiles with
 `ZEROFIDO_RELEASE_DIAGNOSTICS=0` and `ZEROFIDO_DEV_ATTESTATION=0`, packages only the stripped
 `*-release.fap` artifacts, and uploads `SHA256SUMS`.
 
@@ -249,22 +247,22 @@ ZeroFIDO generates local attestation material on the device. Public builds do no
 hardware-backed vendor provenance, enterprise attestation, or a FIDO Metadata Service trust
 path. Private relying parties can pin a local certificate when that fits their test setup.
 
-Attestation is a provenance signal, not the credential itself. A relying party that requests
-`attestation: "none"` gets a WebAuthn registration response with `fmt: "none"` and an empty
-attestation statement. In that mode ZeroFIDO still creates the credential keypair, but it does
-not expose the local attestation certificate chain and does not sign the registration with the
-local attestation key. If the relying party requests direct attestation, ZeroFIDO returns packed
-attestation from the local software attestation material for that install.
+Attestation identifies the authenticator install. Credential keypairs authenticate accounts. When
+a relying party requests `attestation: "none"`, ZeroFIDO returns `fmt: "none"` with an empty
+attestation statement. ZeroFIDO still creates the credential keypair, but it withholds the local
+attestation certificate chain and skips the local attestation signature. When the relying party
+requests direct attestation, ZeroFIDO returns packed attestation from that install's local
+software attestation material.
 
 The on-device Settings screen also has an attestation mode. `Attest: none` makes `fmt: "none"`
 the default MakeCredential response unless the CTAP request explicitly lists a supported
 attestation format preference. `Attest: packed` allows local software packed attestation when
 requested.
 
-Metadata and captured attestation certificates are local certification artifacts. Keep them
-under `metadata/`, which is ignored by git.
+Metadata and captured attestation certificates belong to your local certification run. Keep them
+under `metadata/`; git ignores that directory.
 
-Create `metadata/statement.json` from the authenticator you are testing, then export a profile:
+Create `metadata/statement.json` from the authenticator under test, then export a profile:
 
 ```bash
 mkdir -p metadata
@@ -312,16 +310,16 @@ uv run python host_tools/export_certification_metadata.py \
   --u2f-attestation-cert metadata/u2f-attestation.der
 ```
 
-If the conformance tool changes the PIN state, regenerate metadata with the matching
-`--client-pin-state` value before rerunning that profile.
+If the conformance tool changes PIN state, regenerate metadata with the matching
+`--client-pin-state` before rerunning that profile.
 
 ## Security Notes
 
 - Flipper Zero hardware does not give this app a secure element for credential keys.
 - Software attestation proves a local app install identity, not FIDO-certified vendor hardware
   provenance.
-- `attestation: "none"` suppresses the local attestation certificate and attestation signature;
-  it does not weaken the generated credential keypair used later for assertions.
+- `attestation: "none"` suppresses the local attestation certificate and signature. The generated
+  credential keypair still signs later assertions.
 - Physical access to the device changes the threat model.
 - Diagnostic and conformance builds may log protocol data. Release-default builds set
   `ZF_RELEASE_DIAGNOSTICS=0`.
