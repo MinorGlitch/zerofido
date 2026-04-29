@@ -35,25 +35,26 @@ void zf_crypto_secure_zero(void *data, size_t size);
 void zf_crypto_sha256(const uint8_t *data, size_t size, uint8_t out[32]);
 void zf_crypto_sha256_concat(const uint8_t *first, size_t first_size, const uint8_t *second,
                              size_t second_size, uint8_t out[32]);
-bool zf_crypto_hmac_sha256_parts_with_scratch(
-    ZfHmacSha256Scratch *scratch, const uint8_t *key, size_t key_len, const uint8_t *first,
-    size_t first_size, const uint8_t *second, size_t second_size, uint8_t out[32]);
+bool zf_crypto_hmac_sha256_parts_with_scratch(ZfHmacSha256Scratch *scratch, const uint8_t *key,
+                                              size_t key_len, const uint8_t *first,
+                                              size_t first_size, const uint8_t *second,
+                                              size_t second_size, uint8_t out[32]);
 bool zf_crypto_hmac_sha256_parts(const uint8_t *key, size_t key_len, const uint8_t *first,
                                  size_t first_size, const uint8_t *second, size_t second_size,
                                  uint8_t out[32]);
 bool zf_crypto_hmac_sha256(const uint8_t *key, size_t key_len, const uint8_t *data, size_t size,
                            uint8_t out[32]);
-bool zf_crypto_hkdf_sha256(const uint8_t *salt, size_t salt_len, const uint8_t *ikm,
-                           size_t ikm_len, const uint8_t *info, size_t info_len, uint8_t out[32]);
+bool zf_crypto_hkdf_sha256(const uint8_t *salt, size_t salt_len, const uint8_t *ikm, size_t ikm_len,
+                           const uint8_t *info, size_t info_len, uint8_t out[32]);
 /*
  * Raw AES-256-CBC helpers. Input length must be a non-zero multiple of 16;
  * callers own padding/format validation. Zero-IV variants exist only for CTAP
  * PIN protocol v1 compatibility.
  */
-bool zf_crypto_aes256_cbc_encrypt(const uint8_t key[32], const uint8_t iv[16],
-                                  const uint8_t *input, uint8_t *output, size_t size);
-bool zf_crypto_aes256_cbc_decrypt(const uint8_t key[32], const uint8_t iv[16],
-                                  const uint8_t *input, uint8_t *output, size_t size);
+bool zf_crypto_aes256_cbc_encrypt(const uint8_t key[32], const uint8_t iv[16], const uint8_t *input,
+                                  uint8_t *output, size_t size);
+bool zf_crypto_aes256_cbc_decrypt(const uint8_t key[32], const uint8_t iv[16], const uint8_t *input,
+                                  uint8_t *output, size_t size);
 bool zf_crypto_aes256_cbc_zero_iv_encrypt(const uint8_t key[32], const uint8_t *input,
                                           uint8_t *output, size_t size);
 bool zf_crypto_aes256_cbc_zero_iv_decrypt(const uint8_t key[32], const uint8_t *input,

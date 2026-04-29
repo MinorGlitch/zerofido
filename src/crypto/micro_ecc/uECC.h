@@ -9,13 +9,13 @@
 If uECC_PLATFORM is not defined, the code will try to guess it based on compiler macros.
 Possible values for uECC_PLATFORM are defined below: */
 #define uECC_arch_other 0
-#define uECC_x86        1
-#define uECC_x86_64     2
-#define uECC_arm        3
-#define uECC_arm_thumb  4
+#define uECC_x86 1
+#define uECC_x86_64 2
+#define uECC_arm 3
+#define uECC_arm_thumb 4
 #define uECC_arm_thumb2 5
-#define uECC_arm64      6
-#define uECC_avr        7
+#define uECC_arm64 6
+#define uECC_avr 7
 
 /* If desired, you can define uECC_WORD_SIZE as appropriate for your platform (1, 4, or 8 bytes).
 If uECC_WORD_SIZE is not explicitly defined then it will be automatically set based on your
@@ -27,14 +27,14 @@ platform. */
    Optimization level 4 currently only has an effect ARM platforms where more than one
    curve is enabled. */
 #ifndef uECC_OPTIMIZATION_LEVEL
-    #define uECC_OPTIMIZATION_LEVEL 2
+#define uECC_OPTIMIZATION_LEVEL 2
 #endif
 
 /* uECC_SQUARE_FUNC - If enabled (defined as nonzero), this will cause a specific function to be
 used for (scalar) squaring instead of the generic multiplication function. This can make things
 faster somewhat faster, but increases the code size. */
 #ifndef uECC_SQUARE_FUNC
-    #define uECC_SQUARE_FUNC 0
+#define uECC_SQUARE_FUNC 0
 #endif
 
 /* uECC_VLI_NATIVE_LITTLE_ENDIAN - If enabled (defined as nonzero), this will switch to native
@@ -49,38 +49,37 @@ IMPORTANT: Keys and signatures generated with uECC_VLI_NATIVE_LITTLE_ENDIAN=1 ar
 with keys and signatures generated with uECC_VLI_NATIVE_LITTLE_ENDIAN=0; all parties must use
 the same endianness. */
 #ifndef uECC_VLI_NATIVE_LITTLE_ENDIAN
-    #define uECC_VLI_NATIVE_LITTLE_ENDIAN 0
+#define uECC_VLI_NATIVE_LITTLE_ENDIAN 0
 #endif
 
 /* Curve support selection. Set to 0 to remove that curve. */
 #ifndef uECC_SUPPORTS_secp160r1
-    #define uECC_SUPPORTS_secp160r1 1
+#define uECC_SUPPORTS_secp160r1 1
 #endif
 #ifndef uECC_SUPPORTS_secp192r1
-    #define uECC_SUPPORTS_secp192r1 1
+#define uECC_SUPPORTS_secp192r1 1
 #endif
 #ifndef uECC_SUPPORTS_secp224r1
-    #define uECC_SUPPORTS_secp224r1 1
+#define uECC_SUPPORTS_secp224r1 1
 #endif
 #ifndef uECC_SUPPORTS_secp256r1
-    #define uECC_SUPPORTS_secp256r1 1
+#define uECC_SUPPORTS_secp256r1 1
 #endif
 #ifndef uECC_SUPPORTS_secp256k1
-    #define uECC_SUPPORTS_secp256k1 1
+#define uECC_SUPPORTS_secp256k1 1
 #endif
 
 /* Specifies whether compressed point format is supported.
    Set to 0 to disable point compression/decompression functions. */
 #ifndef uECC_SUPPORT_COMPRESSED_POINT
-    #define uECC_SUPPORT_COMPRESSED_POINT 1
+#define uECC_SUPPORT_COMPRESSED_POINT 1
 #endif
 
 struct uECC_Curve_t;
-typedef const struct uECC_Curve_t * uECC_Curve;
+typedef const struct uECC_Curve_t *uECC_Curve;
 
 #ifdef __cplusplus
-extern "C"
-{
+extern "C" {
 #endif
 
 #if uECC_SUPPORTS_secp160r1
@@ -182,9 +181,7 @@ Outputs:
 
 Returns 1 if the shared secret was generated successfully, 0 if an error occurred.
 */
-int uECC_shared_secret(const uint8_t *public_key,
-                       const uint8_t *private_key,
-                       uint8_t *secret,
+int uECC_shared_secret(const uint8_t *public_key, const uint8_t *private_key, uint8_t *secret,
                        uECC_Curve curve);
 
 #if uECC_SUPPORT_COMPRESSED_POINT
@@ -257,11 +254,8 @@ Outputs:
 
 Returns 1 if the signature generated successfully, 0 if an error occurred.
 */
-int uECC_sign(const uint8_t *private_key,
-              const uint8_t *message_hash,
-              unsigned hash_size,
-              uint8_t *signature,
-              uECC_Curve curve);
+int uECC_sign(const uint8_t *private_key, const uint8_t *message_hash, unsigned hash_size,
+              uint8_t *signature, uECC_Curve curve);
 
 /* uECC_HashContext structure.
 This is used to pass in an arbitrary hash function to uECC_sign_deterministic().
@@ -303,11 +297,10 @@ void finish_SHA256(uECC_HashContext *base, uint8_t *hash_result) {
 */
 typedef struct uECC_HashContext {
     void (*init_hash)(const struct uECC_HashContext *context);
-    void (*update_hash)(const struct uECC_HashContext *context,
-                        const uint8_t *message,
+    void (*update_hash)(const struct uECC_HashContext *context, const uint8_t *message,
                         unsigned message_size);
     void (*finish_hash)(const struct uECC_HashContext *context, uint8_t *hash_result);
-    unsigned block_size; /* Hash function block size in bytes, eg 64 for SHA-256. */
+    unsigned block_size;  /* Hash function block size in bytes, eg 64 for SHA-256. */
     unsigned result_size; /* Hash function result size in bytes, eg 32 for SHA-256. */
     uint8_t *tmp; /* Must point to a buffer of at least (2 * result_size + block_size) bytes. */
 } uECC_HashContext;
@@ -333,12 +326,9 @@ Outputs:
 
 Returns 1 if the signature generated successfully, 0 if an error occurred.
 */
-int uECC_sign_deterministic(const uint8_t *private_key,
-                            const uint8_t *message_hash,
-                            unsigned hash_size,
-                            const uECC_HashContext *hash_context,
-                            uint8_t *signature,
-                            uECC_Curve curve);
+int uECC_sign_deterministic(const uint8_t *private_key, const uint8_t *message_hash,
+                            unsigned hash_size, const uECC_HashContext *hash_context,
+                            uint8_t *signature, uECC_Curve curve);
 
 /* uECC_verify() function.
 Verify an ECDSA signature.
@@ -354,11 +344,8 @@ Inputs:
 
 Returns 1 if the signature is valid, 0 if it is invalid.
 */
-int uECC_verify(const uint8_t *public_key,
-                const uint8_t *message_hash,
-                unsigned hash_size,
-                const uint8_t *signature,
-                uECC_Curve curve);
+int uECC_verify(const uint8_t *public_key, const uint8_t *message_hash, unsigned hash_size,
+                const uint8_t *signature, uECC_Curve curve);
 
 #ifdef __cplusplus
 } /* end of extern "C" */

@@ -24,9 +24,8 @@
 void zf_telemetry_log(const char *event) {
     FuriThreadId thread_id = furi_thread_get_current_id();
 
-    FURI_LOG_I(ZF_TELEMETRY_TAG, "%s free=%u min=%u maxblk=%u stack=%lu",
-               event ? event : "?", (unsigned)memmgr_get_free_heap(),
-               (unsigned)memmgr_get_minimum_free_heap(),
+    FURI_LOG_I(ZF_TELEMETRY_TAG, "%s free=%u min=%u maxblk=%u stack=%lu", event ? event : "?",
+               (unsigned)memmgr_get_free_heap(), (unsigned)memmgr_get_minimum_free_heap(),
                (unsigned)memmgr_heap_get_max_free_block(),
                (unsigned long)(thread_id ? furi_thread_get_stack_space(thread_id) : 0U));
 }
@@ -36,8 +35,7 @@ void zf_telemetry_log_oom(const char *event, size_t requested_size) {
 
     FURI_LOG_E(ZF_TELEMETRY_TAG, "%s oom request=%u free=%u min=%u maxblk=%u stack=%lu",
                event ? event : "?", (unsigned)requested_size, (unsigned)memmgr_get_free_heap(),
-               (unsigned)memmgr_get_minimum_free_heap(),
-               (unsigned)memmgr_heap_get_max_free_block(),
+               (unsigned)memmgr_get_minimum_free_heap(), (unsigned)memmgr_heap_get_max_free_block(),
                (unsigned long)(thread_id ? furi_thread_get_stack_space(thread_id) : 0U));
 }
 

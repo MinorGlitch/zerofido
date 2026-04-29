@@ -88,11 +88,10 @@ static const uint8_t u2f_generated_attestation_subject[] = {
 };
 
 static const uint8_t u2f_generated_attestation_extensions[] = {
-    0x30, 0x33, 0x30, 0x0C, 0x06, 0x03, 0x55, 0x1D, 0x13, 0x01, 0x01, 0xFF, 0x04,
-    0x02, 0x30, 0x00, 0x30, 0x0E, 0x06, 0x03, 0x55, 0x1D, 0x0F, 0x01, 0x01, 0xFF,
-    0x04, 0x04, 0x03, 0x02, 0x07, 0x80, 0x30, 0x13, 0x06, 0x0B, 0x2B, 0x06, 0x01,
-    0x04, 0x01, 0x82, 0xE5, 0x1C, 0x02, 0x01, 0x01, 0x04, 0x04, 0x03, 0x02, 0x05,
-    0x20,
+    0x30, 0x33, 0x30, 0x0C, 0x06, 0x03, 0x55, 0x1D, 0x13, 0x01, 0x01, 0xFF, 0x04, 0x02,
+    0x30, 0x00, 0x30, 0x0E, 0x06, 0x03, 0x55, 0x1D, 0x0F, 0x01, 0x01, 0xFF, 0x04, 0x04,
+    0x03, 0x02, 0x07, 0x80, 0x30, 0x13, 0x06, 0x0B, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82,
+    0xE5, 0x1C, 0x02, 0x01, 0x01, 0x04, 0x04, 0x03, 0x02, 0x05, 0x20,
 };
 
 static const ZfLocalAttestationProfile u2f_generated_attestation_profile = {
@@ -329,8 +328,8 @@ bool u2f_data_cert_key_matches(const uint8_t *cert_key) {
     }
 
     cert_len = u2f_data_cert_load(cert, U2F_CERT_MAX_SIZE);
-    state = cert_len > 0U && zf_local_attestation_private_key_matches_cert(
-                                cert_key, cert, cert_len, NULL, 0U);
+    state = cert_len > 0U &&
+            zf_local_attestation_private_key_matches_cert(cert_key, cert, cert_len, NULL, 0U);
     if (!state) {
         FURI_LOG_E(TAG, "Certificate/public key mismatch");
     }
@@ -395,9 +394,9 @@ static bool u2f_data_device_key_compute_mac(const uint8_t device_key[32], const 
 
     memcpy(material, iv, 16);
     memcpy(material + 16, key_encrypted, 48);
-    ok = zf_crypto_hmac_sha256_parts(
-        device_key, 32, (const uint8_t *)U2F_DEVICE_KEY_MAC_DOMAIN,
-        sizeof(U2F_DEVICE_KEY_MAC_DOMAIN) - 1U, material, sizeof(material), mac);
+    ok = zf_crypto_hmac_sha256_parts(device_key, 32, (const uint8_t *)U2F_DEVICE_KEY_MAC_DOMAIN,
+                                     sizeof(U2F_DEVICE_KEY_MAC_DOMAIN) - 1U, material,
+                                     sizeof(material), mac);
     zf_crypto_secure_zero(material, sizeof(material));
     return ok;
 }
@@ -419,8 +418,8 @@ static bool u2f_data_device_key_write_mac(const uint8_t *plaintext, size_t plain
 
 static bool u2f_data_device_key_verify_mac(const uint8_t *plaintext, size_t plaintext_len,
                                            const uint8_t iv[16], const uint8_t *encrypted,
-                                           size_t encrypted_len, const uint8_t *mac,
-                                           size_t mac_len, void *context) {
+                                           size_t encrypted_len, const uint8_t *mac, size_t mac_len,
+                                           void *context) {
     uint8_t expected_mac[32];
     bool ok = false;
 
@@ -457,8 +456,8 @@ static bool u2f_data_key_store_plaintext(const uint8_t key[32]) {
             .encrypted_len = 48U,
             .write_mac = u2f_data_device_key_write_mac,
         };
-        state = zf_storage_write_encrypted_blob_atomic(storage, U2F_KEY_FILE, U2F_KEY_FILE_TMP,
-                                                       &spec);
+        state =
+            zf_storage_write_encrypted_blob_atomic(storage, U2F_KEY_FILE, U2F_KEY_FILE_TMP, &spec);
     }
     furi_record_close(RECORD_STORAGE);
     return state;
@@ -573,8 +572,8 @@ bool u2f_data_cnt_write(uint32_t cnt_val) {
             .plaintext_len = sizeof(cnt),
             .encrypted_len = 48U,
         };
-        state = zf_storage_write_encrypted_blob_atomic(storage, U2F_CNT_FILE, U2F_CNT_FILE_TMP,
-                                                       &spec);
+        state =
+            zf_storage_write_encrypted_blob_atomic(storage, U2F_CNT_FILE, U2F_CNT_FILE_TMP, &spec);
     }
     furi_record_close(RECORD_STORAGE);
     zf_crypto_secure_zero(&cnt, sizeof(cnt));
@@ -600,14 +599,8 @@ bool u2f_data_cnt_reserve(uint32_t cnt_val, uint32_t *reserved_cnt) {
 
 bool u2f_data_wipe(Storage *storage) {
     const char *const paths[] = {
-        U2F_CERT_FILE,
-        U2F_CERT_FILE_TMP,
-        U2F_CERT_KEY_FILE,
-        U2F_CERT_KEY_FILE_TMP,
-        U2F_KEY_FILE,
-        U2F_KEY_FILE_TMP,
-        U2F_CNT_FILE,
-        U2F_CNT_FILE_TMP,
+        U2F_CERT_FILE, U2F_CERT_FILE_TMP, U2F_CERT_KEY_FILE, U2F_CERT_KEY_FILE_TMP,
+        U2F_KEY_FILE,  U2F_KEY_FILE_TMP,  U2F_CNT_FILE,      U2F_CNT_FILE_TMP,
     };
 
     if (!storage) {

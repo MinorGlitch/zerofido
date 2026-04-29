@@ -63,18 +63,16 @@ uint8_t zf_ctap_hmac_secret_build_extension(const ZfClientPinState *pin_state,
                                      request->hmac_secret_platform_y, scratch->protocol_keys)) {
         return zf_hmac_secret_finish(scratch, ZF_CTAP_ERR_INVALID_PARAMETER);
     }
-    if (!zf_pin_protocol_hmac_matches(&scratch->hmac_scratch, request->hmac_secret_pin_protocol,
-                                      zf_pin_protocol_hmac_key(scratch->protocol_keys),
-                                      request->hmac_secret_salt_enc,
-                                      request->hmac_secret_salt_enc_len, NULL, 0,
-                                      request->hmac_secret_salt_auth,
-                                      request->hmac_secret_salt_auth_len)) {
+    if (!zf_pin_protocol_hmac_matches(
+            &scratch->hmac_scratch, request->hmac_secret_pin_protocol,
+            zf_pin_protocol_hmac_key(scratch->protocol_keys), request->hmac_secret_salt_enc,
+            request->hmac_secret_salt_enc_len, NULL, 0, request->hmac_secret_salt_auth,
+            request->hmac_secret_salt_auth_len)) {
         return zf_hmac_secret_finish(scratch, ZF_CTAP_ERR_PIN_AUTH_INVALID);
     }
     if (!zf_pin_protocol_decrypt(request->hmac_secret_pin_protocol, scratch->protocol_keys,
-                                 request->hmac_secret_salt_enc,
-                                 request->hmac_secret_salt_enc_len, scratch->salt_plain,
-                                 &salt_plain_len) ||
+                                 request->hmac_secret_salt_enc, request->hmac_secret_salt_enc_len,
+                                 scratch->salt_plain, &salt_plain_len) ||
         (salt_plain_len != 32U && salt_plain_len != 64U)) {
         return zf_hmac_secret_finish(scratch, ZF_CTAP_ERR_INVALID_PARAMETER);
     }
@@ -88,9 +86,8 @@ uint8_t zf_ctap_hmac_secret_build_extension(const ZfClientPinState *pin_state,
     output_plain_len = 32U;
     if (salt_plain_len == 64U) {
         if (!zf_crypto_hmac_sha256_parts_with_scratch(&scratch->hmac_scratch, cred_random,
-                                                      ZF_HMAC_SECRET_LEN,
-                                                      scratch->salt_plain + 32U, 32U, NULL, 0,
-                                                      scratch->output_plain + 32U)) {
+                                                      ZF_HMAC_SECRET_LEN, scratch->salt_plain + 32U,
+                                                      32U, NULL, 0, scratch->output_plain + 32U)) {
             return zf_hmac_secret_finish(scratch, ZF_CTAP_ERR_OTHER);
         }
         output_plain_len = 64U;

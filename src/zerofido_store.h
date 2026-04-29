@@ -72,8 +72,8 @@ bool zf_store_load_record_with_buffer(Storage *storage, const ZfCredentialIndexE
                                       size_t buffer_size);
 bool zf_store_load_record_for_display_with_buffer(Storage *storage,
                                                   const ZfCredentialIndexEntry *entry,
-                                                  ZfCredentialRecord *out_record,
-                                                  uint8_t *buffer, size_t buffer_size);
+                                                  ZfCredentialRecord *out_record, uint8_t *buffer,
+                                                  size_t buffer_size);
 bool zf_store_load_record_by_index_with_buffer(Storage *storage, const ZfCredentialStore *store,
                                                size_t index, ZfCredentialRecord *out_record,
                                                uint8_t *buffer, size_t buffer_size);
@@ -101,13 +101,9 @@ bool zf_store_publish_counter_advance(ZfCredentialStore *store, const ZfCredenti
  * need all-or-nothing behavior first collect indices, remove files, then publish
  * deletions in descending index order.
  */
-bool zf_store_delete_resident_credentials_for_user_with_buffer(Storage *storage,
-                                                              ZfCredentialStore *store,
-                                                              const char *rp_id,
-                                                              const uint8_t *user_id,
-                                                              size_t user_id_len,
-                                                              size_t *deleted_count,
-                                                              uint8_t *buffer, size_t buffer_size);
+bool zf_store_delete_resident_credentials_for_user_with_buffer(
+    Storage *storage, ZfCredentialStore *store, const char *rp_id, const uint8_t *user_id,
+    size_t user_id_len, size_t *deleted_count, uint8_t *buffer, size_t buffer_size);
 bool zf_store_remove_resident_credential_files_for_user_with_buffer(
     Storage *storage, const ZfCredentialStore *store, const char *rp_id, const uint8_t *user_id,
     size_t user_id_len, uint16_t *deleted_indices, size_t max_deleted, size_t *deleted_count,
@@ -118,8 +114,7 @@ bool zf_store_find_resident_credential_indices_for_user_with_buffer(
     uint8_t *buffer, size_t buffer_size);
 bool zf_store_remove_credential_files_by_indices(Storage *storage, const ZfCredentialStore *store,
                                                  const uint16_t *deleted_indices,
-                                                 size_t deleted_count,
-                                                 size_t *removed_count);
+                                                 size_t deleted_count, size_t *removed_count);
 void zf_store_publish_deleted_indices(ZfCredentialStore *store, const uint16_t *deleted_indices,
                                       size_t deleted_count);
 ZfStoreDeleteResult zf_store_delete_record(Storage *storage, ZfCredentialStore *store,
@@ -141,7 +136,6 @@ size_t zf_store_find_by_rp_filtered(Storage *storage, const ZfCredentialStore *s
                                     const void *filter_context, uint16_t *out_indices,
                                     size_t max_out);
 bool zf_store_has_matching_credential_with_buffer(Storage *storage, const ZfCredentialStore *store,
-                                                  const char *rp_id,
-                                                  ZfStoreCredentialFilter filter,
+                                                  const char *rp_id, ZfStoreCredentialFilter filter,
                                                   const void *filter_context, uint8_t *buffer,
                                                   size_t buffer_size);

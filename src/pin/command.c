@@ -92,9 +92,9 @@ static void zf_pin_log_result(const char *tag, uint8_t status) {
     FURI_LOG_I("ZeroFIDO:CTAP", "cmd=%s status=%s", tag ? tag : "CP", zf_pin_status_name(status));
 }
 #else
-#define ZF_PIN_DIAG(...) \
-    do {                 \
-    } while(false)
+#define ZF_PIN_DIAG(...)                                                                           \
+    do {                                                                                           \
+    } while (false)
 
 static void zf_pin_log_result(const char *tag, uint8_t status) {
     (void)tag;
@@ -140,9 +140,8 @@ uint8_t zerofido_pin_handle_command_with_session(ZerofidoApp *app, ZfTransportSe
     ZF_PIN_DIAG("cmd=%s parsed", diagnostic_tag);
     zf_pin_snapshot_state(app, state);
     pin_set_before = state->pin_set;
-    ZF_PIN_DIAG("cmd=%s state pin=%u retries=%u block=%u", diagnostic_tag,
-                state->pin_set ? 1U : 0U, (unsigned)state->pin_retries,
-                state->pin_auth_blocked ? 1U : 0U);
+    ZF_PIN_DIAG("cmd=%s state pin=%u retries=%u block=%u", diagnostic_tag, state->pin_set ? 1U : 0U,
+                (unsigned)state->pin_retries, state->pin_auth_blocked ? 1U : 0U);
     zf_runtime_get_effective_capabilities(app, &capabilities);
     if (parsed->has_pin_protocol && parsed->pin_protocol == ZF_PIN_PROTOCOL_V2 &&
         !capabilities.pin_uv_auth_protocol_2_enabled) {
@@ -161,9 +160,9 @@ uint8_t zerofido_pin_handle_command_with_session(ZerofidoApp *app, ZfTransportSe
         status = zf_client_pin_handle_set_pin(app->storage, state, parsed, scratch, out_len);
         break;
     case ZF_CLIENT_PIN_SUBCMD_GET_PIN_TOKEN:
-        status = zf_client_pin_handle_get_pin_token(app, app->storage, state, parsed, scratch, false,
-                                                    capabilities.client_pin_token_requires_consent,
-                                                    session_id, out, out_capacity, out_len);
+        status = zf_client_pin_handle_get_pin_token(
+            app, app->storage, state, parsed, scratch, false,
+            capabilities.client_pin_token_requires_consent, session_id, out, out_capacity, out_len);
         break;
     case ZF_CLIENT_PIN_SUBCMD_GET_PIN_UV_AUTH_TOKEN_USING_PIN_WITH_PERMISSIONS:
         if (!capabilities.pin_uv_auth_token_enabled) {

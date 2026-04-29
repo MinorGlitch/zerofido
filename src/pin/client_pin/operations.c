@@ -35,9 +35,10 @@ static void zf_client_pin_diag_secret_block(const char *label, const uint8_t *da
         }
         memcpy(b, data + off, chunk);
         FURI_LOG_I("ZeroFIDO:CTAP",
-                   "%s[%u] %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
-                   label, (unsigned)off, b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
-                   b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]);
+                   "%s[%u] %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X "
+                   "%02X %02X",
+                   label, (unsigned)off, b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9],
+                   b[10], b[11], b[12], b[13], b[14], b[15]);
     }
 }
 #else
@@ -403,10 +404,8 @@ uint8_t zf_client_pin_handle_get_pin_token(
     }
     ZF_PIN_OP_DIAG("cmd=%s compare", permissions_mode ? "CP-PT" : "CP-TK");
     if (!zf_crypto_constant_time_equal(pin_hash_plain, state->pin_hash, ZF_PIN_HASH_LEN)) {
-        zf_client_pin_diag_secret_block("cmd=CP pin hash got", pin_hash_plain,
-                                        ZF_PIN_HASH_LEN);
-        zf_client_pin_diag_secret_block("cmd=CP pin hash stored", state->pin_hash,
-                                        ZF_PIN_HASH_LEN);
+        zf_client_pin_diag_secret_block("cmd=CP pin hash got", pin_hash_plain, ZF_PIN_HASH_LEN);
+        zf_client_pin_diag_secret_block("cmd=CP pin hash stored", state->pin_hash, ZF_PIN_HASH_LEN);
         status = zf_pin_auth_failure(storage, state);
         goto cleanup;
     }

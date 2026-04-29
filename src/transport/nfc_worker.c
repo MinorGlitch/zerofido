@@ -44,8 +44,8 @@
 #if defined(ZF_RELEASE_DIAGNOSTICS) && ZF_RELEASE_DIAGNOSTICS && !defined(ZF_HOST_TEST)
 #define ZF_NFC_MEM_DIAG(event) zf_telemetry_log(event)
 #else
-#define ZF_NFC_MEM_DIAG(event) \
-    do {                       \
+#define ZF_NFC_MEM_DIAG(event)                                                                     \
+    do {                                                                                           \
     } while (false)
 #endif
 
@@ -305,9 +305,9 @@ int32_t zf_transport_nfc_worker(void *context) {
     zerofido_ui_refresh_status_line(app);
 
     while (true) {
-        uint32_t flags = furi_thread_flags_wait(
-            ZF_NFC_WORKER_EVT_STOP | ZF_NFC_WORKER_EVT_REQUEST | ZF_NFC_WORKER_EVT_TRACE,
-            FuriFlagWaitAny, FuriWaitForever);
+        uint32_t flags = furi_thread_flags_wait(ZF_NFC_WORKER_EVT_STOP | ZF_NFC_WORKER_EVT_REQUEST |
+                                                    ZF_NFC_WORKER_EVT_TRACE,
+                                                FuriFlagWaitAny, FuriWaitForever);
         if ((flags & FuriFlagError) != 0) {
             if (flags == FuriFlagErrorTimeout) {
                 continue;

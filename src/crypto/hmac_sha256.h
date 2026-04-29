@@ -23,8 +23,7 @@ typedef struct {
 
 bool zf_hmac_sha256_parts_with_scratch(ZfHmacSha256Scratch *scratch, const uint8_t *key,
                                        size_t key_len, const uint8_t *first, size_t first_size,
-                                       const uint8_t *second, size_t second_size,
-                                       uint8_t out[32]);
+                                       const uint8_t *second, size_t second_size, uint8_t out[32]);
 bool zf_hmac_sha256_parts(const uint8_t *key, size_t key_len, const uint8_t *first,
                           size_t first_size, const uint8_t *second, size_t second_size,
                           uint8_t out[32]);

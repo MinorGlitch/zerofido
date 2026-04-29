@@ -21,14 +21,12 @@
 typedef bool (*ZfStorageFormatWriter)(FlipperFormat *format, void *context);
 typedef bool (*ZfStorageDirEntryVisitor)(const char *name, const FileInfo *info, void *context);
 typedef bool (*ZfStorageEncryptedBlobMacWriter)(const uint8_t *plaintext, size_t plaintext_len,
-                                                const uint8_t iv[16],
-                                                const uint8_t *encrypted,
+                                                const uint8_t iv[16], const uint8_t *encrypted,
                                                 size_t encrypted_len, uint8_t *mac,
                                                 size_t mac_capacity, size_t *mac_len,
                                                 void *context);
 typedef bool (*ZfStorageEncryptedBlobMacVerifier)(const uint8_t *plaintext, size_t plaintext_len,
-                                                  const uint8_t iv[16],
-                                                  const uint8_t *encrypted,
+                                                  const uint8_t iv[16], const uint8_t *encrypted,
                                                   size_t encrypted_len, const uint8_t *mac,
                                                   size_t mac_len, void *context);
 typedef struct {

@@ -39,15 +39,13 @@ typedef struct {
  * and stores the matching private key encrypted under the device unique key.
  */
 bool zf_local_attestation_ensure_assets(const ZfLocalAttestationProfile *profile);
-bool zf_local_attestation_get_cert_size(const ZfLocalAttestationProfile *profile,
-                                        size_t *out_len);
+bool zf_local_attestation_get_cert_size(const ZfLocalAttestationProfile *profile, size_t *out_len);
 bool zf_local_attestation_load_cert(const ZfLocalAttestationProfile *profile, uint8_t *out,
                                     size_t out_capacity, size_t *out_len);
 bool zf_local_attestation_load_private_key(const ZfLocalAttestationProfile *profile,
                                            uint8_t private_key[ZF_PRIVATE_KEY_LEN]);
 bool zf_local_attestation_extract_cert_public_key(
-    const uint8_t *cert, size_t cert_len,
-    uint8_t public_key[ZF_LOCAL_ATTESTATION_EC_POINT_SIZE]);
-bool zf_local_attestation_private_key_matches_cert(
-    const uint8_t private_key[ZF_PRIVATE_KEY_LEN], const uint8_t *cert, size_t cert_len,
-    const uint8_t *identity, size_t identity_len);
+    const uint8_t *cert, size_t cert_len, uint8_t public_key[ZF_LOCAL_ATTESTATION_EC_POINT_SIZE]);
+bool zf_local_attestation_private_key_matches_cert(const uint8_t private_key[ZF_PRIVATE_KEY_LEN],
+                                                   const uint8_t *cert, size_t cert_len,
+                                                   const uint8_t *identity, size_t identity_len);

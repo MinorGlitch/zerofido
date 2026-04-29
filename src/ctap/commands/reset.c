@@ -34,8 +34,8 @@
  * Reset requires an empty payload and a local approval gesture, then enters the
  * maintenance lock so transport requests cannot observe half-wiped state.
  */
-uint8_t zf_ctap_handle_reset(ZerofidoApp *app, ZfTransportSessionId session_id,
-                             size_t request_len, size_t *out_len) {
+uint8_t zf_ctap_handle_reset(ZerofidoApp *app, ZfTransportSessionId session_id, size_t request_len,
+                             size_t *out_len) {
     uint8_t status = zf_ctap_require_empty_payload(request_len);
     bool maintenance_acquired = false;
 
@@ -61,9 +61,8 @@ uint8_t zf_ctap_handle_reset(ZerofidoApp *app, ZfTransportSessionId session_id,
     zf_u2f_adapter_deinit(app);
     bool wiped = u2f_data_wipe(app->storage) && zf_store_wipe_app_data(app->storage);
     ZfClientPinState next_pin_state = {0};
-    ZfPinInitResult pin_init = wiped
-                                   ? zerofido_pin_init_with_result(app->storage, &next_pin_state)
-                                   : ZfPinInitStorageError;
+    ZfPinInitResult pin_init = wiped ? zerofido_pin_init_with_result(app->storage, &next_pin_state)
+                                     : ZfPinInitStorageError;
 
     furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
     if (wiped) {

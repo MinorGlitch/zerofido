@@ -1448,9 +1448,9 @@ size_t zerofido_handle_ctap2(ZerofidoApp *app, uint32_t cid, const uint8_t *requ
     if (request[0] == ZfCtapeCmdClientPin) {
         g_ctap2_saw_transport_auto_accept = test_transport_auto_accept_enabled(app);
         if (g_ctap2_large_response_len != 0U) {
-            const size_t response_len = g_ctap2_large_response_len < response_capacity ?
-                                            g_ctap2_large_response_len :
-                                            response_capacity;
+            const size_t response_len = g_ctap2_large_response_len < response_capacity
+                                            ? g_ctap2_large_response_len
+                                            : response_capacity;
             for (size_t i = 0U; i < response_len; ++i) {
                 response[i] = (uint8_t)(0xA0U + (i & 0x0FU));
             }
@@ -2493,8 +2493,7 @@ static void test_nfc_terminal_r_ack_after_chained_response_keeps_fido_selected(v
         .protocol = NfcProtocolIso14443_3a,
         .event_data = &listener_event,
     };
-    static const uint8_t ctap2_get_info_apdu[] = {0x80, 0x10, 0x00, 0x00, 0x01,
-                                                  ZfCtapeCmdGetInfo};
+    static const uint8_t ctap2_get_info_apdu[] = {0x80, 0x10, 0x00, 0x00, 0x01, ZfCtapeCmdGetInfo};
     uint8_t response[190U] = {0};
     const uint8_t *payload = NULL;
 
@@ -2530,8 +2529,8 @@ static void test_nfc_terminal_r_ack_after_chained_response_keeps_fido_selected(v
     expect(!app.transport_nfc_state_storage.post_success_cooldown_active,
            "terminal R-ACK should not arm post-success discovery cooldown");
 
-    expect(zf_transport_nfc_handle_apdu(&app, &app.transport_nfc_state_storage,
-                                        ctap2_get_info_apdu, sizeof(ctap2_get_info_apdu)),
+    expect(zf_transport_nfc_handle_apdu(&app, &app.transport_nfc_state_storage, ctap2_get_info_apdu,
+                                        sizeof(ctap2_get_info_apdu)),
            "a CTAP APDU after terminal R-ACK should still reach the selected FIDO applet");
     payload = test_nfc_payload();
     expect(test_nfc_payload_len() > 2U && payload[0] == ZF_CTAP_SUCCESS,
@@ -3519,8 +3518,7 @@ static void test_nfc_ctap2_msg_without_get_response_returns_direct_response(void
                                         sizeof(ctap2_apdu)),
            "NFC CTAP2 MSG without GET_RESPONSE support should complete directly");
     payload = test_nfc_payload();
-    expect(test_nfc_payload_len() == 4U,
-           "direct no-GR NFC CTAP2 should include CTAP body and SW");
+    expect(test_nfc_payload_len() == 4U, "direct no-GR NFC CTAP2 should include CTAP body and SW");
     expect(payload[0] == ZF_CTAP_SUCCESS && payload[1] == 0xA0 && payload[2] == 0x90 &&
                payload[3] == 0x00,
            "direct no-GR NFC CTAP2 should return CTAP OK and SW_SUCCESS");
@@ -3600,8 +3598,7 @@ static void test_nfc_large_ctap2_msg_without_get_response_uses_iso_response_chai
     payload = test_nfc_payload();
     expect(test_nfc_payload_len() == remaining_after_page + 2U,
            "final no-GR CTAP2 response page should include remaining bytes plus SW");
-    expect(payload[remaining_after_page] == 0x90U &&
-               payload[remaining_after_page + 1U] == 0x00U,
+    expect(payload[remaining_after_page] == 0x90U && payload[remaining_after_page + 1U] == 0x00U,
            "final no-GR CTAP2 response page should terminate with SW_SUCCESS");
     expect(!app.transport_nfc_state_storage.response_ready,
            "final no-GR CTAP2 response page should clear the staged response");
@@ -3688,8 +3685,7 @@ static void test_nfc_large_extended_ctap2_msg_without_get_response_uses_extended
         .protocol = NfcProtocolIso14443_3a,
         .event_data = &listener_event,
     };
-    uint8_t ctap2_apdu[47] = {0x80, 0x10, 0x00, 0x00, 0x00, 0x00, 0x28,
-                              ZfCtapeCmdClientPin};
+    uint8_t ctap2_apdu[47] = {0x80, 0x10, 0x00, 0x00, 0x00, 0x00, 0x28, ZfCtapeCmdClientPin};
     const uint8_t *payload = NULL;
     const size_t response_len = ZF_NFC_MAX_TX_FRAME_INF_SIZE + 50U;
     uint8_t first_pcb = 0U;
@@ -3743,8 +3739,7 @@ static void test_nfc_chained_ctap2_request_acknowledges_next_block_number(void) 
         .protocol = NfcProtocolIso14443_3a,
         .event_data = &listener_event,
     };
-    uint8_t chained_frame[126U] = {0x12U, 0x80U, 0x10U, 0x00U, 0x00U, 0x00U, 0x00U,
-                                   0xA5U};
+    uint8_t chained_frame[126U] = {0x12U, 0x80U, 0x10U, 0x00U, 0x00U, 0x00U, 0x00U, 0xA5U};
     const char *chain_log = NULL;
     const char *ack_log = NULL;
 
@@ -3777,8 +3772,7 @@ static void test_nfc_chained_ctap2_request_acknowledges_next_block_number(void) 
 static void test_nfc_duplicate_chained_i_block_does_not_corrupt_assembled_apdu(void) {
     ZerofidoApp app;
     FuriMutex mutex = {0};
-    uint8_t apdu[174U] = {0x80, 0x10, 0x00, 0x00, 0x00, 0x00, 0xA5,
-                          ZfCtapeCmdMakeCredential};
+    uint8_t apdu[174U] = {0x80, 0x10, 0x00, 0x00, 0x00, 0x00, 0xA5, ZfCtapeCmdMakeCredential};
     const size_t first_len = 125U;
     const uint8_t *payload = NULL;
 
@@ -3793,8 +3787,8 @@ static void test_nfc_duplicate_chained_i_block_does_not_corrupt_assembled_apdu(v
     }
 
     furi_mutex_acquire(&mutex, FuriWaitForever);
-    expect(zf_transport_nfc_handle_iso4_payload_locked(&app, &app.transport_nfc_state_storage,
-                                                       apdu, first_len, 0x12, true,
+    expect(zf_transport_nfc_handle_iso4_payload_locked(&app, &app.transport_nfc_state_storage, apdu,
+                                                       first_len, 0x12, true,
                                                        false) == NfcCommandContinue,
            "first chained I-block should be accepted");
     expect(mutex.depth == 0U, "first chained I-block should release the callback mutex");
@@ -3803,8 +3797,8 @@ static void test_nfc_duplicate_chained_i_block_does_not_corrupt_assembled_apdu(v
            "first chained I-block should seed APDU assembly");
 
     furi_mutex_acquire(&mutex, FuriWaitForever);
-    expect(zf_transport_nfc_handle_iso4_payload_locked(&app, &app.transport_nfc_state_storage,
-                                                       apdu, first_len, 0x12, true,
+    expect(zf_transport_nfc_handle_iso4_payload_locked(&app, &app.transport_nfc_state_storage, apdu,
+                                                       first_len, 0x12, true,
                                                        false) == NfcCommandContinue,
            "retransmitted chained I-block should be acknowledged");
     expect(mutex.depth == 0U, "duplicate chained I-block should release the callback mutex");
@@ -3815,14 +3809,14 @@ static void test_nfc_duplicate_chained_i_block_does_not_corrupt_assembled_apdu(v
            "duplicate chained I-block should expose a replay breadcrumb");
 
     furi_mutex_acquire(&mutex, FuriWaitForever);
-    expect(zf_transport_nfc_handle_iso4_payload_locked(
-               &app, &app.transport_nfc_state_storage, &apdu[first_len],
-               sizeof(apdu) - first_len, 0x02, false, false) == NfcCommandContinue,
+    expect(zf_transport_nfc_handle_iso4_payload_locked(&app, &app.transport_nfc_state_storage,
+                                                       &apdu[first_len], sizeof(apdu) - first_len,
+                                                       0x02, false, false) == NfcCommandContinue,
            "terminal I-block should complete APDU assembly after a duplicate");
     expect(mutex.depth == 0U, "terminal I-block should release the callback mutex");
     payload = test_nfc_payload();
-    expect(test_nfc_payload_len() == 4U && payload[0] == ZF_CTAP_SUCCESS &&
-               payload[1] == 0xA0 && payload[2] == 0x90 && payload[3] == 0x00,
+    expect(test_nfc_payload_len() == 4U && payload[0] == ZF_CTAP_SUCCESS && payload[1] == 0xA0 &&
+               payload[2] == 0x90 && payload[3] == 0x00,
            "deduplicated no-GR CTAP2 APDU should complete directly");
     expect(!app.transport_nfc_state_storage.processing &&
                !app.transport_nfc_state_storage.request_pending &&
@@ -3835,8 +3829,7 @@ static void test_nfc_duplicate_chained_i_block_does_not_corrupt_assembled_apdu(v
 static void test_nfc_duplicate_chained_i_block_stall_resets_exchange(void) {
     ZerofidoApp app;
     FuriMutex mutex = {0};
-    uint8_t apdu[126U] = {0x80, 0x10, 0x00, 0x00, 0x00, 0x00, 0xA5,
-                          ZfCtapeCmdMakeCredential};
+    uint8_t apdu[126U] = {0x80, 0x10, 0x00, 0x00, 0x00, 0x00, 0xA5, ZfCtapeCmdMakeCredential};
     NfcCommand command = NfcCommandContinue;
 
     test_reset();
@@ -3850,8 +3843,8 @@ static void test_nfc_duplicate_chained_i_block_stall_resets_exchange(void) {
     }
 
     furi_mutex_acquire(&mutex, FuriWaitForever);
-    expect(zf_transport_nfc_handle_iso4_payload_locked(&app, &app.transport_nfc_state_storage,
-                                                       apdu, sizeof(apdu), 0x12, true,
+    expect(zf_transport_nfc_handle_iso4_payload_locked(&app, &app.transport_nfc_state_storage, apdu,
+                                                       sizeof(apdu), 0x12, true,
                                                        false) == NfcCommandContinue,
            "first chained I-block should start APDU assembly");
     expect(app.transport_nfc_state_storage.command_chain_active &&
@@ -5333,8 +5326,7 @@ static void test_nfc_worker_releases_transport_arena_on_listener_alloc_failure(v
     g_nfc_listener_alloc_result = false;
 
     expect(zf_transport_nfc_worker(&app) == 0, "NFC worker should exit cleanly on listener OOM");
-    expect(app.transport_arena == NULL,
-           "NFC listener failure should release the transport arena");
+    expect(app.transport_arena == NULL, "NFC listener failure should release the transport arena");
     expect(app.transport_arena_size == 0,
            "NFC listener failure should clear the transport arena size");
     expect(strcmp(g_last_status_text, "NFC listener failed") == 0,
@@ -5348,8 +5340,7 @@ static void test_nfc_worker_releases_transport_arena_on_resource_alloc_failure(v
     g_nfc_alloc_result = false;
 
     expect(zf_transport_nfc_worker(&app) == 0, "NFC worker should exit cleanly on resource OOM");
-    expect(app.transport_arena == NULL,
-           "NFC resource failure should release the transport arena");
+    expect(app.transport_arena == NULL, "NFC resource failure should release the transport arena");
     expect(app.transport_arena_size == 0,
            "NFC resource failure should clear the transport arena size");
     expect(strcmp(g_last_status_text, "NFC init failed") == 0,
@@ -5543,8 +5534,7 @@ static void test_transport_request_wakeup_processes_one_complete_transaction(voi
 
     expect(g_hid_request_index == 1,
            "request wakeup should leave later complete transactions for a later worker pass");
-    expect(g_hid_response_count == 1,
-           "one worker pass should produce one complete HID response");
+    expect(g_hid_response_count == 1, "one worker pass should produce one complete HID response");
     expect(g_last_hid_response[4] == ZF_CTAPHID_INIT,
            "the first queued packet should complete normally");
     expect(memcmp(&g_last_hid_response[7], nonce_a, sizeof(nonce_a)) == 0,
@@ -5642,10 +5632,9 @@ static void test_transport_worker_idle_poll_processes_immediate_u2f_version_data
     const uint32_t broadcast_cid = ZF_BROADCAST_CID;
     const uint32_t cid = 0xF0EE7690U;
     const uint8_t request[] = {
-        0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x22, 0x59, 0x38, 0xE9, 0x9C, 0xC9,
-        0x69, 0x5E, 0x75, 0x61, 0x77, 0xE6, 0x71, 0x37, 0xB5, 0x88, 0xD2, 0xE5,
-        0x4A, 0x5E, 0xCA, 0xEF, 0x4A, 0x29, 0x1E, 0x7B, 0xA1, 0x11, 0x5D, 0x0C,
-        0xA5, 0xE2, 0x70, 0xAD, 0x92,
+        0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x22, 0x59, 0x38, 0xE9, 0x9C, 0xC9, 0x69, 0x5E,
+        0x75, 0x61, 0x77, 0xE6, 0x71, 0x37, 0xB5, 0x88, 0xD2, 0xE5, 0x4A, 0x5E, 0xCA, 0xEF,
+        0x4A, 0x29, 0x1E, 0x7B, 0xA1, 0x11, 0x5D, 0x0C, 0xA5, 0xE2, 0x70, 0xAD, 0x92,
     };
 
     test_reset();

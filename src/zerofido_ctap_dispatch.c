@@ -127,9 +127,9 @@ static void zf_ctap_note_result(ZerofidoApp *app, uint8_t cmd, uint8_t status, s
                zf_ctap_status_name(status), (unsigned)body_len);
 }
 #else
-#define ZF_CTAP_DIAG(...) \
-    do {                  \
-    } while(false)
+#define ZF_CTAP_DIAG(...)                                                                          \
+    do {                                                                                           \
+    } while (false)
 
 static void zf_ctap_note_result(ZerofidoApp *app, uint8_t cmd, uint8_t status, size_t body_len) {
     (void)app;

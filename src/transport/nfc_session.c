@@ -33,8 +33,8 @@
 #if defined(ZF_RELEASE_DIAGNOSTICS) && ZF_RELEASE_DIAGNOSTICS && !defined(ZF_HOST_TEST)
 #define ZF_NFC_MEM_DIAG(event) zf_telemetry_log(event)
 #else
-#define ZF_NFC_MEM_DIAG(event) \
-    do {                       \
+#define ZF_NFC_MEM_DIAG(event)                                                                     \
+    do {                                                                                           \
     } while (false)
 #endif
 
@@ -302,8 +302,8 @@ bool zf_transport_nfc_send_deferred_response_or_wtx(const ZerofidoApp *app,
     }
 
     if (state->processing && !state->response_ready && !state->response_is_error) {
-        return zf_transport_nfc_send_apdu_payload(state, (const uint8_t[]){ZF_NFC_STATUS_PROCESSING},
-                                                  1U, ZF_NFC_SW_STATUS_UPDATE);
+        return zf_transport_nfc_send_apdu_payload(
+            state, (const uint8_t[]){ZF_NFC_STATUS_PROCESSING}, 1U, ZF_NFC_SW_STATUS_UPDATE);
     }
 
     if (state->response_is_error) {
@@ -315,8 +315,8 @@ bool zf_transport_nfc_send_deferred_response_or_wtx(const ZerofidoApp *app,
     }
 
     if (!state->response_ready) {
-        return zf_transport_nfc_send_apdu_payload(state, (const uint8_t[]){ZF_NFC_STATUS_PROCESSING},
-                                                  1U, ZF_NFC_SW_STATUS_UPDATE);
+        return zf_transport_nfc_send_apdu_payload(
+            state, (const uint8_t[]){ZF_NFC_STATUS_PROCESSING}, 1U, ZF_NFC_SW_STATUS_UPDATE);
     }
 
     if (!arena || state->response_len > arena_capacity) {
@@ -326,9 +326,8 @@ bool zf_transport_nfc_send_deferred_response_or_wtx(const ZerofidoApp *app,
     }
 
     if (state->response_len + 2U <= ZF_NFC_MAX_TX_FRAME_INF_SIZE) {
-        const bool sent =
-            zf_transport_nfc_send_apdu_payload(state, arena, state->response_len,
-                                               ZF_NFC_SW_SUCCESS);
+        const bool sent = zf_transport_nfc_send_apdu_payload(state, arena, state->response_len,
+                                                             ZF_NFC_SW_SUCCESS);
         zf_transport_nfc_reset_exchange_locked(state);
         return sent;
     }

@@ -14,9 +14,8 @@
 #include "micro_ecc/uECC.h"
 
 static const uint8_t zf_p256_order[ZF_PRIVATE_KEY_LEN] = {
-    0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF,
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xBC, 0xE6, 0xFA, 0xAD, 0xA7, 0x17,
-    0x9E, 0x84, 0xF3, 0xB9, 0xCA, 0xC2, 0xFC, 0x63, 0x25, 0x51,
+    0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xBC, 0xE6, 0xFA, 0xAD, 0xA7, 0x17, 0x9E, 0x84, 0xF3, 0xB9, 0xCA, 0xC2, 0xFC, 0x63, 0x25, 0x51,
 };
 
 static void zf_p256_secure_zero(void *data, size_t size) {
@@ -139,8 +138,8 @@ bool zf_p256_ecdh_raw_secret(const ZfP256KeyAgreementKey *key,
     return ok;
 }
 
-bool zf_p256_sign_hash_raw(const uint8_t private_key[ZF_PRIVATE_KEY_LEN],
-                           const uint8_t hash[32], uint8_t out[ZF_PUBLIC_KEY_LEN * 2U]) {
+bool zf_p256_sign_hash_raw(const uint8_t private_key[ZF_PRIVATE_KEY_LEN], const uint8_t hash[32],
+                           uint8_t out[ZF_PUBLIC_KEY_LEN * 2U]) {
     if (!private_key || !hash || !out || !zf_p256_private_key_valid(private_key)) {
         return false;
     }
@@ -153,8 +152,7 @@ bool zf_p256_sign_hash_raw(const uint8_t private_key[ZF_PRIVATE_KEY_LEN],
 }
 
 bool zf_p256_verify_hash_raw(const uint8_t public_x[ZF_PUBLIC_KEY_LEN],
-                             const uint8_t public_y[ZF_PUBLIC_KEY_LEN],
-                             const uint8_t hash[32],
+                             const uint8_t public_y[ZF_PUBLIC_KEY_LEN], const uint8_t hash[32],
                              const uint8_t raw_signature[ZF_PUBLIC_KEY_LEN * 2U]) {
     uint8_t public_key[ZF_PUBLIC_KEY_LEN * 2U];
     bool ok = false;

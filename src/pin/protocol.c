@@ -72,8 +72,7 @@ bool zf_pin_protocol_derive_keys(const ZfClientPinState *state, uint64_t pin_pro
     }
 
     do {
-        if (!zf_crypto_ecdh_raw_secret(&state->key_agreement, platform_x, platform_y,
-                                       raw_secret)) {
+        if (!zf_crypto_ecdh_raw_secret(&state->key_agreement, platform_x, platform_y, raw_secret)) {
             break;
         }
         if (!zf_crypto_hkdf_sha256(hkdf_salt, sizeof(hkdf_salt), raw_secret, sizeof(raw_secret),
@@ -99,8 +98,8 @@ bool zf_pin_protocol_derive_keys(const ZfClientPinState *state, uint64_t pin_pro
 }
 
 bool zf_pin_protocol_decrypt(uint64_t pin_protocol, uint8_t keys[ZF_PIN_PROTOCOL_KEYS_LEN],
-                             const uint8_t *ciphertext, size_t ciphertext_len,
-                             uint8_t *plaintext, size_t *plaintext_len) {
+                             const uint8_t *ciphertext, size_t ciphertext_len, uint8_t *plaintext,
+                             size_t *plaintext_len) {
     if (!ciphertext || !plaintext || !plaintext_len) {
         return false;
     }
@@ -162,8 +161,8 @@ bool zf_pin_protocol_encrypt(uint64_t pin_protocol, uint8_t keys[ZF_PIN_PROTOCOL
 /* Computes the full HMAC but compares only the protocol-defined auth prefix. */
 bool zf_pin_protocol_hmac_matches(ZfHmacSha256Scratch *scratch, uint64_t pin_protocol,
                                   const uint8_t key[32], const uint8_t *first, size_t first_len,
-                                  const uint8_t *second, size_t second_len,
-                                  const uint8_t *expected, size_t expected_len) {
+                                  const uint8_t *second, size_t second_len, const uint8_t *expected,
+                                  size_t expected_len) {
     uint8_t hmac[32];
     bool matches = false;
 

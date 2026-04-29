@@ -63,5 +63,5 @@ uint8_t zf_ctap_build_assertion_response_with_scratch(
     ZfAssertionResponseScratch *scratch, const ZfAssertionRequestData *request,
     const ZfCredentialRecord *record, bool user_present, bool user_verified, uint32_t sign_count,
     bool include_user_details, bool include_count, size_t match_count, bool include_user_selected,
-    bool user_selected, const uint8_t *extension_data, size_t extension_data_len,
-    uint8_t *out, size_t out_capacity, size_t *out_len);
+    bool user_selected, const uint8_t *extension_data, size_t extension_data_len, uint8_t *out,
+    size_t out_capacity, size_t *out_len);

@@ -60,10 +60,7 @@ uint8_t zf_client_pin_handle_set_pin(Storage *storage, ZfClientPinState *state,
 uint8_t zf_client_pin_handle_change_pin(Storage *storage, ZfClientPinState *state,
                                         const ZfClientPinRequest *request,
                                         ZfClientPinCommandScratch *scratch, size_t *out_len);
-uint8_t zf_client_pin_handle_get_pin_token(ZerofidoApp *app, Storage *storage,
-                                           ZfClientPinState *state,
-                                           const ZfClientPinRequest *request,
-                                           ZfClientPinCommandScratch *scratch,
-                                           bool permissions_mode, bool require_local_consent,
-                                           ZfTransportSessionId session_id, uint8_t *out,
-                                           size_t out_capacity, size_t *out_len);
+uint8_t zf_client_pin_handle_get_pin_token(
+    ZerofidoApp *app, Storage *storage, ZfClientPinState *state, const ZfClientPinRequest *request,
+    ZfClientPinCommandScratch *scratch, bool permissions_mode, bool require_local_consent,
+    ZfTransportSessionId session_id, uint8_t *out, size_t out_capacity, size_t *out_len);

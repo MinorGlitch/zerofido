@@ -83,11 +83,10 @@ static inline void zf_transport_nfc_trace_apdu_header(const char *direction, uin
                                                       uint8_t ins, uint8_t p1, uint8_t p2,
                                                       size_t data_len, bool extended, bool chained,
                                                       bool has_le, size_t le) {
-    zf_transport_nfc_trace_format(
-        "apdu-%s %02X %02X %02X %02X data=%u ext=%u chain=%u le=%s%u",
-        direction ? direction : "?", cla, ins, p1, p2, (unsigned)data_len,
-        extended ? 1U : 0U, chained ? 1U : 0U, has_le ? "" : "none/",
-        has_le ? (unsigned)le : 0U);
+    zf_transport_nfc_trace_format("apdu-%s %02X %02X %02X %02X data=%u ext=%u chain=%u le=%s%u",
+                                  direction ? direction : "?", cla, ins, p1, p2, (unsigned)data_len,
+                                  extended ? 1U : 0U, chained ? 1U : 0U, has_le ? "" : "none/",
+                                  has_le ? (unsigned)le : 0U);
 }
 
 static inline void zf_transport_nfc_trace_apdu_status(uint16_t status_word) {

@@ -81,9 +81,10 @@ void zf_crypto_sha256_concat(const uint8_t *first, size_t first_size, const uint
     zf_sha256_finish(&sha, out);
 }
 
-bool zf_crypto_hmac_sha256_parts_with_scratch(
-    ZfHmacSha256Scratch *scratch, const uint8_t *key, size_t key_len, const uint8_t *first,
-    size_t first_size, const uint8_t *second, size_t second_size, uint8_t out[32]) {
+bool zf_crypto_hmac_sha256_parts_with_scratch(ZfHmacSha256Scratch *scratch, const uint8_t *key,
+                                              size_t key_len, const uint8_t *first,
+                                              size_t first_size, const uint8_t *second,
+                                              size_t second_size, uint8_t out[32]) {
     return zf_hmac_sha256_parts_with_scratch(scratch, key, key_len, first, first_size, second,
                                              second_size, out);
 }
@@ -99,18 +100,18 @@ bool zf_crypto_hmac_sha256(const uint8_t *key, size_t key_len, const uint8_t *da
     return zf_hmac_sha256(key, key_len, data, size, out);
 }
 
-bool zf_crypto_hkdf_sha256(const uint8_t *salt, size_t salt_len, const uint8_t *ikm,
-                           size_t ikm_len, const uint8_t *info, size_t info_len, uint8_t out[32]) {
+bool zf_crypto_hkdf_sha256(const uint8_t *salt, size_t salt_len, const uint8_t *ikm, size_t ikm_len,
+                           const uint8_t *info, size_t info_len, uint8_t out[32]) {
     return zf_hkdf_sha256(salt, salt_len, ikm, ikm_len, info, info_len, out);
 }
 
-bool zf_crypto_aes256_cbc_encrypt(const uint8_t key[32], const uint8_t iv[16],
-                                  const uint8_t *input, uint8_t *output, size_t size) {
+bool zf_crypto_aes256_cbc_encrypt(const uint8_t key[32], const uint8_t iv[16], const uint8_t *input,
+                                  uint8_t *output, size_t size) {
     return zf_aes256_cbc_encrypt(key, iv, input, output, size);
 }
 
-bool zf_crypto_aes256_cbc_decrypt(const uint8_t key[32], const uint8_t iv[16],
-                                  const uint8_t *input, uint8_t *output, size_t size) {
+bool zf_crypto_aes256_cbc_decrypt(const uint8_t key[32], const uint8_t iv[16], const uint8_t *input,
+                                  uint8_t *output, size_t size) {
     return zf_aes256_cbc_decrypt(key, iv, input, output, size);
 }
 
@@ -179,8 +180,7 @@ bool zf_crypto_generate_credential_keypair(ZfCredentialRecord *record) {
     uint8_t private_key[ZF_PRIVATE_KEY_LEN] = {0};
 
     do {
-        if (!record ||
-            !zf_p256_generate_keypair(private_key, record->public_x, record->public_y)) {
+        if (!record || !zf_p256_generate_keypair(private_key, record->public_x, record->public_y)) {
             break;
         }
 

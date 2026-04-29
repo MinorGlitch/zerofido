@@ -692,8 +692,8 @@ bool zf_crypto_hmac_sha256(const uint8_t *key, size_t key_len, const uint8_t *da
                                                     out);
 }
 
-bool zf_crypto_hkdf_sha256(const uint8_t *salt, size_t salt_len, const uint8_t *ikm,
-                           size_t ikm_len, const uint8_t *info, size_t info_len, uint8_t out[32]) {
+bool zf_crypto_hkdf_sha256(const uint8_t *salt, size_t salt_len, const uint8_t *ikm, size_t ikm_len,
+                           const uint8_t *info, size_t info_len, uint8_t out[32]) {
     UNUSED(salt);
     UNUSED(salt_len);
     uint8_t hmac[32];
@@ -704,8 +704,8 @@ bool zf_crypto_hkdf_sha256(const uint8_t *salt, size_t salt_len, const uint8_t *
     return true;
 }
 
-bool zf_crypto_aes256_cbc_encrypt(const uint8_t key[32], const uint8_t iv[16],
-                                  const uint8_t *input, uint8_t *output, size_t size) {
+bool zf_crypto_aes256_cbc_encrypt(const uint8_t key[32], const uint8_t iv[16], const uint8_t *input,
+                                  uint8_t *output, size_t size) {
     UNUSED(key);
     UNUSED(iv);
     if (g_fail_crypto_encrypt) {
@@ -715,8 +715,8 @@ bool zf_crypto_aes256_cbc_encrypt(const uint8_t key[32], const uint8_t iv[16],
     return true;
 }
 
-bool zf_crypto_aes256_cbc_decrypt(const uint8_t key[32], const uint8_t iv[16],
-                                  const uint8_t *input, uint8_t *output, size_t size) {
+bool zf_crypto_aes256_cbc_decrypt(const uint8_t key[32], const uint8_t iv[16], const uint8_t *input,
+                                  uint8_t *output, size_t size) {
     UNUSED(key);
     UNUSED(iv);
     if (g_fail_crypto_decrypt) {
@@ -1193,12 +1193,11 @@ static void test_init_descriptor_list(ZfCredentialDescriptorList *list,
     list->capacity = capacity;
 }
 
-#define TEST_INIT_GET_ASSERTION_REQUEST(request)                                                  \
+#define TEST_INIT_GET_ASSERTION_REQUEST(request)                                                   \
     ZfCredentialDescriptor request##_allow_descriptors[ZF_MAX_ALLOW_LIST];                         \
-    test_init_descriptor_list(&(request).allow_list, request##_allow_descriptors,                  \
-                              ZF_MAX_ALLOW_LIST)
+    test_init_descriptor_list(&(request).allow_list, request##_allow_descriptors, ZF_MAX_ALLOW_LIST)
 
-#define TEST_INIT_MAKE_CREDENTIAL_REQUEST(request)                                                \
+#define TEST_INIT_MAKE_CREDENTIAL_REQUEST(request)                                                 \
     ZfCredentialDescriptor request##_exclude_descriptors[ZF_MAX_ALLOW_LIST];                       \
     test_init_descriptor_list(&(request).exclude_list, request##_exclude_descriptors,              \
                               ZF_MAX_ALLOW_LIST)
@@ -1700,8 +1699,7 @@ static bool parse_make_credential_cred_protect_output(const uint8_t *buffer, siz
     uint64_t raw = 0;
     if (!zf_cbor_read_text_ptr(&cursor, &name, &name_len) ||
         zf_ctap_classify_text_key(name, name_len) != ZfCtapTextKeyCredProtect ||
-        !zf_cbor_read_uint(&cursor, &raw) ||
-        raw > UINT8_MAX || cursor.ptr != cursor.end) {
+        !zf_cbor_read_uint(&cursor, &raw) || raw > UINT8_MAX || cursor.ptr != cursor.end) {
         return false;
     }
 
@@ -1830,8 +1828,8 @@ static bool parse_assertion_response_hmac_secret_output(const uint8_t *buffer, s
         return false;
     }
 
-    return parse_hmac_secret_extension_output(auth_data + 37U, auth_data_len - 37U,
-                                              hmac_secret_enc, hmac_secret_enc_len);
+    return parse_hmac_secret_extension_output(auth_data + 37U, auth_data_len - 37U, hmac_secret_enc,
+                                              hmac_secret_enc_len);
 }
 
 static bool parse_make_credential_auth_flags(const uint8_t *buffer, size_t size, uint8_t *flags) {
@@ -1888,8 +1886,8 @@ static bool parse_make_credential_packed_attestation(const uint8_t *buffer, size
         if (key == 1) {
             const uint8_t *fmt = NULL;
             size_t fmt_len = 0;
-            if (!zf_cbor_read_text_ptr(&cursor, &fmt, &fmt_len) ||
-                fmt_len != 6 || memcmp(fmt, "packed", 6) != 0) {
+            if (!zf_cbor_read_text_ptr(&cursor, &fmt, &fmt_len) || fmt_len != 6 ||
+                memcmp(fmt, "packed", 6) != 0) {
                 return false;
             }
             saw_fmt = true;
@@ -1945,8 +1943,8 @@ static bool parse_make_credential_none_attestation(const uint8_t *buffer, size_t
         if (key == 1) {
             const uint8_t *fmt = NULL;
             size_t fmt_len = 0;
-            if (!zf_cbor_read_text_ptr(&cursor, &fmt, &fmt_len) ||
-                fmt_len != 4 || memcmp(fmt, "none", 4) != 0) {
+            if (!zf_cbor_read_text_ptr(&cursor, &fmt, &fmt_len) || fmt_len != 4 ||
+                memcmp(fmt, "none", 4) != 0) {
                 return false;
             }
             saw_fmt = true;
@@ -2317,7 +2315,8 @@ static void test_get_assertion_parse_skips_unknown_float_member(void) {
     expect(zf_ctap_parse_get_assertion(buffer, zf_cbor_encoder_size(&enc), &request) ==
                ZF_CTAP_SUCCESS,
            "unknown float-valued members should be skipped cleanly");
-    expect(strcmp(request.assertion.rp_id, "example.com") == 0, "parser should preserve required fields");
+    expect(strcmp(request.assertion.rp_id, "example.com") == 0,
+           "parser should preserve required fields");
 }
 
 static void test_get_assertion_parse_rejects_duplicate_top_level_key(void) {
@@ -2368,14 +2367,12 @@ static void test_get_assertion_parse_ignores_unknown_true_option(void) {
     TEST_INIT_GET_ASSERTION_REQUEST(request);
     static const uint8_t client_data_hash[32] = {0};
 
-    expect(zf_cbor_encoder_init(&enc, buffer, sizeof(buffer)),
-           "init unknown true option encoder");
+    expect(zf_cbor_encoder_init(&enc, buffer, sizeof(buffer)), "init unknown true option encoder");
     expect(zf_cbor_encode_map(&enc, 3) && zf_cbor_encode_uint(&enc, 1) &&
                zf_cbor_encode_text(&enc, "example.com") && zf_cbor_encode_uint(&enc, 2) &&
                zf_cbor_encode_bytes(&enc, client_data_hash, sizeof(client_data_hash)) &&
                zf_cbor_encode_uint(&enc, 5) && zf_cbor_encode_map(&enc, 1) &&
-               zf_cbor_encode_text(&enc, "unknownOption") &&
-               zf_cbor_encode_bool(&enc, true),
+               zf_cbor_encode_text(&enc, "unknownOption") && zf_cbor_encode_bool(&enc, true),
            "encode getAssertion request with unknown true option");
 
     expect(zf_ctap_parse_get_assertion(buffer, zf_cbor_encoder_size(&enc), &request) ==
@@ -2390,14 +2387,12 @@ static void test_get_assertion_parse_ignores_unknown_false_option(void) {
     TEST_INIT_GET_ASSERTION_REQUEST(request);
     static const uint8_t client_data_hash[32] = {0};
 
-    expect(zf_cbor_encoder_init(&enc, buffer, sizeof(buffer)),
-           "init unknown false option encoder");
+    expect(zf_cbor_encoder_init(&enc, buffer, sizeof(buffer)), "init unknown false option encoder");
     expect(zf_cbor_encode_map(&enc, 3) && zf_cbor_encode_uint(&enc, 1) &&
                zf_cbor_encode_text(&enc, "example.com") && zf_cbor_encode_uint(&enc, 2) &&
                zf_cbor_encode_bytes(&enc, client_data_hash, sizeof(client_data_hash)) &&
                zf_cbor_encode_uint(&enc, 5) && zf_cbor_encode_map(&enc, 1) &&
-               zf_cbor_encode_text(&enc, "unknownOption") &&
-               zf_cbor_encode_bool(&enc, false),
+               zf_cbor_encode_text(&enc, "unknownOption") && zf_cbor_encode_bool(&enc, false),
            "encode getAssertion request with unknown false option");
 
     expect(zf_ctap_parse_get_assertion(buffer, zf_cbor_encoder_size(&enc), &request) ==
@@ -2932,10 +2927,9 @@ static void test_assertion_response_user_fields_follow_uv(void) {
     strcpy(record.user_name, "alice");
     strcpy(record.user_display_name, "Alice Example");
 
-    expect(zf_ctap_build_assertion_response_with_scratch(&scratch, &request.assertion, &record, true, true, 8,
-                                                         true, true, 2, false, false, NULL, 0,
-                                                         response, sizeof(response), &response_len) ==
-               ZF_CTAP_SUCCESS,
+    expect(zf_ctap_build_assertion_response_with_scratch(
+               &scratch, &request.assertion, &record, true, true, 8, true, true, 2, false, false,
+               NULL, 0, response, sizeof(response), &response_len) == ZF_CTAP_SUCCESS,
            "uv assertion response should build");
     expect(contains_text(response, response_len, "name"), "uv response should include name key");
     expect(contains_text(response, response_len, "displayName"),
@@ -2945,8 +2939,8 @@ static void test_assertion_response_user_fields_follow_uv(void) {
            "uv response should include display name value");
 
     expect(zf_ctap_build_assertion_response_with_scratch(
-               &scratch, &request.assertion, &record, true, false, 9, false, false, 1, false, false, NULL, 0,
-               response, sizeof(response), &response_len) == ZF_CTAP_SUCCESS,
+               &scratch, &request.assertion, &record, true, false, 9, false, false, 1, false, false,
+               NULL, 0, response, sizeof(response), &response_len) == ZF_CTAP_SUCCESS,
            "non-uv assertion response should build");
     expect(!contains_text(response, response_len, "displayName"),
            "non-uv response omits displayName");
@@ -3022,8 +3016,8 @@ static void test_client_pin_get_key_agreement_requires_pin_protocol(void) {
            "encode clientPin getKeyAgreement without pinProtocol");
 
     expect(zerofido_pin_handle_command(&app, buffer, zf_cbor_encoder_size(&enc), response,
-                                       sizeof(response), &response_len) ==
-               ZF_CTAP_ERR_MISSING_PARAMETER,
+                                       sizeof(response),
+                                       &response_len) == ZF_CTAP_ERR_MISSING_PARAMETER,
            "clientPin getKeyAgreement should still require pinProtocol");
 }
 
@@ -3073,21 +3067,20 @@ static void test_client_pin_parse_rejects_duplicate_key_agreement_keys(void) {
     expect(zf_cbor_encode_int(&enc, 1) && zf_cbor_encode_int(&enc, 2), "encode kty");
     expect(zf_cbor_encode_int(&enc, 3) && zf_cbor_encode_int(&enc, -25), "encode alg");
     expect(zf_cbor_encode_int(&enc, -1) && zf_cbor_encode_int(&enc, 1), "encode crv");
-    expect(zf_cbor_encode_int(&enc, -2) &&
-               zf_cbor_encode_bytes(&enc, (const uint8_t[ZF_PUBLIC_KEY_LEN]){0x11},
-                                    ZF_PUBLIC_KEY_LEN),
-           "encode first x");
-    expect(zf_cbor_encode_int(&enc, -2) &&
-               zf_cbor_encode_bytes(&enc, (const uint8_t[ZF_PUBLIC_KEY_LEN]){0x12},
-                                    ZF_PUBLIC_KEY_LEN),
-           "encode duplicate x");
-    expect(zf_cbor_encode_int(&enc, -3) &&
-               zf_cbor_encode_bytes(&enc, (const uint8_t[ZF_PUBLIC_KEY_LEN]){0x22},
-                                    ZF_PUBLIC_KEY_LEN),
-           "encode y");
+    expect(
+        zf_cbor_encode_int(&enc, -2) &&
+            zf_cbor_encode_bytes(&enc, (const uint8_t[ZF_PUBLIC_KEY_LEN]){0x11}, ZF_PUBLIC_KEY_LEN),
+        "encode first x");
+    expect(
+        zf_cbor_encode_int(&enc, -2) &&
+            zf_cbor_encode_bytes(&enc, (const uint8_t[ZF_PUBLIC_KEY_LEN]){0x12}, ZF_PUBLIC_KEY_LEN),
+        "encode duplicate x");
+    expect(
+        zf_cbor_encode_int(&enc, -3) &&
+            zf_cbor_encode_bytes(&enc, (const uint8_t[ZF_PUBLIC_KEY_LEN]){0x22}, ZF_PUBLIC_KEY_LEN),
+        "encode y");
     expect(zf_cbor_encode_uint(&enc, 6) &&
-               zf_cbor_encode_bytes(&enc, (const uint8_t[ZF_PIN_HASH_LEN]){0x33},
-                                    ZF_PIN_HASH_LEN),
+               zf_cbor_encode_bytes(&enc, (const uint8_t[ZF_PIN_HASH_LEN]){0x33}, ZF_PIN_HASH_LEN),
            "encode pinHashEnc");
 
     expect(zerofido_pin_handle_command(&app, buffer, zf_cbor_encoder_size(&enc), response,
@@ -3503,8 +3496,7 @@ static size_t encode_get_assertion_ctap_request(uint8_t *buffer, size_t capacity
     return zf_cbor_encoder_size(&enc) + 1;
 }
 
-static size_t encode_get_assertion_ctap_request_with_up(uint8_t *buffer, size_t capacity,
-                                                        bool up) {
+static size_t encode_get_assertion_ctap_request_with_up(uint8_t *buffer, size_t capacity, bool up) {
     ZfCborEncoder enc;
     static const uint8_t client_data_hash[32] = {
         0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x2B,
@@ -3681,8 +3673,7 @@ static void test_pin_plaintext_accepts_ctap_max_utf8_length(void) {
            "63-byte padded newPinEnc block should be accepted");
     expect(unpadded_len == ZF_PIN_NEW_PIN_BLOCK_MAX_LEN - 1U,
            "max PIN block should report 63 unpadded bytes");
-    expect(zf_pin_validate_plaintext_policy((const uint8_t *)too_long_pin,
-                                            strlen(too_long_pin)) ==
+    expect(zf_pin_validate_plaintext_policy((const uint8_t *)too_long_pin, strlen(too_long_pin)) ==
                ZF_CTAP_ERR_PIN_POLICY_VIOLATION,
            "64-byte PIN should be rejected");
 }
@@ -4345,8 +4336,7 @@ static void test_runtime_config_set_fido2_profile_updates_capabilities(void) {
     zf_runtime_config_resolve_capabilities(&app.runtime_config, &app.capabilities);
     app.capabilities_resolved = true;
 
-    expect(zf_runtime_config_set_fido2_profile(&app, &storage,
-                                               ZfFido2ProfileCtap2_1Experimental),
+    expect(zf_runtime_config_set_fido2_profile(&app, &storage, ZfFido2ProfileCtap2_1Experimental),
            "runtime config should persist the user-selected FIDO2 profile");
     expect(app.runtime_config.fido2_profile == ZfFido2ProfileCtap2_1Experimental,
            "runtime config should apply the selected FIDO2 profile");
@@ -4371,8 +4361,7 @@ static void test_runtime_config_set_fido2_profile_requires_pin_for_2_1(void) {
     zf_runtime_config_resolve_capabilities(&app.runtime_config, &app.capabilities);
     app.capabilities_resolved = true;
 
-    expect(!zf_runtime_config_set_fido2_profile(&app, &storage,
-                                                ZfFido2ProfileCtap2_1Experimental),
+    expect(!zf_runtime_config_set_fido2_profile(&app, &storage, ZfFido2ProfileCtap2_1Experimental),
            "runtime config should reject CTAP 2.1 profile while PIN is unset");
     expect(app.runtime_config.fido2_profile == ZfFido2ProfileCtap2_0,
            "failed PIN-gated profile switch should keep CTAP 2.0");
@@ -4543,8 +4532,7 @@ static void test_runtime_config_set_fido2_profile_preserves_runtime_state_on_per
     app.capabilities_resolved = true;
     g_storage_fail_write_match = "runtime_config.tmp";
 
-    expect(!zf_runtime_config_set_fido2_profile(&app, &storage,
-                                                ZfFido2ProfileCtap2_1Experimental),
+    expect(!zf_runtime_config_set_fido2_profile(&app, &storage, ZfFido2ProfileCtap2_1Experimental),
            "runtime config profile mutation should fail when persistence fails");
     expect(app.runtime_config.fido2_profile == ZfFido2ProfileCtap2_0,
            "failed profile persist should keep the CTAP 2.0 profile");
@@ -4674,7 +4662,8 @@ static void test_get_pin_token_experimental_2_1_requires_consent(void) {
            "experimental CTAP 2.1 getPinToken should return a pin token after consent");
     expect(parse_pin_token_response(response, response_len, &token, &token_len),
            "2.1 getPinToken response should encode a token");
-    expect(token_len == ZF_PIN_TOKEN_LEN, "2.1 getPinToken should return the expected token length");
+    expect(token_len == ZF_PIN_TOKEN_LEN,
+           "2.1 getPinToken should return the expected token length");
     expect(g_approval_request_count == 1, "2.1 getPinToken should request local consent");
     expect(app.pin_state.pin_token_permissions == (ZF_PIN_PERMISSION_MC | ZF_PIN_PERMISSION_GA),
            "2.1 getPinToken should grant default mc|ga permissions");
@@ -4703,12 +4692,12 @@ static void test_get_pin_token_protocol2_returns_iv_prefixed_token(void) {
     app.storage = &storage;
     test_enable_fido2_1_experimental(&app);
 
-    expect(zerofido_pin_handle_command(
-               &app, request,
-               encode_client_pin_get_pin_token_request_with_protocol(
-                   request, sizeof(request), ZF_PIN_PROTOCOL_V2, pin_hash_enc,
-                   sizeof(pin_hash_enc), true),
-               response, sizeof(response), &response_len) == ZF_CTAP_SUCCESS,
+    expect(zerofido_pin_handle_command(&app, request,
+                                       encode_client_pin_get_pin_token_request_with_protocol(
+                                           request, sizeof(request), ZF_PIN_PROTOCOL_V2,
+                                           pin_hash_enc, sizeof(pin_hash_enc), true),
+                                       response, sizeof(response),
+                                       &response_len) == ZF_CTAP_SUCCESS,
            "protocol 2 getPinToken should return a token");
     expect(parse_pin_token_response(response, response_len, &token, &token_len),
            "protocol 2 getPinToken response should encode a token");
@@ -4736,12 +4725,12 @@ static void test_client_pin_protocol2_requires_experimental_profile(void) {
     memcpy(pin_hash_enc + ZF_PIN_PROTOCOL2_IV_LEN, app.pin_state.pin_hash, ZF_PIN_HASH_LEN);
     app.storage = &storage;
 
-    expect(zerofido_pin_handle_command(
-               &app, request,
-               encode_client_pin_get_pin_token_request_with_protocol(
-                   request, sizeof(request), ZF_PIN_PROTOCOL_V2, pin_hash_enc,
-                   sizeof(pin_hash_enc), true),
-               response, sizeof(response), &response_len) == ZF_CTAP_ERR_INVALID_PARAMETER,
+    expect(zerofido_pin_handle_command(&app, request,
+                                       encode_client_pin_get_pin_token_request_with_protocol(
+                                           request, sizeof(request), ZF_PIN_PROTOCOL_V2,
+                                           pin_hash_enc, sizeof(pin_hash_enc), true),
+                                       response, sizeof(response),
+                                       &response_len) == ZF_CTAP_ERR_INVALID_PARAMETER,
            "default CTAP 2.0 profile should reject unadvertised protocol 2");
     expect(!app.pin_state.pin_token_active,
            "default-profile protocol 2 rejection should not activate a token");
@@ -5022,8 +5011,8 @@ static void test_client_pin_permissions_subcommand_issued_token_consumes_mc_afte
 
     expect(zerofido_pin_handle_command(
                &app, token_request,
-               encode_client_pin_request_with_permissions(token_request, sizeof(token_request), 0x09,
-                                                          app.pin_state.pin_hash, true,
+               encode_client_pin_request_with_permissions(token_request, sizeof(token_request),
+                                                          0x09, app.pin_state.pin_hash, true,
                                                           ZF_PIN_PERMISSION_MC, "example.com"),
                token_response, sizeof(token_response), &token_response_len) == ZF_CTAP_SUCCESS,
            "2.1 0x09 should mint an mc-scoped token");
@@ -5036,12 +5025,12 @@ static void test_client_pin_permissions_subcommand_issued_token_consumes_mc_afte
                                  sizeof(make_credential_client_data_hash), pin_auth),
            "derive makeCredential pinAuth from issued 0x09 token");
 
-    ctap_response_len = zerofido_handle_ctap2(
-        &app, 0x01020304, ctap_request,
-        encode_make_credential_ctap_request_with_pin_auth(
-            ctap_request, sizeof(ctap_request), false, false, true, pin_auth, ZF_PIN_AUTH_LEN, true,
-            false, NULL, 0),
-        ctap_response, sizeof(ctap_response));
+    ctap_response_len =
+        zerofido_handle_ctap2(&app, 0x01020304, ctap_request,
+                              encode_make_credential_ctap_request_with_pin_auth(
+                                  ctap_request, sizeof(ctap_request), false, false, true, pin_auth,
+                                  ZF_PIN_AUTH_LEN, true, false, NULL, 0),
+                              ctap_response, sizeof(ctap_response));
 
     expect(ctap_response_len > 1, "makeCredential should accept the issued 0x09 token once");
     expect(ctap_response[0] == ZF_CTAP_SUCCESS,
@@ -5051,12 +5040,12 @@ static void test_client_pin_permissions_subcommand_issued_token_consumes_mc_afte
     expect(!app.pin_state.pin_token_permissions_rp_id_set,
            "consumed 0x09 token should clear the RP binding");
 
-    ctap_response_len = zerofido_handle_ctap2(
-        &app, 0x01020304, ctap_request,
-        encode_make_credential_ctap_request_with_pin_auth(
-            ctap_request, sizeof(ctap_request), false, false, true, pin_auth, ZF_PIN_AUTH_LEN, true,
-            false, NULL, 0),
-        ctap_response, sizeof(ctap_response));
+    ctap_response_len =
+        zerofido_handle_ctap2(&app, 0x01020304, ctap_request,
+                              encode_make_credential_ctap_request_with_pin_auth(
+                                  ctap_request, sizeof(ctap_request), false, false, true, pin_auth,
+                                  ZF_PIN_AUTH_LEN, true, false, NULL, 0),
+                              ctap_response, sizeof(ctap_response));
 
     expect(ctap_response_len == 1, "reused consumed 0x09 token should return status only");
     expect(ctap_response[0] == ZF_CTAP_ERR_PIN_AUTH_INVALID,
@@ -5084,16 +5073,15 @@ static void test_client_pin_permissions_subcommand_denied_consent_does_not_issue
     g_approval_result = false;
     g_approval_state = ZfApprovalDenied;
 
-    expect(zerofido_pin_handle_command(
-               &app, request,
-               encode_client_pin_request_with_permissions(
-                   request, sizeof(request), 0x09, app.pin_state.pin_hash, true,
-                   ZF_PIN_PERMISSION_MC, "example.com"),
-               response, sizeof(response), &response_len) == ZF_CTAP_ERR_OPERATION_DENIED,
+    expect(zerofido_pin_handle_command(&app, request,
+                                       encode_client_pin_request_with_permissions(
+                                           request, sizeof(request), 0x09, app.pin_state.pin_hash,
+                                           true, ZF_PIN_PERMISSION_MC, "example.com"),
+                                       response, sizeof(response),
+                                       &response_len) == ZF_CTAP_ERR_OPERATION_DENIED,
            "experimental CTAP 2.1 0x09 should fail when local consent is denied");
     expect(g_approval_request_count == 1, "denied 0x09 should request local consent once");
-    expect(!app.pin_state.pin_token_active,
-           "denied 0x09 should not activate a runtime PIN token");
+    expect(!app.pin_state.pin_token_active, "denied 0x09 should not activate a runtime PIN token");
     expect(app.pin_state.pin_token_permissions == 0,
            "denied 0x09 should not store requested permissions");
     expect(response_len == 0, "denied 0x09 should not return a token body");
@@ -5124,30 +5112,27 @@ static void test_client_pin_permissions_subcommand_rejects_unsupported_be_permis
                 ZF_PIN_PERMISSION_MC | ZF_PIN_PERMISSION_GA | ZF_PIN_PERMISSION_BE, "example.com"),
             response, sizeof(response), &response_len) == ZF_CTAP_ERR_UNAUTHORIZED_PERMISSION,
         "experimental CTAP 2.1 0x09 should reject unsupported bioEnrollment permission");
-    expect(
-        zerofido_pin_handle_command(
-            &app, request,
-            encode_client_pin_request_with_permissions(request, sizeof(request), 0x09,
-                                                       app.pin_state.pin_hash, true,
-                                                       ZF_PIN_PERMISSION_CM, NULL),
-            response, sizeof(response), &response_len) == ZF_CTAP_ERR_UNAUTHORIZED_PERMISSION,
-        "experimental CTAP 2.1 0x09 should reject unsupported credentialManagement permission");
-    expect(
-        zerofido_pin_handle_command(
-            &app, request,
-            encode_client_pin_request_with_permissions(request, sizeof(request), 0x09,
-                                                       app.pin_state.pin_hash, true,
-                                                       ZF_PIN_PERMISSION_LBW, NULL),
-            response, sizeof(response), &response_len) == ZF_CTAP_ERR_UNAUTHORIZED_PERMISSION,
-        "experimental CTAP 2.1 0x09 should reject unsupported largeBlobWrite permission");
-    expect(
-        zerofido_pin_handle_command(
-            &app, request,
-            encode_client_pin_request_with_permissions(request, sizeof(request), 0x09,
-                                                       app.pin_state.pin_hash, true,
-                                                       ZF_PIN_PERMISSION_ACFG, NULL),
-            response, sizeof(response), &response_len) == ZF_CTAP_ERR_UNAUTHORIZED_PERMISSION,
-        "experimental CTAP 2.1 0x09 should reject unsupported authenticatorConfig permission");
+    expect(zerofido_pin_handle_command(&app, request,
+                                       encode_client_pin_request_with_permissions(
+                                           request, sizeof(request), 0x09, app.pin_state.pin_hash,
+                                           true, ZF_PIN_PERMISSION_CM, NULL),
+                                       response, sizeof(response),
+                                       &response_len) == ZF_CTAP_ERR_UNAUTHORIZED_PERMISSION,
+           "experimental CTAP 2.1 0x09 should reject unsupported credentialManagement permission");
+    expect(zerofido_pin_handle_command(&app, request,
+                                       encode_client_pin_request_with_permissions(
+                                           request, sizeof(request), 0x09, app.pin_state.pin_hash,
+                                           true, ZF_PIN_PERMISSION_LBW, NULL),
+                                       response, sizeof(response),
+                                       &response_len) == ZF_CTAP_ERR_UNAUTHORIZED_PERMISSION,
+           "experimental CTAP 2.1 0x09 should reject unsupported largeBlobWrite permission");
+    expect(zerofido_pin_handle_command(&app, request,
+                                       encode_client_pin_request_with_permissions(
+                                           request, sizeof(request), 0x09, app.pin_state.pin_hash,
+                                           true, ZF_PIN_PERMISSION_ACFG, NULL),
+                                       response, sizeof(response),
+                                       &response_len) == ZF_CTAP_ERR_UNAUTHORIZED_PERMISSION,
+           "experimental CTAP 2.1 0x09 should reject unsupported authenticatorConfig permission");
     expect(!app.pin_state.pin_token_active,
            "unsupported BE permission should not mint a pinUvAuthToken");
     expect(app.pin_state.pin_token_permissions == 0,
@@ -5198,8 +5183,7 @@ static void test_pin_auth_protocol2_accepts_full_hmac(void) {
 
     expect(zerofido_pin_require_auth(&storage, &state, false, true, client_data_hash, pin_auth,
                                      ZF_PIN_AUTH_MAX_LEN, true, ZF_PIN_PROTOCOL_V2, NULL,
-                                     ZF_PIN_PERMISSION_MC,
-                                     &uv_verified) == ZF_CTAP_SUCCESS,
+                                     ZF_PIN_PERMISSION_MC, &uv_verified) == ZF_CTAP_SUCCESS,
            "protocol 2 pinAuth should accept the full HMAC");
     expect(uv_verified, "protocol 2 pinAuth should set UV");
 }
@@ -5235,8 +5219,7 @@ static void test_legacy_pin_token_allows_reuse_without_rp_binding(void) {
     uv_verified = false;
     expect(zerofido_pin_require_auth(&storage, &state, false, true, client_data_hash, pin_auth,
                                      ZF_PIN_AUTH_LEN, true, 1, "other.example",
-                                     ZF_PIN_PERMISSION_GA,
-                                     &uv_verified) == ZF_CTAP_SUCCESS,
+                                     ZF_PIN_PERMISSION_GA, &uv_verified) == ZF_CTAP_SUCCESS,
            "CTAP 2.0 legacy token should remain reusable for another RP");
     expect(uv_verified, "successful legacy token reuse should set UV");
 }
@@ -5515,7 +5498,8 @@ static size_t encode_make_credential_ctap_request_with_attestation_formats(
                zf_cbor_encode_map(&enc, 2) && zf_cbor_encode_text(&enc, "alg") &&
                zf_cbor_encode_int(&enc, -7) && zf_cbor_encode_text(&enc, "type") &&
                zf_cbor_encode_text(&enc, "public-key") && zf_cbor_encode_uint(&enc, 11) &&
-               zf_cbor_encode_array(&enc, formats_count) && zf_cbor_encode_text(&enc, first_format) &&
+               zf_cbor_encode_array(&enc, formats_count) &&
+               zf_cbor_encode_text(&enc, first_format) &&
                (!second_format || zf_cbor_encode_text(&enc, second_format)),
            "encode CTAP makeCredential request with attestation preference");
     return zf_cbor_encoder_size(&enc) + 1;
@@ -6196,8 +6180,7 @@ static void test_make_credential_unknown_option_succeeds(void) {
         response, sizeof(response));
 
     expect(response_len > 1, "makeCredential with unknown option should still succeed");
-    expect(response[0] == ZF_CTAP_SUCCESS,
-           "makeCredential should ignore unknown true options");
+    expect(response[0] == ZF_CTAP_SUCCESS, "makeCredential should ignore unknown true options");
 }
 
 static void test_make_credential_returns_packed_attestation(void) {
@@ -6267,11 +6250,11 @@ static void test_make_credential_attestation_preference_overrides_runtime_defaul
     app.ui_mutex = &ui_mutex;
     test_enable_auto_accept_requests(&app);
 
-    response_len = zerofido_handle_ctap2(
-        &app, 0x01020304, request,
-        encode_make_credential_ctap_request_with_attestation_formats(request, sizeof(request),
-                                                                     "none", NULL),
-        response, sizeof(response));
+    response_len =
+        zerofido_handle_ctap2(&app, 0x01020304, request,
+                              encode_make_credential_ctap_request_with_attestation_formats(
+                                  request, sizeof(request), "none", NULL),
+                              response, sizeof(response));
 
     expect(response_len > 1, "none attestation preference should return a CTAP response body");
     expect(response[0] == ZF_CTAP_SUCCESS, "none attestation preference should return success");
@@ -6296,11 +6279,11 @@ static void test_make_credential_attestation_preference_uses_lowest_supported_in
     app.runtime_config.attestation_mode = ZfAttestationModeNone;
     zf_runtime_config_resolve_capabilities(&app.runtime_config, &app.capabilities);
 
-    response_len = zerofido_handle_ctap2(
-        &app, 0x01020304, request,
-        encode_make_credential_ctap_request_with_attestation_formats(request, sizeof(request),
-                                                                     "packed", "none"),
-        response, sizeof(response));
+    response_len =
+        zerofido_handle_ctap2(&app, 0x01020304, request,
+                              encode_make_credential_ctap_request_with_attestation_formats(
+                                  request, sizeof(request), "packed", "none"),
+                              response, sizeof(response));
 
     expect(response_len > 1, "packed-first attestation preference should return a CTAP body");
     expect(response[0] == ZF_CTAP_SUCCESS, "packed-first attestation preference should succeed");
@@ -6325,15 +6308,13 @@ static void test_make_credential_response_does_not_downgrade_required_packed(voi
     g_attestation_ensure_ready = false;
     expect(zf_ctap_build_packed_make_credential_response_with_scratch(
                &scratch, record.rp_id, &record, client_data_hash, false, false, false, response,
-               sizeof(response), &response_len) ==
-               ZF_CTAP_ERR_OTHER,
+               sizeof(response), &response_len) == ZF_CTAP_ERR_OTHER,
            "required packed attestation should fail when assets are unavailable");
 
     response_len = 0;
     expect(zf_ctap_build_none_make_credential_response_with_scratch(
                &scratch, record.rp_id, &record, false, false, false, response, sizeof(response),
-               &response_len) ==
-               ZF_CTAP_SUCCESS,
+               &response_len) == ZF_CTAP_SUCCESS,
            "explicit none attestation should remain available");
     expect(parse_make_credential_none_attestation(response, response_len),
            "explicit none attestation should encode fmt none with empty attStmt");
@@ -6864,15 +6845,17 @@ static void test_get_assertion_hmac_secret_builds_protocol1_output(void) {
 
     request.assertion.has_hmac_secret = true;
     request.assertion.hmac_secret_pin_protocol = ZF_PIN_PROTOCOL_V1;
-    memset(request.assertion.hmac_secret_platform_x, 0x11, sizeof(request.assertion.hmac_secret_platform_x));
-    memset(request.assertion.hmac_secret_platform_y, 0x22, sizeof(request.assertion.hmac_secret_platform_y));
+    memset(request.assertion.hmac_secret_platform_x, 0x11,
+           sizeof(request.assertion.hmac_secret_platform_x));
+    memset(request.assertion.hmac_secret_platform_y, 0x22,
+           sizeof(request.assertion.hmac_secret_platform_y));
     for (size_t i = 0; i < 32U; ++i) {
         request.assertion.hmac_secret_salt_enc[i] = (uint8_t)i;
     }
     request.assertion.hmac_secret_salt_enc_len = 32U;
     expect(zf_crypto_hmac_sha256((const uint8_t[32]){[0 ... 31] = 0xAB}, 32,
-                                 request.assertion.hmac_secret_salt_enc, request.assertion.hmac_secret_salt_enc_len,
-                                 expected_salt_auth),
+                                 request.assertion.hmac_secret_salt_enc,
+                                 request.assertion.hmac_secret_salt_enc_len, expected_salt_auth),
            "compute host hmac-secret saltAuth");
     memcpy(request.assertion.hmac_secret_salt_auth, expected_salt_auth, ZF_PIN_AUTH_LEN);
     request.assertion.hmac_secret_salt_auth_len = ZF_PIN_AUTH_LEN;
@@ -6883,16 +6866,17 @@ static void test_get_assertion_hmac_secret_builds_protocol1_output(void) {
     expect(zf_crypto_generate_key_agreement_key(&pin_state.key_agreement),
            "generate hmac-secret key agreement");
 
-    expect(zf_ctap_hmac_secret_build_extension(&pin_state, &request.assertion, &record, false, &scratch,
-                                               extension, sizeof(extension), &extension_len) ==
-               ZF_CTAP_SUCCESS,
+    expect(zf_ctap_hmac_secret_build_extension(&pin_state, &request.assertion, &record, false,
+                                               &scratch, extension, sizeof(extension),
+                                               &extension_len) == ZF_CTAP_SUCCESS,
            "hmac-secret assertion extension should build");
     expect(parse_hmac_secret_extension_output(extension, extension_len, &hmac_secret_enc,
                                               &hmac_secret_enc_len),
            "hmac-secret assertion extension should parse");
     expect(hmac_secret_enc_len == sizeof(expected_output),
            "protocol 1 hmac-secret output should contain one encrypted HMAC");
-    expect(zf_crypto_hmac_sha256(record.hmac_secret_without_uv, sizeof(record.hmac_secret_without_uv),
+    expect(zf_crypto_hmac_sha256(record.hmac_secret_without_uv,
+                                 sizeof(record.hmac_secret_without_uv),
                                  request.assertion.hmac_secret_salt_enc, 32U, expected_output),
            "compute expected hmac-secret output");
     expect(memcmp(hmac_secret_enc, expected_output, sizeof(expected_output)) == 0,
@@ -6917,15 +6901,17 @@ static void test_assertion_response_preserves_scratch_hmac_secret_extension(void
     memset(request.assertion.client_data_hash, 0xA5, sizeof(request.assertion.client_data_hash));
     request.assertion.has_hmac_secret = true;
     request.assertion.hmac_secret_pin_protocol = ZF_PIN_PROTOCOL_V1;
-    memset(request.assertion.hmac_secret_platform_x, 0x11, sizeof(request.assertion.hmac_secret_platform_x));
-    memset(request.assertion.hmac_secret_platform_y, 0x22, sizeof(request.assertion.hmac_secret_platform_y));
+    memset(request.assertion.hmac_secret_platform_x, 0x11,
+           sizeof(request.assertion.hmac_secret_platform_x));
+    memset(request.assertion.hmac_secret_platform_y, 0x22,
+           sizeof(request.assertion.hmac_secret_platform_y));
     for (size_t i = 0; i < 32U; ++i) {
         request.assertion.hmac_secret_salt_enc[i] = (uint8_t)i;
     }
     request.assertion.hmac_secret_salt_enc_len = 32U;
     expect(zf_crypto_hmac_sha256((const uint8_t[32]){[0 ... 31] = 0xAB}, 32,
-                                 request.assertion.hmac_secret_salt_enc, request.assertion.hmac_secret_salt_enc_len,
-                                 expected_salt_auth),
+                                 request.assertion.hmac_secret_salt_enc,
+                                 request.assertion.hmac_secret_salt_enc_len, expected_salt_auth),
            "compute response hmac-secret saltAuth");
     memcpy(request.assertion.hmac_secret_salt_auth, expected_salt_auth, ZF_PIN_AUTH_LEN);
     request.assertion.hmac_secret_salt_auth_len = ZF_PIN_AUTH_LEN;
@@ -6946,16 +6932,17 @@ static void test_assertion_response_preserves_scratch_hmac_secret_extension(void
                &extension_len) == ZF_CTAP_SUCCESS,
            "hmac-secret extension should build into assertion scratch");
     expect(zf_ctap_build_assertion_response_with_scratch(
-               &response_scratch, &request.assertion, &record, true, false, 7, false, false, 1, false, false,
-               response_scratch.extension_data, extension_len, response, sizeof(response),
-               &response_len) == ZF_CTAP_SUCCESS,
+               &response_scratch, &request.assertion, &record, true, false, 7, false, false, 1,
+               false, false, response_scratch.extension_data, extension_len, response,
+               sizeof(response), &response_len) == ZF_CTAP_SUCCESS,
            "assertion response should build with scratch-owned hmac-secret extension");
     expect(parse_assertion_response_hmac_secret_output(response, response_len, &hmac_secret_enc,
                                                        &hmac_secret_enc_len),
            "assertion response should retain hmac-secret extension in authData");
     expect(hmac_secret_enc_len == sizeof(expected_output),
            "assertion hmac-secret output should contain one encrypted HMAC");
-    expect(zf_crypto_hmac_sha256(record.hmac_secret_without_uv, sizeof(record.hmac_secret_without_uv),
+    expect(zf_crypto_hmac_sha256(record.hmac_secret_without_uv,
+                                 sizeof(record.hmac_secret_without_uv),
                                  request.assertion.hmac_secret_salt_enc, 32U, expected_output),
            "compute expected response hmac-secret output");
     expect(memcmp(hmac_secret_enc, expected_output, sizeof(expected_output)) == 0,
@@ -7074,13 +7061,12 @@ static void test_make_credential_exclude_list_reveals_uv_required_credential_wit
     app.store.records[0] = record;
     app.store.count = 1;
 
-    response_len =
-        zerofido_handle_ctap2(&app, 0x01020304, request,
-                              encode_make_credential_ctap_request_with_pin_auth(
-                                  request, sizeof(request), false, false, true, pin_auth,
-                                  ZF_PIN_AUTH_LEN, true, true, record.credential_id,
-                                  record.credential_id_len),
-                              response, sizeof(response));
+    response_len = zerofido_handle_ctap2(&app, 0x01020304, request,
+                                         encode_make_credential_ctap_request_with_pin_auth(
+                                             request, sizeof(request), false, false, true, pin_auth,
+                                             ZF_PIN_AUTH_LEN, true, true, record.credential_id,
+                                             record.credential_id_len),
+                                         response, sizeof(response));
 
     expect(response_len == 1,
            "uv-required excludeList hit with UV should return only a CTAP status byte");
@@ -7146,7 +7132,7 @@ static void test_get_assertion_invalid_allow_list_waits_for_approval_before_no_c
 }
 
 static void run_get_assertion_multi_match_uses_account_selection(bool enable_fido2_1,
-                                                                bool expect_user_selected_key) {
+                                                                 bool expect_user_selected_key) {
     Storage storage = {0};
     ZerofidoApp app = {0};
     ZfCredentialIndexEntry app_store_records[ZF_MAX_CREDENTIALS] = {0};
@@ -7258,8 +7244,8 @@ static void test_get_assertion_up_false_multi_match_stays_silent(void) {
 
     response_len = zerofido_handle_ctap2(
         &app, 0x01020304, request,
-        encode_get_assertion_ctap_request_with_up(request, sizeof(request), false),
-        response, sizeof(response));
+        encode_get_assertion_ctap_request_with_up(request, sizeof(request), false), response,
+        sizeof(response));
 
     expect(response_len > 1, "silent multi-match GetAssertion should return an assertion");
     expect(response[0] == ZF_CTAP_SUCCESS, "silent multi-match GetAssertion should succeed");
@@ -7500,8 +7486,8 @@ static void test_get_next_assertion_rejects_wrong_cid(void) {
     app.assertion_queue.index = 1;
     app.assertion_queue.expires_at = g_fake_tick + ZF_ASSERTION_QUEUE_TIMEOUT_MS;
     strcpy(app.assertion_queue.request.rp_id, "example.com");
-    memcpy(app.assertion_queue.request.client_data_hash, (const uint8_t[ZF_CLIENT_DATA_HASH_LEN]){0x5A},
-           ZF_CLIENT_DATA_HASH_LEN);
+    memcpy(app.assertion_queue.request.client_data_hash,
+           (const uint8_t[ZF_CLIENT_DATA_HASH_LEN]){0x5A}, ZF_CLIENT_DATA_HASH_LEN);
     app.assertion_queue.record_indices[0] = 0;
     app.assertion_queue.record_indices[1] = 1;
 
@@ -7539,8 +7525,8 @@ static void test_get_next_assertion_refreshes_queue_expiry(void) {
     app.assertion_queue.index = 1;
     app.assertion_queue.expires_at = g_fake_tick + 50;
     strcpy(app.assertion_queue.request.rp_id, "example.com");
-    memcpy(app.assertion_queue.request.client_data_hash, (const uint8_t[ZF_CLIENT_DATA_HASH_LEN]){0x6B},
-           ZF_CLIENT_DATA_HASH_LEN);
+    memcpy(app.assertion_queue.request.client_data_hash,
+           (const uint8_t[ZF_CLIENT_DATA_HASH_LEN]){0x6B}, ZF_CLIENT_DATA_HASH_LEN);
     for (size_t i = 0; i < app.store.count; ++i) {
         app.assertion_queue.record_indices[i] = (uint16_t)i;
     }
@@ -7603,8 +7589,8 @@ static void test_get_next_assertion_rejects_expired_queue(void) {
     app.assertion_queue.index = 1;
     app.assertion_queue.expires_at = g_fake_tick - 1;
     strcpy(app.assertion_queue.request.rp_id, "example.com");
-    memcpy(app.assertion_queue.request.client_data_hash, (const uint8_t[ZF_CLIENT_DATA_HASH_LEN]){0x6C},
-           ZF_CLIENT_DATA_HASH_LEN);
+    memcpy(app.assertion_queue.request.client_data_hash,
+           (const uint8_t[ZF_CLIENT_DATA_HASH_LEN]){0x6C}, ZF_CLIENT_DATA_HASH_LEN);
     app.assertion_queue.record_indices[0] = 0;
     app.assertion_queue.record_indices[1] = 1;
 
@@ -7641,8 +7627,8 @@ static void test_get_next_assertion_clears_final_queue_state(void) {
     app.assertion_queue.index = 1;
     app.assertion_queue.expires_at = g_fake_tick + ZF_ASSERTION_QUEUE_TIMEOUT_MS;
     strcpy(app.assertion_queue.request.rp_id, "example.com");
-    memcpy(app.assertion_queue.request.client_data_hash, (const uint8_t[ZF_CLIENT_DATA_HASH_LEN]){0x6D},
-           ZF_CLIENT_DATA_HASH_LEN);
+    memcpy(app.assertion_queue.request.client_data_hash,
+           (const uint8_t[ZF_CLIENT_DATA_HASH_LEN]){0x6D}, ZF_CLIENT_DATA_HASH_LEN);
     app.assertion_queue.record_indices[0] = 0;
     app.assertion_queue.record_indices[1] = 1;
 
@@ -7680,8 +7666,8 @@ static void test_get_next_assertion_missing_record_clears_queue(void) {
     app.assertion_queue.index = 1;
     app.assertion_queue.expires_at = g_fake_tick + ZF_ASSERTION_QUEUE_TIMEOUT_MS;
     strcpy(app.assertion_queue.request.rp_id, "example.com");
-    memcpy(app.assertion_queue.request.client_data_hash, (const uint8_t[ZF_CLIENT_DATA_HASH_LEN]){0x6E},
-           ZF_CLIENT_DATA_HASH_LEN);
+    memcpy(app.assertion_queue.request.client_data_hash,
+           (const uint8_t[ZF_CLIENT_DATA_HASH_LEN]){0x6E}, ZF_CLIENT_DATA_HASH_LEN);
     app.assertion_queue.record_indices[0] = 0;
     app.assertion_queue.record_indices[1] = 99;
 
@@ -7719,8 +7705,8 @@ static void test_get_next_assertion_rejects_trailing_payload(void) {
     app.assertion_queue.index = 1;
     app.assertion_queue.expires_at = g_fake_tick + ZF_ASSERTION_QUEUE_TIMEOUT_MS;
     strcpy(app.assertion_queue.request.rp_id, "example.com");
-    memcpy(app.assertion_queue.request.client_data_hash, (const uint8_t[ZF_CLIENT_DATA_HASH_LEN]){0x7C},
-           ZF_CLIENT_DATA_HASH_LEN);
+    memcpy(app.assertion_queue.request.client_data_hash,
+           (const uint8_t[ZF_CLIENT_DATA_HASH_LEN]){0x7C}, ZF_CLIENT_DATA_HASH_LEN);
     app.assertion_queue.record_indices[0] = 0;
     app.assertion_queue.record_indices[1] = 1;
 
@@ -7774,8 +7760,7 @@ static void test_get_info_success_updates_status_banner(void) {
     expect(response[0] == ZF_CTAP_SUCCESS, "GetInfo should succeed");
     expect(test_log_contains("cmd=GI status=OK"),
            "successful GetInfo should emit a serial diagnostic");
-    expect(g_status_update_count == 0,
-           "successful GetInfo diagnostic should not update UI status");
+    expect(g_status_update_count == 0, "successful GetInfo diagnostic should not update UI status");
 }
 
 static void test_get_info_advertises_cred_protect_extension(void) {
@@ -7830,9 +7815,9 @@ static void test_get_info_advertises_fido_2_0_without_fido_2_1(void) {
            "GetInfo should advertise FIDO_2_0");
     expect(!get_info_has_version(response + 1, response_len - 1, "FIDO_2_1"),
            "CTAP 2.0 profile should not advertise FIDO_2_1");
-    expect(!get_info_option_bool(response + 1, response_len - 1, "pinUvAuthToken",
-                                 &pin_uv_auth_token),
-           "CTAP 2.0 profile should not advertise pinUvAuthToken");
+    expect(
+        !get_info_option_bool(response + 1, response_len - 1, "pinUvAuthToken", &pin_uv_auth_token),
+        "CTAP 2.0 profile should not advertise pinUvAuthToken");
     expect(get_info_has_pin_uv_auth_protocol(response + 1, response_len - 1, 1),
            "CTAP 2.0 profile should advertise PIN/UV auth protocol 1");
     expect(!get_info_has_pin_uv_auth_protocol(response + 1, response_len - 1, 2),
@@ -8130,8 +8115,7 @@ static void test_selection_touch_succeeds_and_updates_status_banner(void) {
     expect(response_len == 1, "Selection should return status only");
     expect(response[0] == ZF_CTAP_SUCCESS, "Selection should succeed after approval");
     expect(g_approval_request_count == 1, "Selection should request touch approval");
-    expect(test_log_contains("cmd=SEL status=OK"),
-           "Selection should emit a serial diagnostic");
+    expect(test_log_contains("cmd=SEL status=OK"), "Selection should emit a serial diagnostic");
     expect(g_status_update_count == 0, "Selection diagnostic should not update UI status");
 }
 
@@ -8397,8 +8381,8 @@ static void test_get_next_assertion_polls_control_without_holding_ui_mutex(void)
     app.assertion_queue.index = 1;
     app.assertion_queue.expires_at = g_fake_tick + ZF_ASSERTION_QUEUE_TIMEOUT_MS;
     strcpy(app.assertion_queue.request.rp_id, "example.com");
-    memcpy(app.assertion_queue.request.client_data_hash, (const uint8_t[ZF_CLIENT_DATA_HASH_LEN]){0x7D},
-           ZF_CLIENT_DATA_HASH_LEN);
+    memcpy(app.assertion_queue.request.client_data_hash,
+           (const uint8_t[ZF_CLIENT_DATA_HASH_LEN]){0x7D}, ZF_CLIENT_DATA_HASH_LEN);
     app.assertion_queue.record_indices[0] = 0;
     app.assertion_queue.record_indices[1] = 1;
     g_transport_poll_requires_unlocked = true;

@@ -50,8 +50,7 @@ static ZfNfcReaderProfile zf_transport_nfc_default_reader_profile(ZfNfcReaderPro
     return profile;
 }
 
-void zf_transport_nfc_set_reader_profile(ZfNfcTransportState *state,
-                                         ZfNfcReaderProfileKind kind) {
+void zf_transport_nfc_set_reader_profile(ZfNfcTransportState *state, ZfNfcReaderProfileKind kind) {
     if (!state) {
         return;
     }
@@ -71,10 +70,9 @@ static void zf_transport_nfc_ensure_reader_profile(ZfNfcTransportState *state) {
 static void zf_transport_nfc_trace_cache_state(const char *event, const ZfNfcTransportState *state,
                                                uint8_t pcb, size_t data_len) {
     zf_transport_nfc_trace_format(
-        "iso-cache %s pcb=%02X len=%u valid=%u cached=%u frame=%u", event, pcb,
-        (unsigned)data_len, state && state->iso4_last_tx_valid ? 1U : 0U,
-        state ? (unsigned)state->iso4_last_tx_len : 0U,
-        state ? (unsigned)state->tx_frame_len : 0U);
+        "iso-cache %s pcb=%02X len=%u valid=%u cached=%u frame=%u", event, pcb, (unsigned)data_len,
+        state && state->iso4_last_tx_valid ? 1U : 0U,
+        state ? (unsigned)state->iso4_last_tx_len : 0U, state ? (unsigned)state->tx_frame_len : 0U);
 }
 #else
 static void zf_transport_nfc_trace_cache_state(const char *event, const ZfNfcTransportState *state,
@@ -285,8 +283,7 @@ bool zf_transport_nfc_send_wtx(ZfNfcTransportState *state) {
         return false;
     }
 
-    frame[frame_len++] =
-        (uint8_t)(0xF2U | (state->iso_cid_present ? ZF_NFC_PCB_CID : 0U));
+    frame[frame_len++] = (uint8_t)(0xF2U | (state->iso_cid_present ? ZF_NFC_PCB_CID : 0U));
     if (state->iso_cid_present) {
         frame[frame_len++] = state->iso_cid;
     }
@@ -348,8 +345,8 @@ void zf_transport_nfc_clear_tx_chain(ZfNfcTransportState *state) {
     state->iso4_tx_chain_status_word = 0U;
 }
 
-static void zf_transport_nfc_build_tx_chain_chunk(const ZfNfcTransportState *state,
-                                                  uint8_t *chunk, size_t chunk_len) {
+static void zf_transport_nfc_build_tx_chain_chunk(const ZfNfcTransportState *state, uint8_t *chunk,
+                                                  size_t chunk_len) {
     const size_t payload_len = state->iso4_tx_chain_len - 2U;
     size_t absolute_offset = state->iso4_tx_chain_offset;
 
@@ -376,12 +373,12 @@ bool zf_transport_nfc_send_next_tx_chain_block(ZfNfcTransportState *state) {
         state->iso4_tx_chain_offset >= state->iso4_tx_chain_len ||
         (!state->iso4_tx_chain_data && state->iso4_tx_chain_len > 2U)) {
 #if defined(ZF_RELEASE_DIAGNOSTICS) && ZF_RELEASE_DIAGNOSTICS
-        zf_transport_nfc_trace_format(
-            "tx-chain invalid active=%u len=%u off=%u data=%u arena=%u",
-            state && state->iso4_tx_chain_active ? 1U : 0U,
-            state ? (unsigned)state->iso4_tx_chain_len : 0U,
-            state ? (unsigned)state->iso4_tx_chain_offset : 0U,
-            state && state->iso4_tx_chain_data ? 1U : 0U, (unsigned)ZF_TRANSPORT_ARENA_SIZE);
+        zf_transport_nfc_trace_format("tx-chain invalid active=%u len=%u off=%u data=%u arena=%u",
+                                      state && state->iso4_tx_chain_active ? 1U : 0U,
+                                      state ? (unsigned)state->iso4_tx_chain_len : 0U,
+                                      state ? (unsigned)state->iso4_tx_chain_offset : 0U,
+                                      state && state->iso4_tx_chain_data ? 1U : 0U,
+                                      (unsigned)ZF_TRANSPORT_ARENA_SIZE);
 #endif
         return false;
     }
@@ -394,8 +391,7 @@ bool zf_transport_nfc_send_next_tx_chain_block(ZfNfcTransportState *state) {
     if (!sent) {
 #if defined(ZF_RELEASE_DIAGNOSTICS) && ZF_RELEASE_DIAGNOSTICS
         zf_transport_nfc_trace_format("tx-chain send fail len=%u rem=%u chain=%u",
-                                      (unsigned)chunk_len, (unsigned)remaining,
-                                      chaining ? 1U : 0U);
+                                      (unsigned)chunk_len, (unsigned)remaining, chaining ? 1U : 0U);
 #endif
         return false;
     }

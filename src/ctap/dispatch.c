@@ -40,10 +40,10 @@
 #if defined(ZF_RELEASE_DIAGNOSTICS) && ZF_RELEASE_DIAGNOSTICS
 #define ZF_CTAP_ROUTE_DIAG(text) FURI_LOG_I("ZeroFIDO:CTAP", "route %s", (text))
 #else
-#define ZF_CTAP_ROUTE_DIAG(text) \
-    do {                         \
-        (void)(text);            \
-    } while(false)
+#define ZF_CTAP_ROUTE_DIAG(text)                                                                   \
+    do {                                                                                           \
+        (void)(text);                                                                              \
+    } while (false)
 #endif
 
 static uint8_t zf_handle_selection(ZerofidoApp *app, ZfTransportSessionId session_id,
@@ -100,9 +100,9 @@ uint8_t zf_ctap_dispatch_command(ZerofidoApp *app, const ZfResolvedCapabilities 
         furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
         zf_ctap_assertion_queue_clear(app);
         furi_mutex_release(app->ui_mutex);
-        status = zerofido_pin_handle_command_with_session(app, session_id, request_body,
-                                                          request_body_len, response_body,
-                                                          response_body_capacity, response_body_len);
+        status = zerofido_pin_handle_command_with_session(
+            app, session_id, request_body, request_body_len, response_body, response_body_capacity,
+            response_body_len);
         zf_ctap_end_maintenance(app);
         break;
     case ZfCtapeCmdReset:
@@ -128,9 +128,9 @@ uint8_t zf_ctap_dispatch_command(ZerofidoApp *app, const ZfResolvedCapabilities 
             break;
         }
         ZF_CTAP_ROUTE_DIAG("GA call");
-        status = zf_ctap_handle_get_assertion(app, session_id, request_body, request_body_len,
-                                              response_body, response_body_capacity,
-                                              response_body_len);
+        status =
+            zf_ctap_handle_get_assertion(app, session_id, request_body, request_body_len,
+                                         response_body, response_body_capacity, response_body_len);
         break;
     case ZfCtapeCmdGetNextAssertion:
         status = zf_ctap_dispatch_require_idle(app);

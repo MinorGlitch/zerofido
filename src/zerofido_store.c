@@ -264,7 +264,8 @@ bool zf_store_prepare_credential(ZfCredentialRecord *record, const char *rp_id,
     record->resident_key = resident_key;
     record->cred_protect = ZF_CRED_PROTECT_UV_OPTIONAL;
     record->hmac_secret = true;
-    furi_hal_random_fill_buf(record->hmac_secret_without_uv, sizeof(record->hmac_secret_without_uv));
+    furi_hal_random_fill_buf(record->hmac_secret_without_uv,
+                             sizeof(record->hmac_secret_without_uv));
     furi_hal_random_fill_buf(record->hmac_secret_with_uv, sizeof(record->hmac_secret_with_uv));
     record->in_use = true;
     return true;
@@ -277,8 +278,8 @@ bool zf_store_prepare_credential(ZfCredentialRecord *record, const char *rp_id,
 bool zf_store_add_record_with_buffer(Storage *storage, ZfCredentialStore *store,
                                      const ZfCredentialRecord *record, uint8_t *buffer,
                                      size_t buffer_size) {
-    if (!store || !record || !buffer ||
-        buffer_size < ZF_STORE_RECORD_IO_SIZE || store->count >= ZF_MAX_CREDENTIALS) {
+    if (!store || !record || !buffer || buffer_size < ZF_STORE_RECORD_IO_SIZE ||
+        store->count >= ZF_MAX_CREDENTIALS) {
         return false;
     }
     if (!zf_store_ensure_capacity(store, store->count + 1U)) {
@@ -330,8 +331,7 @@ bool zf_store_publish_added_record(ZfCredentialStore *store, const ZfCredentialR
 bool zf_store_update_record_with_buffer(Storage *storage, ZfCredentialStore *store,
                                         const ZfCredentialRecord *record, uint8_t *buffer,
                                         size_t buffer_size) {
-    if (!store || !store->records || !record || !buffer ||
-        buffer_size < ZF_STORE_RECORD_IO_SIZE) {
+    if (!store || !store->records || !record || !buffer || buffer_size < ZF_STORE_RECORD_IO_SIZE) {
         return false;
     }
 
@@ -408,15 +408,15 @@ static bool zf_store_load_record_internal_with_buffer(Storage *storage,
 bool zf_store_load_record_with_buffer(Storage *storage, const ZfCredentialIndexEntry *entry,
                                       ZfCredentialRecord *out_record, uint8_t *buffer,
                                       size_t buffer_size) {
-    return zf_store_load_record_internal_with_buffer(storage, entry, out_record, buffer,
-                                                     buffer_size,
-                                                     zf_store_record_format_load_record_with_buffer);
+    return zf_store_load_record_internal_with_buffer(
+        storage, entry, out_record, buffer, buffer_size,
+        zf_store_record_format_load_record_with_buffer);
 }
 
 bool zf_store_load_record_for_display_with_buffer(Storage *storage,
                                                   const ZfCredentialIndexEntry *entry,
-                                                  ZfCredentialRecord *out_record,
-                                                  uint8_t *buffer, size_t buffer_size) {
+                                                  ZfCredentialRecord *out_record, uint8_t *buffer,
+                                                  size_t buffer_size) {
     return zf_store_load_record_internal_with_buffer(
         storage, entry, out_record, buffer, buffer_size,
         zf_store_record_format_load_record_for_display_with_buffer);
@@ -442,9 +442,8 @@ bool zf_store_load_record_by_index_for_rp_with_buffer(Storage *storage,
                                                       const char *rp_id,
                                                       ZfCredentialRecord *out_record,
                                                       uint8_t *buffer, size_t buffer_size) {
-    if (!rp_id ||
-        !zf_store_load_record_by_index_with_buffer(storage, store, index, out_record, buffer,
-                                                   buffer_size)) {
+    if (!rp_id || !zf_store_load_record_by_index_with_buffer(storage, store, index, out_record,
+                                                             buffer, buffer_size)) {
         return false;
     }
     if (strcmp(out_record->rp_id, rp_id) != 0) {
@@ -525,19 +524,14 @@ bool zf_store_publish_counter_advance(ZfCredentialStore *store, const ZfCredenti
     return false;
 }
 
-bool zf_store_delete_resident_credentials_for_user_with_buffer(Storage *storage,
-                                                              ZfCredentialStore *store,
-                                                              const char *rp_id,
-                                                              const uint8_t *user_id,
-                                                              size_t user_id_len,
-                                                              size_t *deleted_count,
-                                                              uint8_t *buffer, size_t buffer_size) {
+bool zf_store_delete_resident_credentials_for_user_with_buffer(
+    Storage *storage, ZfCredentialStore *store, const char *rp_id, const uint8_t *user_id,
+    size_t user_id_len, size_t *deleted_count, uint8_t *buffer, size_t buffer_size) {
     size_t removed = 0;
     ZfCredentialRecord record;
     ZfStoreRpMatcher matcher;
 
-    if (!store || !store->records || !rp_id || !buffer ||
-        buffer_size < ZF_STORE_RECORD_IO_SIZE) {
+    if (!store || !store->records || !rp_id || !buffer || buffer_size < ZF_STORE_RECORD_IO_SIZE) {
         if (deleted_count) {
             *deleted_count = 0;
         }
@@ -552,8 +546,7 @@ bool zf_store_delete_resident_credentials_for_user_with_buffer(Storage *storage,
         if (!entry->in_use || !entry->resident_key ||
             !zf_store_index_entry_rp_hash_matches(entry, &matcher) ||
             !zf_store_load_record_with_buffer(storage, entry, &record, buffer, buffer_size) ||
-            strcmp(record.rp_id, rp_id) != 0 ||
-            record.user_id_len != user_id_len ||
+            strcmp(record.rp_id, rp_id) != 0 || record.user_id_len != user_id_len ||
             memcmp(record.user_id, user_id, user_id_len) != 0) {
             ++i;
             continue;
@@ -584,8 +577,8 @@ bool zf_store_remove_resident_credential_files_for_user_with_buffer(
     size_t found_count = 0;
 
     if (!zf_store_find_resident_credential_indices_for_user_with_buffer(
-            storage, store, rp_id, user_id, user_id_len, deleted_indices, max_deleted,
-            &found_count, buffer, buffer_size)) {
+            storage, store, rp_id, user_id, user_id_len, deleted_indices, max_deleted, &found_count,
+            buffer, buffer_size)) {
         if (deleted_count) {
             *deleted_count = found_count;
         }
@@ -655,8 +648,7 @@ bool zf_store_find_resident_credential_indices_for_user_with_buffer(
  */
 bool zf_store_remove_credential_files_by_indices(Storage *storage, const ZfCredentialStore *store,
                                                  const uint16_t *deleted_indices,
-                                                 size_t deleted_count,
-                                                 size_t *removed_count) {
+                                                 size_t deleted_count, size_t *removed_count) {
     size_t removed = 0;
 
     if (removed_count) {
@@ -849,8 +841,7 @@ size_t zf_store_find_by_rp_filtered(Storage *storage, const ZfCredentialStore *s
  * string, not only the index hash.
  */
 bool zf_store_has_matching_credential_with_buffer(Storage *storage, const ZfCredentialStore *store,
-                                                  const char *rp_id,
-                                                  ZfStoreCredentialFilter filter,
+                                                  const char *rp_id, ZfStoreCredentialFilter filter,
                                                   const void *filter_context, uint8_t *buffer,
                                                   size_t buffer_size) {
     ZfStoreRpMatcher matcher;

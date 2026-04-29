@@ -48,8 +48,7 @@ static bool zf_store_recovery_cleanup_visitor(const char *name, const FileInfo *
         }
         memcpy(file_name, name, base_len);
         file_name[base_len] = '\0';
-        if (!zf_storage_build_child_path(ZF_APP_DATA_DIR, name, backup_path,
-                                         sizeof(backup_path)) ||
+        if (!zf_storage_build_child_path(ZF_APP_DATA_DIR, name, backup_path, sizeof(backup_path)) ||
             !zf_storage_build_child_path(ZF_APP_DATA_DIR, file_name, record_path,
                                          sizeof(record_path))) {
             return false;
@@ -72,8 +71,8 @@ void zf_store_recovery_cleanup_temp_files(Storage *storage) {
     char path[128];
     ZfStoreRecoveryCleanupContext context = {.storage = storage};
 
-    zf_storage_remove_dir_entries_with_suffix(storage, ZF_APP_DATA_DIR, ".tmp", name,
-                                              sizeof(name), path, sizeof(path));
+    zf_storage_remove_dir_entries_with_suffix(storage, ZF_APP_DATA_DIR, ".tmp", name, sizeof(name),
+                                              path, sizeof(path));
     zf_storage_for_each_dir_entry(storage, ZF_APP_DATA_DIR, name, sizeof(name),
                                   zf_store_recovery_cleanup_visitor, &context);
 }

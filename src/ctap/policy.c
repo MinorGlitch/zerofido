@@ -98,8 +98,8 @@ bool zf_ctap_exclude_list_has_visible_match(Storage *storage, const ZfCredential
     }
 
     match_count = zf_store_find_by_rp_filtered(storage, store, rp_id,
-                                              zf_ctap_store_entry_matches_descriptor_list,
-                                              exclude_list, matches, ZF_MAX_CREDENTIALS);
+                                               zf_ctap_store_entry_matches_descriptor_list,
+                                               exclude_list, matches, ZF_MAX_CREDENTIALS);
     for (size_t i = 0; i < match_count; ++i) {
         const ZfCredentialIndexEntry *entry = &store->records[matches[i]];
 
@@ -159,9 +159,8 @@ size_t zf_ctap_resolve_assertion_matches(Storage *storage, ZfCredentialStore *st
             storage, store, request->assertion.rp_id, zf_ctap_store_entry_matches_descriptor_list,
             &request->allow_list, resolved, ZF_MAX_CREDENTIALS);
     } else {
-        resolved_count =
-            zf_store_find_by_rp(storage, store, request->assertion.rp_id, resolved,
-                                ZF_MAX_CREDENTIALS);
+        resolved_count = zf_store_find_by_rp(storage, store, request->assertion.rp_id, resolved,
+                                             ZF_MAX_CREDENTIALS);
     }
 
     for (size_t i = 0; i < resolved_count; ++i) {

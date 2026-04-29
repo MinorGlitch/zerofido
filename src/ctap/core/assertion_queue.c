@@ -221,8 +221,7 @@ uint8_t zf_ctap_assertion_queue_handle_next(ZerofidoApp *app, ZfTransportSession
     furi_mutex_release(app->ui_mutex);
 
     if (!zf_store_load_record_with_buffer(app->storage, &scratch->entry, &scratch->record,
-                                          scratch->work.store_io,
-                                          sizeof(scratch->work.store_io)) ||
+                                          scratch->work.store_io, sizeof(scratch->work.store_io)) ||
         strcmp(scratch->record.rp_id, scratch->request.rp_id) != 0 ||
         !zf_ctap_queue_entry_matches_record(&scratch->entry, &scratch->record)) {
         status = ZF_CTAP_ERR_NOT_ALLOWED;

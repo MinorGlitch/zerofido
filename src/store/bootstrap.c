@@ -104,8 +104,7 @@ typedef struct {
     Storage *storage;
 } ZfStoreBootstrapWipeContext;
 
-static bool zf_store_bootstrap_wipe_visitor(const char *name, const FileInfo *info,
-                                            void *context) {
+static bool zf_store_bootstrap_wipe_visitor(const char *name, const FileInfo *info, void *context) {
     ZfStoreBootstrapWipeContext *wipe_context = context;
     char path[128];
 

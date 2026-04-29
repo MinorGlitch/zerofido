@@ -58,6 +58,5 @@ bool zf_transport_nfc_send_apdu_payload(ZfNfcTransportState *state, const uint8_
 bool zf_transport_nfc_send_apdu_payload_preserving_replay(ZfNfcTransportState *state,
                                                           const uint8_t *data, size_t data_len,
                                                           uint16_t status_word);
-void zf_transport_nfc_set_reader_profile(ZfNfcTransportState *state,
-                                         ZfNfcReaderProfileKind kind);
+void zf_transport_nfc_set_reader_profile(ZfNfcTransportState *state, ZfNfcReaderProfileKind kind);
 void zf_transport_nfc_prepare_listener(ZfNfcTransportState *state);

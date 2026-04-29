@@ -101,9 +101,8 @@ static const char *zf_home_transport_title_label(ZfTransportMode mode) {
     return mode == ZfTransportModeNfc ? "NFC" : "USB";
 }
 
-static bool zf_status_format_record_item(ZfCredentialRecord *record, char *title,
-                                         size_t title_size, char *subtitle,
-                                         size_t subtitle_size) {
+static bool zf_status_format_record_item(ZfCredentialRecord *record, char *title, size_t title_size,
+                                         char *subtitle, size_t subtitle_size) {
     const char *user = NULL;
     const char *website = NULL;
 
@@ -215,14 +214,12 @@ static bool zf_status_refresh_model(ZerofidoApp *app, bool redraw, bool reload_c
     for (size_t i = 0; i < snapshot.visible_count; ++i) {
         bool formatted = false;
 
-        if (scratch &&
-            zf_store_load_record_for_display_with_buffer(app->storage, &entries[i],
-                                                         &scratch->record, scratch->store_io,
-                                                         sizeof(scratch->store_io))) {
-            formatted = zf_status_format_record_item(&scratch->record, snapshot.items[i].title,
-                                                     sizeof(snapshot.items[i].title),
-                                                     snapshot.items[i].subtitle,
-                                                     sizeof(snapshot.items[i].subtitle));
+        if (scratch && zf_store_load_record_for_display_with_buffer(
+                           app->storage, &entries[i], &scratch->record, scratch->store_io,
+                           sizeof(scratch->store_io))) {
+            formatted = zf_status_format_record_item(
+                &scratch->record, snapshot.items[i].title, sizeof(snapshot.items[i].title),
+                snapshot.items[i].subtitle, sizeof(snapshot.items[i].subtitle));
             memset(&scratch->record, 0, sizeof(scratch->record));
         }
 
@@ -238,10 +235,7 @@ static bool zf_status_refresh_model(ZerofidoApp *app, bool redraw, bool reload_c
     }
     zf_app_ui_scratch_release(app);
 
-    with_view_model(
-        app->status_view, ZfStatusModel * model,
-        { *model = snapshot; },
-        redraw);
+    with_view_model(app->status_view, ZfStatusModel * model, { *model = snapshot; }, redraw);
     return true;
 }
 
@@ -287,8 +281,7 @@ static void zf_status_draw_callback(Canvas *canvas, void *model) {
             canvas_set_color(canvas, ColorBlack);
         }
         if (status->item_count > ZF_HOME_VISIBLE_ITEMS) {
-            elements_scrollbar_pos(canvas, 127, 15, 37, status->selected_item,
-                                   status->item_count);
+            elements_scrollbar_pos(canvas, 127, 15, 37, status->selected_item, status->item_count);
         }
     }
     elements_button_left(canvas, "Exit");

@@ -326,8 +326,7 @@ static bool zf_ctap_parse_credential_descriptor(ZfCborCursor *cursor,
                 return false;
             }
             saw_type = true;
-            public_key =
-                zf_ctap_classify_text_key(type_ptr, type_size) == ZfCtapTextKeyPublicKey;
+            public_key = zf_ctap_classify_text_key(type_ptr, type_size) == ZfCtapTextKeyPublicKey;
             continue;
         }
 
@@ -388,8 +387,7 @@ uint8_t zf_ctap_parse_pubkey_cred_params(ZfCborCursor *cursor, bool *es256_suppo
                     return ZF_CTAP_ERR_INVALID_CBOR;
                 }
                 have_type = true;
-                public_key =
-                    zf_ctap_classify_text_key(value, value_size) == ZfCtapTextKeyPublicKey;
+                public_key = zf_ctap_classify_text_key(value, value_size) == ZfCtapTextKeyPublicKey;
                 continue;
             }
 

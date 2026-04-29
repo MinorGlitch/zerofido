@@ -40,12 +40,12 @@ bool zf_pin_protocol_derive_keys(const ZfClientPinState *state, uint64_t pin_pro
                                  const uint8_t platform_y[ZF_PUBLIC_KEY_LEN],
                                  uint8_t keys[ZF_PIN_PROTOCOL_KEYS_LEN]);
 bool zf_pin_protocol_decrypt(uint64_t pin_protocol, uint8_t keys[ZF_PIN_PROTOCOL_KEYS_LEN],
-                             const uint8_t *ciphertext, size_t ciphertext_len,
-                             uint8_t *plaintext, size_t *plaintext_len);
+                             const uint8_t *ciphertext, size_t ciphertext_len, uint8_t *plaintext,
+                             size_t *plaintext_len);
 bool zf_pin_protocol_encrypt(uint64_t pin_protocol, uint8_t keys[ZF_PIN_PROTOCOL_KEYS_LEN],
                              const uint8_t *plaintext, size_t plaintext_len, uint8_t *out,
                              size_t out_capacity, size_t *out_len);
 bool zf_pin_protocol_hmac_matches(ZfHmacSha256Scratch *scratch, uint64_t pin_protocol,
                                   const uint8_t key[32], const uint8_t *first, size_t first_len,
-                                  const uint8_t *second, size_t second_len,
-                                  const uint8_t *expected, size_t expected_len);
+                                  const uint8_t *second, size_t second_len, const uint8_t *expected,
+                                  size_t expected_len);

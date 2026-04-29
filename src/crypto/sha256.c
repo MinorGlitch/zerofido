@@ -37,8 +37,8 @@ static uint32_t zf_sha256_rotr(uint32_t value, uint8_t shift) {
 }
 
 static uint32_t zf_sha256_load_be32(const uint8_t *data) {
-    return ((uint32_t)data[0] << 24) | ((uint32_t)data[1] << 16) |
-           ((uint32_t)data[2] << 8) | (uint32_t)data[3];
+    return ((uint32_t)data[0] << 24) | ((uint32_t)data[1] << 16) | ((uint32_t)data[2] << 8) |
+           (uint32_t)data[3];
 }
 
 static void zf_sha256_store_be32(uint8_t *out, uint32_t value) {
@@ -69,10 +69,10 @@ static void zf_sha256_transform(ZfSha256Context *ctx, const uint8_t block[64]) {
         w[i] = zf_sha256_load_be32(block + (i * 4U));
     }
     for (size_t i = 16U; i < 64U; ++i) {
-        uint32_t s0 = zf_sha256_rotr(w[i - 15U], 7) ^ zf_sha256_rotr(w[i - 15U], 18) ^
-                      (w[i - 15U] >> 3);
-        uint32_t s1 = zf_sha256_rotr(w[i - 2U], 17) ^ zf_sha256_rotr(w[i - 2U], 19) ^
-                      (w[i - 2U] >> 10);
+        uint32_t s0 =
+            zf_sha256_rotr(w[i - 15U], 7) ^ zf_sha256_rotr(w[i - 15U], 18) ^ (w[i - 15U] >> 3);
+        uint32_t s1 =
+            zf_sha256_rotr(w[i - 2U], 17) ^ zf_sha256_rotr(w[i - 2U], 19) ^ (w[i - 2U] >> 10);
         w[i] = w[i - 16U] + s0 + w[i - 7U] + s1;
     }
 

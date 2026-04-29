@@ -238,6 +238,6 @@ void zf_ui_format_fido2_credential_detail(const ZfCredentialRecord *record, char
     }
     type = record->resident_key ? "Discoverable passkey" : "Saved passkey";
 
-    snprintf(out, out_size, "Website: %.40s\nAccount: %.40s\nType: %s\nUsed: %lu times", website, user,
-             type, (unsigned long)record->sign_count);
+    snprintf(out, out_size, "Website: %.40s\nAccount: %.40s\nType: %s\nUsed: %lu times", website,
+             user, type, (unsigned long)record->sign_count);
 }

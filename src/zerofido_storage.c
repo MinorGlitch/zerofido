@@ -396,9 +396,9 @@ bool zf_storage_read_encrypted_blob(Storage *storage, const char *path,
     key_loaded = false;
 
     if (spec->verify_mac &&
-        !spec->verify_mac(spec->plaintext, spec->plaintext_len, iv, encrypted,
-                          spec->encrypted_len, spec->has_mac ? mac : NULL,
-                          spec->has_mac ? spec->mac_len : 0U, spec->callback_context)) {
+        !spec->verify_mac(spec->plaintext, spec->plaintext_len, iv, encrypted, spec->encrypted_len,
+                          spec->has_mac ? mac : NULL, spec->has_mac ? spec->mac_len : 0U,
+                          spec->callback_context)) {
         goto cleanup;
     }
     if (spec->out_version) {

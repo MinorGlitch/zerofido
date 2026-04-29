@@ -208,12 +208,13 @@ static uint8_t zf_ctap_load_and_prepare_assertion(
                                          response_scratch, out, out_capacity, out_len);
 }
 
-static uint8_t zf_ctap_finish_assertion(
-    ZerofidoApp *app, ZfTransportSessionId session_id, const ZfGetAssertionRequest *request,
-    ZfGetAssertionScratch *scratch, bool resolve_match, size_t record_index, bool user_present,
-    bool uv_verified, bool include_user_details, bool include_user_selected,
-    bool poll_before_publish, bool *maintenance_acquired, uint8_t *out, size_t out_capacity,
-    size_t *out_len) {
+static uint8_t zf_ctap_finish_assertion(ZerofidoApp *app, ZfTransportSessionId session_id,
+                                        const ZfGetAssertionRequest *request,
+                                        ZfGetAssertionScratch *scratch, bool resolve_match,
+                                        size_t record_index, bool user_present, bool uv_verified,
+                                        bool include_user_details, bool include_user_selected,
+                                        bool poll_before_publish, bool *maintenance_acquired,
+                                        uint8_t *out, size_t out_capacity, size_t *out_len) {
     uint32_t next_sign_count = 0;
     ZfCredentialIndexEntry selected_entry = {0};
     uint8_t status = ZF_CTAP_ERR_OTHER;
@@ -224,8 +225,8 @@ static uint8_t zf_ctap_finish_assertion(
     *maintenance_acquired = true;
 
     if (resolve_match) {
-        size_t match_count = zf_ctap_resolve_assertion_matches_snapshot(
-            app, request, uv_verified, scratch->matches);
+        size_t match_count =
+            zf_ctap_resolve_assertion_matches_snapshot(app, request, uv_verified, scratch->matches);
         if (match_count == 0) {
             return ZF_CTAP_ERR_NO_CREDENTIALS;
         }
@@ -339,10 +340,9 @@ uint8_t zf_ctap_handle_get_assertion(ZerofidoApp *app, ZfTransportSessionId sess
     if (request->has_up && !request->up) {
         ZF_CTAP_GA_DIAG("silent");
 
-        status = zf_ctap_finish_assertion(
-            app, session_id, request, scratch, true, 0, false, uv_verified,
-            uv_verified && !uses_allow_list, false, false, &maintenance_acquired, out,
-            out_capacity, out_len);
+        status = zf_ctap_finish_assertion(app, session_id, request, scratch, true, 0, false,
+                                          uv_verified, uv_verified && !uses_allow_list, false,
+                                          false, &maintenance_acquired, out, out_capacity, out_len);
         goto cleanup;
     }
 
@@ -363,10 +363,10 @@ uint8_t zf_ctap_handle_get_assertion(ZerofidoApp *app, ZfTransportSessionId sess
         if (status != ZF_CTAP_SUCCESS) {
             goto cleanup;
         }
-        status = zf_ctap_finish_assertion(
-            app, session_id, request, scratch, false, selected_record_index, true, uv_verified,
-            uv_verified, app->capabilities.advertise_fido_2_1, true, &maintenance_acquired, out,
-            out_capacity, out_len);
+        status = zf_ctap_finish_assertion(app, session_id, request, scratch, false,
+                                          selected_record_index, true, uv_verified, uv_verified,
+                                          app->capabilities.advertise_fido_2_1, true,
+                                          &maintenance_acquired, out, out_capacity, out_len);
         goto cleanup;
     }
 
@@ -382,10 +382,9 @@ uint8_t zf_ctap_handle_get_assertion(ZerofidoApp *app, ZfTransportSessionId sess
     }
     ZF_CTAP_GA_DIAG("maintenance");
 
-    status = zf_ctap_finish_assertion(
-        app, session_id, request, scratch, true, 0, true, uv_verified,
-        uv_verified && !uses_allow_list, false, true, &maintenance_acquired, out, out_capacity,
-        out_len);
+    status = zf_ctap_finish_assertion(app, session_id, request, scratch, true, 0, true, uv_verified,
+                                      uv_verified && !uses_allow_list, false, true,
+                                      &maintenance_acquired, out, out_capacity, out_len);
     ZF_CTAP_GA_DIAG("loaded");
     ZF_CTAP_GA_DIAG("response");
     if (status != ZF_CTAP_SUCCESS) {

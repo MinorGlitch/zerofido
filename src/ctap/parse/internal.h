@@ -56,8 +56,7 @@ bool zf_ctap_cbor_read_text_discard(ZfCborCursor *cursor);
 bool zf_ctap_cbor_read_bytes_copy(ZfCborCursor *cursor, uint8_t *out, size_t out_capacity,
                                   size_t *out_size);
 
-bool zf_ctap_parse_cose_p256_key_agreement(ZfCborCursor *cursor,
-                                           uint8_t x[ZF_PUBLIC_KEY_LEN],
+bool zf_ctap_parse_cose_p256_key_agreement(ZfCborCursor *cursor, uint8_t x[ZF_PUBLIC_KEY_LEN],
                                            uint8_t y[ZF_PUBLIC_KEY_LEN]);
 
 uint8_t zf_ctap_parse_options_map(ZfCborCursor *cursor, bool *up, bool *has_up, bool *uv,

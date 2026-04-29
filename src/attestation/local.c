@@ -25,8 +25,7 @@
 #define ZF_LOCAL_ATTESTATION_KEY_TYPE_USER 1U
 #define ZF_LOCAL_ATTESTATION_TBS_MAX_SIZE 512U
 #define ZF_LOCAL_ATTESTATION_SIGNATURE_MAX_SIZE 80U
-#define ZF_LOCAL_ATTESTATION_BIT_STRING_MAX_SIZE \
-    (ZF_LOCAL_ATTESTATION_SIGNATURE_MAX_SIZE + 1U)
+#define ZF_LOCAL_ATTESTATION_BIT_STRING_MAX_SIZE (ZF_LOCAL_ATTESTATION_SIGNATURE_MAX_SIZE + 1U)
 
 typedef struct {
     uint8_t *data;
@@ -283,8 +282,7 @@ static void zf_local_attestation_cleanup_pair(const ZfLocalAttestationProfile *p
     }
 }
 
-bool zf_local_attestation_get_cert_size(const ZfLocalAttestationProfile *profile,
-                                        size_t *out_len) {
+bool zf_local_attestation_get_cert_size(const ZfLocalAttestationProfile *profile, size_t *out_len) {
     bool ok = false;
     Storage *storage = NULL;
     File *file = NULL;
@@ -393,8 +391,8 @@ static bool zf_encrypt_private_key(const ZfLocalAttestationProfile *profile, Sto
         .plaintext_len = ZF_PRIVATE_KEY_LEN,
         .encrypted_len = 48U,
     };
-    ok = zf_storage_write_encrypted_blob_atomic(storage, profile->key_file,
-                                                profile->key_temp_file, &spec);
+    ok = zf_storage_write_encrypted_blob_atomic(storage, profile->key_file, profile->key_temp_file,
+                                                &spec);
     if (!ok) {
         zf_telemetry_log("attestation key write failed");
     }
@@ -439,8 +437,7 @@ bool zf_local_attestation_load_private_key(const ZfLocalAttestationProfile *prof
 
 /* Extracts the subjectPublicKeyInfo EC point from the local attestation cert shape. */
 bool zf_local_attestation_extract_cert_public_key(
-    const uint8_t *cert, size_t cert_len,
-    uint8_t public_key[ZF_LOCAL_ATTESTATION_EC_POINT_SIZE]) {
+    const uint8_t *cert, size_t cert_len, uint8_t public_key[ZF_LOCAL_ATTESTATION_EC_POINT_SIZE]) {
     const uint8_t *certificate_value = NULL;
     const uint8_t *tbs_value = NULL;
     const uint8_t *spki_value = NULL;
@@ -495,8 +492,8 @@ bool zf_local_attestation_extract_cert_public_key(
         }
         tbs_offset += element_len;
     }
-    if (!zf_der_read_element(tbs_value + tbs_offset, tbs_value_len - tbs_offset, 0x30,
-                             &spki_value, &spki_value_len, &element_len)) {
+    if (!zf_der_read_element(tbs_value + tbs_offset, tbs_value_len - tbs_offset, 0x30, &spki_value,
+                             &spki_value_len, &element_len)) {
         return false;
     }
     tbs_offset += element_len;
@@ -532,16 +529,15 @@ bool zf_local_attestation_extract_cert_public_key(
     return true;
 }
 
-bool zf_local_attestation_private_key_matches_cert(
-    const uint8_t private_key[ZF_PRIVATE_KEY_LEN], const uint8_t *cert, size_t cert_len,
-    const uint8_t *identity, size_t identity_len) {
+bool zf_local_attestation_private_key_matches_cert(const uint8_t private_key[ZF_PRIVATE_KEY_LEN],
+                                                   const uint8_t *cert, size_t cert_len,
+                                                   const uint8_t *identity, size_t identity_len) {
     uint8_t cert_public_key[ZF_LOCAL_ATTESTATION_EC_POINT_SIZE];
     uint8_t public_x[ZF_PUBLIC_KEY_LEN];
     uint8_t public_y[ZF_PUBLIC_KEY_LEN];
     bool ok = false;
 
-    if (!private_key || !cert || cert_len == 0U ||
-        (identity_len > 0U && !identity) ||
+    if (!private_key || !cert || cert_len == 0U || (identity_len > 0U && !identity) ||
         !zf_local_attestation_extract_cert_public_key(cert, cert_len, cert_public_key) ||
         !zf_crypto_compute_public_key_from_private(private_key, public_x, public_y)) {
         return false;
@@ -755,8 +751,8 @@ static bool zf_generate_assets(const ZfLocalAttestationProfile *profile) {
             zf_telemetry_log("attestation keygen failed");
             break;
         }
-        if (!zf_build_cert(profile, private_key, public_key, scratch->cert,
-                           sizeof(scratch->cert), &cert_len, scratch)) {
+        if (!zf_build_cert(profile, private_key, public_key, scratch->cert, sizeof(scratch->cert),
+                           &cert_len, scratch)) {
             zf_telemetry_log("attestation cert build failed");
             break;
         }
@@ -786,8 +782,8 @@ static bool zf_assets_ready(const ZfLocalAttestationProfile *profile) {
     if (!key_loaded) {
         zf_telemetry_log("attestation key load failed");
     } else {
-        ready = zf_private_key_matches_cert(profile, private_key, cert,
-                                            ZF_ATTESTATION_CERT_MAX_SIZE);
+        ready =
+            zf_private_key_matches_cert(profile, private_key, cert, ZF_ATTESTATION_CERT_MAX_SIZE);
         if (!ready) {
             zf_telemetry_log("attestation cert key mismatch");
         }

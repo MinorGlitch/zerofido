@@ -36,10 +36,10 @@
 #if defined(ZF_RELEASE_DIAGNOSTICS) && ZF_RELEASE_DIAGNOSTICS
 #define ZF_CTAP_MC_DIAG(text) FURI_LOG_I("ZeroFIDO:CTAP", "MC %s", (text))
 #else
-#define ZF_CTAP_MC_DIAG(text) \
-    do {                      \
-        (void)(text);         \
-    } while(false)
+#define ZF_CTAP_MC_DIAG(text)                                                                      \
+    do {                                                                                           \
+        (void)(text);                                                                              \
+    } while (false)
 #endif
 
 /*
@@ -96,10 +96,9 @@ uint8_t zf_ctap_handle_make_credential(ZerofidoApp *app, ZfTransportSessionId se
         goto cleanup;
     }
     ZF_CTAP_MC_DIAG("parsed");
-    status = zf_ctap_validate_pin_auth_protocol(scratch->request.has_pin_auth,
-                                                scratch->request.has_pin_protocol,
-                                                scratch->request.pin_protocol,
-                                                app->capabilities.pin_uv_auth_protocol_2_enabled);
+    status = zf_ctap_validate_pin_auth_protocol(
+        scratch->request.has_pin_auth, scratch->request.has_pin_protocol,
+        scratch->request.pin_protocol, app->capabilities.pin_uv_auth_protocol_2_enabled);
     if (status != ZF_CTAP_SUCCESS) {
         goto cleanup;
     }
@@ -107,8 +106,7 @@ uint8_t zf_ctap_handle_make_credential(ZerofidoApp *app, ZfTransportSessionId se
              scratch->request.user_name[0] ? scratch->request.user_name : "(not provided)");
     if (scratch->request.has_pin_auth && scratch->request.pin_auth_len == 0) {
         status = zf_ctap_handle_empty_pin_auth_probe(app, session_id, "Register",
-                                                     scratch->request.rp_id,
-                                                     scratch->user_line);
+                                                     scratch->request.rp_id, scratch->user_line);
         goto cleanup;
     }
     if (zf_ctap_effective_uv_requested(scratch->request.has_pin_auth, scratch->request.has_uv,
@@ -162,8 +160,8 @@ uint8_t zf_ctap_handle_make_credential(ZerofidoApp *app, ZfTransportSessionId se
     }
 
     ZF_CTAP_MC_DIAG("approval");
-    status = zf_ctap_request_approval(app, "Register", scratch->request.rp_id,
-                                      scratch->user_line, session_id);
+    status = zf_ctap_request_approval(app, "Register", scratch->request.rp_id, scratch->user_line,
+                                      session_id);
     if (status != ZF_CTAP_SUCCESS) {
         goto cleanup;
     }
@@ -212,11 +210,11 @@ uint8_t zf_ctap_handle_make_credential(ZerofidoApp *app, ZfTransportSessionId se
 
     if (resident_key) {
         if (!zf_store_find_resident_credential_indices_for_user_with_buffer(
-            app->storage, &app->store, scratch->request.rp_id, scratch->request.user_id,
-            scratch->request.user_id_len, scratch->work.io.deleted_indices,
-            sizeof(scratch->work.io.deleted_indices) /
-                sizeof(scratch->work.io.deleted_indices[0]),
-            &deleted_count, scratch->work.io.store_io, sizeof(scratch->work.io.store_io))) {
+                app->storage, &app->store, scratch->request.rp_id, scratch->request.user_id,
+                scratch->request.user_id_len, scratch->work.io.deleted_indices,
+                sizeof(scratch->work.io.deleted_indices) /
+                    sizeof(scratch->work.io.deleted_indices[0]),
+                &deleted_count, scratch->work.io.store_io, sizeof(scratch->work.io.store_io))) {
             status = ZF_CTAP_ERR_OTHER;
             goto cleanup;
         }
@@ -246,8 +244,7 @@ uint8_t zf_ctap_handle_make_credential(ZerofidoApp *app, ZfTransportSessionId se
 
         if (!zf_store_remove_credential_files_by_indices(app->storage, &app->store,
                                                          scratch->work.io.deleted_indices,
-                                                         deleted_count,
-                                                         &removed_count)) {
+                                                         deleted_count, &removed_count)) {
             if (removed_count > 0) {
                 furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
                 zf_store_publish_deleted_indices(&app->store, scratch->work.io.deleted_indices,

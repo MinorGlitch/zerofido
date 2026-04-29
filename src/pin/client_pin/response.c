@@ -31,9 +31,10 @@ static void zf_client_pin_response_diag_block(const char *label, const uint8_t *
         }
         memcpy(b, data + off, chunk);
         FURI_LOG_I("ZeroFIDO:CTAP",
-                   "%s[%u] %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
-                   label, (unsigned)off, b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
-                   b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]);
+                   "%s[%u] %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X "
+                   "%02X %02X",
+                   label, (unsigned)off, b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9],
+                   b[10], b[11], b[12], b[13], b[14], b[15]);
     }
 }
 #else
