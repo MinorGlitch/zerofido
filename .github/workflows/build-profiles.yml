@@ -34,10 +34,10 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.0.2
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@v8.1.0
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -62,7 +62,7 @@ jobs:
           --output-fap dist/zerofido-${{ matrix.profile }}-release.fap
 
       - name: Upload FAP artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: zerofido-${{ matrix.profile }}
           if-no-files-found: error
