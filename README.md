@@ -79,8 +79,6 @@ ZeroFIDO includes an on-device Settings screen.
   protects key material and rollback-sensitive state; it does not encrypt the whole app directory.
 - Attestation is local software attestation, not hardware-backed vendor provenance, and ZeroFIDO is
   not FIDO Alliance certified.
-- Release builds set `ZF_RELEASE_DIAGNOSTICS=0`; diagnostic and conformance builds may log
-  protocol data.
 - Keep at least one backup sign-in method for accounts you care about.
 
 ## Attestation
