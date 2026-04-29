@@ -241,18 +241,21 @@ static bool zf_status_refresh_model(ZerofidoApp *app, bool redraw, bool reload_c
 
 static void zf_status_draw_callback(Canvas *canvas, void *model) {
     ZfStatusModel *status = model;
+    const char *transport_title = NULL;
 
     furi_assert(status);
     if (!status) {
         return;
     }
+    transport_title = zf_home_transport_title_label(status->transport_mode);
 
     canvas_clear(canvas);
     canvas_set_color(canvas, ColorBlack);
-    canvas_set_font(canvas, FontPrimary);
-    canvas_draw_str(canvas, 4, 10, "ZeroFIDO");
-    canvas_draw_str(canvas, 55, 10, zf_home_transport_title_label(status->transport_mode));
     canvas_set_font(canvas, FontSecondary);
+    canvas_draw_str(canvas, 4, 10, "ZeroFIDO");
+    canvas_draw_str(canvas, 5, 10, "ZeroFIDO");
+    canvas_draw_str(canvas, 48, 10, transport_title);
+    canvas_draw_str(canvas, 49, 10, transport_title);
     canvas_draw_str(canvas, 74, 10, zf_home_status_label(status->status));
     canvas_draw_line(canvas, 0, 13, 127, 13);
 

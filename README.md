@@ -298,13 +298,10 @@ You can also run the workflow from GitHub Actions with an existing tag such as `
 ### Certification Metadata
 
 Metadata and captured attestation certificates belong to your local certification run. Keep them
-under `metadata/`; git ignores that directory.
-
-Create `metadata/statement.json` from the authenticator under test, then export a profile:
+under `metadata/`; git ignores that directory. The exporter creates `metadata/` and a default
+`metadata/statement.json` when they are missing.
 
 ```bash
-mkdir -p metadata
-
 uv run python host_tools/export_certification_metadata.py \
   --statement metadata/statement.json \
   --profile fido2-2.0 \

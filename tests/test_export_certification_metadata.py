@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
+import tempfile
 import unittest
 from base64 import b64encode
 from datetime import datetime, timedelta, timezone
 from hashlib import sha1
+from pathlib import Path
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -13,9 +16,11 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 
 from host_tools.export_certification_metadata import (
+    DEFAULT_CANONICAL_STATEMENT,
     ICON_DATA_URL,
     MDS3_LEGAL_HEADER,
     build_certification_metadata,
+    load_or_create_statement,
 )
 
 
@@ -339,6 +344,15 @@ class ExportCertificationMetadataTests(unittest.TestCase):
             exported["attestationCertificateKeyIdentifiers"],
             [sha1(leaf_public_key_bytes).hexdigest()],
         )
+
+    def test_load_or_create_statement_creates_missing_parent_and_statement(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            statement_path = Path(tmpdir) / "metadata" / "statement.json"
+
+            statement = load_or_create_statement(statement_path)
+
+            self.assertEqual(statement, DEFAULT_CANONICAL_STATEMENT)
+            self.assertEqual(json.loads(statement_path.read_text()), DEFAULT_CANONICAL_STATEMENT)
 
 
 if __name__ == "__main__":

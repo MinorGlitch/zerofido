@@ -36,6 +36,26 @@ ICON_DATA_URL = (
     "data:image/png;base64,"
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+tm2cAAAAASUVORK5CYII="
 )
+DEFAULT_CANONICAL_STATEMENT: dict[str, Any] = {
+    "legalHeader": "https://fidoalliance.org/metadata/metadata-statement-legal-header/",
+    "aaguid": "b51a976a-0b02-40aa-9d8a-36c8b91bbd1a",
+    "upv": [{"major": 1, "minor": 0}],
+    "authenticationAlgorithms": ["secp256r1_ecdsa_sha256_raw"],
+    "authenticatorGetInfo": {
+        "versions": ["FIDO_2_0", "U2F_V2"],
+        "extensions": ["credProtect", "hmac-secret"],
+        "aaguid": "b51a976a0b0240aa9d8a36c8b91bbd1a",
+        "options": {"rk": True, "up": True, "plat": False},
+        "maxMsgSize": 1024,
+        "pinUvAuthProtocols": [1],
+    },
+    "userVerificationDetails": [
+        [
+            {"userVerificationMethod": "passcode_external"},
+            {"userVerificationMethod": "presence_internal"},
+        ]
+    ],
+}
 
 
 def compact_aaguid(value: str) -> str:
@@ -192,6 +212,16 @@ def load_certificate_der(path: Path) -> bytes:
         return x509.load_pem_x509_certificate(data).public_bytes(serialization.Encoding.DER)
     x509.load_der_x509_certificate(data)
     return data
+
+
+def load_or_create_statement(path: Path) -> dict[str, Any]:
+    if path.exists():
+        return json.loads(path.read_text())
+
+    statement = copy.deepcopy(DEFAULT_CANONICAL_STATEMENT)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(statement, indent=2) + "\n")
+    return statement
 
 
 def compute_u2f_attestation_key_identifier(cert_der: bytes) -> str:
@@ -366,7 +396,7 @@ def main() -> int:
         profile_name = "ctap21-experimental"
     output_path = Path(args.output) if args.output else DEFAULT_METADATA_DIR / f"metadata-{profile_name}.json"
 
-    statement = json.loads(statement_path.read_text())
+    statement = load_or_create_statement(statement_path)
     fido2_cert_der = None
     u2f_cert_der = None
     if args.u2f_attestation_cert:
