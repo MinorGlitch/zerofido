@@ -1,10 +1,8 @@
-# ZeroFIDO
-
-![ZeroFIDO banner: FIDO2 for Flipper Zero](docs/assets/zerofido-banner.png)
-
 ![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue)
 ![Platform: Flipper Zero](https://img.shields.io/badge/platform-Flipper%20Zero-orange)
 ![Protocols: FIDO2 + U2F](https://img.shields.io/badge/protocols-FIDO2%20%2B%20U2F-green)
+
+![ZeroFIDO banner: FIDO2 for Flipper Zero](docs/assets/zerofido-banner.png)
 
 ZeroFIDO turns a Flipper Zero into a passkey and security-key app. Install the `.fap`,
 open ZeroFIDO, and approve sign-ins on services that support FIDO2/WebAuthn or legacy U2F.
