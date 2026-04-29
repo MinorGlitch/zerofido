@@ -79,10 +79,14 @@ void zf_store_recovery_cleanup_temp_files(Storage *storage) {
 
 bool zf_store_recovery_remove_record_paths(Storage *storage, const char *file_name) {
     char record_path[128];
+    char temp_path[128];
     char counter_path[128];
+    char counter_temp_path[128];
 
     zf_store_build_record_path(file_name, record_path, sizeof(record_path));
+    zf_store_build_temp_path(file_name, temp_path, sizeof(temp_path));
     zf_store_build_counter_floor_path(file_name, counter_path, sizeof(counter_path));
-    return zf_storage_remove_optional(storage, record_path) &&
-           zf_storage_remove_optional(storage, counter_path);
+    zf_store_build_counter_floor_temp_path(file_name, counter_temp_path, sizeof(counter_temp_path));
+    return zf_storage_remove_atomic_file(storage, record_path, temp_path) &&
+           zf_storage_remove_atomic_file(storage, counter_path, counter_temp_path);
 }

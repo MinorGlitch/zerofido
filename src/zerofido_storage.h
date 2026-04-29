@@ -74,6 +74,8 @@ bool zf_storage_remove_dir_entries_with_suffix(Storage *storage, const char *dir
                                                const char *suffix, char *name_buffer,
                                                size_t name_buffer_size, char *path_buffer,
                                                size_t path_buffer_size);
+bool zf_storage_recover_atomic_file(Storage *storage, const char *path, const char *temp_path);
+bool zf_storage_remove_atomic_file(Storage *storage, const char *path, const char *temp_path);
 bool zf_storage_write_file_atomic(Storage *storage, const char *path, const char *temp_path,
                                   const uint8_t *data, size_t size);
 bool zf_storage_write_format_atomic(Storage *storage, const char *path, const char *temp_path,

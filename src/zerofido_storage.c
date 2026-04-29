@@ -18,6 +18,9 @@
 
 #define ZF_STORAGE_BLOB_MAX_DATA_SIZE 64U
 #define ZF_STORAGE_BLOB_MAX_MAC_SIZE 64U
+#define ZF_STORAGE_PATH_BUFFER_SIZE 192U
+#define ZF_STORAGE_TEMP_SUFFIX ".tmp"
+#define ZF_STORAGE_BACKUP_SUFFIX ".bak"
 
 typedef struct {
     const ZfStorageEncryptedBlobWriteSpec *spec;
@@ -179,12 +182,123 @@ bool zf_storage_remove_dir_entries_with_suffix(Storage *storage, const char *dir
                                          zf_storage_remove_suffix_visitor, &context);
 }
 
+static bool zf_storage_build_suffixed_path(const char *path, const char *suffix, char *out,
+                                           size_t out_size) {
+    size_t path_len = 0U;
+    size_t suffix_len = 0U;
+
+    if (!path || !suffix || !out || out_size == 0U) {
+        return false;
+    }
+    path_len = strlen(path);
+    suffix_len = strlen(suffix);
+    if (path_len == 0U || suffix_len >= out_size || path_len > out_size - suffix_len - 1U) {
+        return false;
+    }
+    memcpy(out, path, path_len);
+    memcpy(out + path_len, suffix, suffix_len);
+    out[path_len + suffix_len] = '\0';
+    return true;
+}
+
+bool zf_storage_recover_atomic_file(Storage *storage, const char *path, const char *temp_path) {
+    char backup_path[ZF_STORAGE_PATH_BUFFER_SIZE];
+    bool primary_exists = false;
+    bool backup_exists = false;
+    bool ok = true;
+
+    if (!storage || !path || !temp_path ||
+        !zf_storage_build_suffixed_path(path, ZF_STORAGE_BACKUP_SUFFIX, backup_path,
+                                        sizeof(backup_path))) {
+        return false;
+    }
+
+    primary_exists = storage_file_exists(storage, path);
+    backup_exists = storage_file_exists(storage, backup_path);
+    if (!primary_exists && backup_exists) {
+        if (storage_common_rename(storage, backup_path, path) != FSE_OK) {
+            zf_storage_remove_optional(storage, temp_path);
+            return false;
+        }
+        primary_exists = true;
+    }
+    if (primary_exists) {
+        zf_storage_remove_optional(storage, backup_path);
+    }
+    zf_storage_remove_optional(storage, temp_path);
+    return ok;
+}
+
+bool zf_storage_remove_atomic_file(Storage *storage, const char *path, const char *temp_path) {
+    char backup_path[ZF_STORAGE_PATH_BUFFER_SIZE];
+
+    if (!storage || !path || !temp_path ||
+        !zf_storage_build_suffixed_path(path, ZF_STORAGE_BACKUP_SUFFIX, backup_path,
+                                        sizeof(backup_path))) {
+        return false;
+    }
+    return zf_storage_remove_optional(storage, temp_path) &&
+           zf_storage_remove_optional(storage, backup_path) &&
+           zf_storage_remove_optional(storage, path);
+}
+
+static bool zf_storage_prepare_atomic_backup(Storage *storage, const char *path,
+                                             const char *backup_path, bool *backup_active) {
+    if (!storage || !path || !backup_path || !backup_active) {
+        return false;
+    }
+    *backup_active = false;
+    if (!storage_file_exists(storage, path)) {
+        return true;
+    }
+    if (!zf_storage_remove_optional(storage, backup_path)) {
+        return false;
+    }
+    if (storage_common_copy(storage, path, backup_path) != FSE_OK) {
+        return false;
+    }
+    *backup_active = true;
+    return true;
+}
+
+static bool zf_storage_publish_atomic_temp(Storage *storage, const char *path,
+                                           const char *temp_path) {
+    char backup_path[ZF_STORAGE_PATH_BUFFER_SIZE];
+    bool backup_active = false;
+    bool ok = false;
+
+    if (!zf_storage_build_suffixed_path(path, ZF_STORAGE_BACKUP_SUFFIX, backup_path,
+                                        sizeof(backup_path))) {
+        zf_storage_remove_optional(storage, temp_path);
+        return false;
+    }
+    if (!zf_storage_prepare_atomic_backup(storage, path, backup_path, &backup_active)) {
+        zf_storage_remove_optional(storage, temp_path);
+        return false;
+    }
+
+    ok = storage_common_rename(storage, temp_path, path) == FSE_OK;
+    if (ok) {
+        if (backup_active) {
+            zf_storage_remove_optional(storage, backup_path);
+        }
+        storage_common_remove(storage, temp_path);
+        return ok;
+    }
+
+    zf_storage_recover_atomic_file(storage, path, temp_path);
+    return false;
+}
+
 bool zf_storage_write_file_atomic(Storage *storage, const char *path, const char *temp_path,
                                   const uint8_t *data, size_t size) {
     bool ok = false;
     File *file = NULL;
 
     if (!storage || !path || !temp_path || !data || size == 0U) {
+        return false;
+    }
+    if (!zf_storage_recover_atomic_file(storage, path, temp_path)) {
         return false;
     }
 
@@ -198,8 +312,7 @@ bool zf_storage_write_file_atomic(Storage *storage, const char *path, const char
         size_t written = storage_file_write(file, data, size);
         storage_file_close(file);
         if (written == size) {
-            storage_common_remove(storage, path);
-            ok = storage_common_rename(storage, temp_path, path) == FSE_OK;
+            ok = zf_storage_publish_atomic_temp(storage, path, temp_path);
         }
     }
     storage_common_remove(storage, temp_path);
@@ -215,6 +328,9 @@ bool zf_storage_write_format_atomic(Storage *storage, const char *path, const ch
     FlipperFormat *format = NULL;
 
     if (!storage || !path || !temp_path || !writer) {
+        return false;
+    }
+    if (!zf_storage_recover_atomic_file(storage, path, temp_path)) {
         return false;
     }
 
@@ -234,8 +350,7 @@ bool zf_storage_write_format_atomic(Storage *storage, const char *path, const ch
     flipper_format_free(format);
 
     if (wrote) {
-        storage_common_remove(storage, path);
-        ok = storage_common_rename(storage, temp_path, path) == FSE_OK;
+        ok = zf_storage_publish_atomic_temp(storage, path, temp_path);
     }
     storage_common_remove(storage, temp_path);
     return ok;
@@ -344,6 +459,7 @@ bool zf_storage_read_encrypted_blob(Storage *storage, const char *path,
     uint8_t mac[ZF_STORAGE_BLOB_MAX_MAC_SIZE];
     uint32_t version = 0U;
     uint32_t type = 0U;
+    char temp_path[ZF_STORAGE_PATH_BUFFER_SIZE];
     FlipperFormat *format = NULL;
     FuriString *filetype = NULL;
 
@@ -359,6 +475,11 @@ bool zf_storage_read_encrypted_blob(Storage *storage, const char *path,
     memset(iv, 0, sizeof(iv));
     memset(encrypted, 0, sizeof(encrypted));
     memset(mac, 0, sizeof(mac));
+    if (!zf_storage_build_suffixed_path(path, ZF_STORAGE_TEMP_SUFFIX, temp_path,
+                                        sizeof(temp_path)) ||
+        !zf_storage_recover_atomic_file(storage, path, temp_path)) {
+        goto cleanup;
+    }
 
     format = flipper_format_file_alloc(storage);
     filetype = furi_string_alloc();

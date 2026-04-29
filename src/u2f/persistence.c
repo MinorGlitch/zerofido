@@ -119,6 +119,16 @@ static uint32_t u2f_data_counter_high_water(uint32_t counter) {
     return counter + ZF_COUNTER_RESERVATION_WINDOW;
 }
 
+static void u2f_data_recover_atomic_files(Storage *storage) {
+    if (!storage) {
+        return;
+    }
+    zf_storage_recover_atomic_file(storage, U2F_CERT_FILE, U2F_CERT_FILE_TMP);
+    zf_storage_recover_atomic_file(storage, U2F_CERT_KEY_FILE, U2F_CERT_KEY_FILE_TMP);
+    zf_storage_recover_atomic_file(storage, U2F_KEY_FILE, U2F_KEY_FILE_TMP);
+    zf_storage_recover_atomic_file(storage, U2F_CNT_FILE, U2F_CNT_FILE_TMP);
+}
+
 /* Shared file existence probe used to distinguish missing bootstrap files from parse failures. */
 static bool u2f_data_file_exists(const char *path) {
     bool exists = false;
@@ -129,6 +139,7 @@ static bool u2f_data_file_exists(const char *path) {
         furi_record_close(RECORD_STORAGE);
         return false;
     }
+    u2f_data_recover_atomic_files(storage);
     exists = storage_file_open(file, path, FSAM_READ, FSOM_OPEN_EXISTING);
     storage_file_close(file);
     storage_file_free(file);
@@ -170,6 +181,7 @@ bool u2f_data_check(bool cert_only) {
         furi_record_close(RECORD_STORAGE);
         return false;
     }
+    u2f_data_recover_atomic_files(fs_api);
     do {
         if (!storage_file_open(file, U2F_CERT_FILE, FSAM_READ, FSOM_OPEN_EXISTING))
             break;
@@ -235,6 +247,7 @@ uint32_t u2f_data_cert_load(uint8_t *cert, size_t capacity) {
         furi_record_close(RECORD_STORAGE);
         return 0;
     }
+    u2f_data_recover_atomic_files(fs_api);
     if (storage_file_open(file, U2F_CERT_FILE, FSAM_READ, FSOM_OPEN_EXISTING)) {
         uint32_t file_size = storage_file_size(file);
         if (file_size <= capacity) {
@@ -598,14 +611,12 @@ bool u2f_data_cnt_reserve(uint32_t cnt_val, uint32_t *reserved_cnt) {
 }
 
 bool u2f_data_wipe(Storage *storage) {
-    const char *const paths[] = {
-        U2F_CERT_FILE, U2F_CERT_FILE_TMP, U2F_CERT_KEY_FILE, U2F_CERT_KEY_FILE_TMP,
-        U2F_KEY_FILE,  U2F_KEY_FILE_TMP,  U2F_CNT_FILE,      U2F_CNT_FILE_TMP,
-    };
-
     if (!storage) {
         return false;
     }
 
-    return zf_storage_remove_optional_paths(storage, paths, sizeof(paths) / sizeof(paths[0]));
+    return zf_storage_remove_atomic_file(storage, U2F_CERT_FILE, U2F_CERT_FILE_TMP) &&
+           zf_storage_remove_atomic_file(storage, U2F_CERT_KEY_FILE, U2F_CERT_KEY_FILE_TMP) &&
+           zf_storage_remove_atomic_file(storage, U2F_KEY_FILE, U2F_KEY_FILE_TMP) &&
+           zf_storage_remove_atomic_file(storage, U2F_CNT_FILE, U2F_CNT_FILE_TMP);
 }

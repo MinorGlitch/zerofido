@@ -83,6 +83,7 @@ static bool g_remove_attempted_pin_v2_file = false;
 static bool g_remove_attempted_pin_v2_temp = false;
 static const char *g_storage_fail_rename_match = NULL;
 static const char *g_storage_fail_remove_match = NULL;
+static const char *g_storage_fail_copy_match = NULL;
 static const char *g_storage_fail_write_match = NULL;
 static const char *g_storage_fail_mkdir_match = NULL;
 static size_t g_approval_request_count = 0;
@@ -185,12 +186,14 @@ static TestStorageFile *test_storage_file_slot(const char *path, bool create) {
 static uint8_t *test_storage_select_data(const char *path, size_t **size_out, bool **exists_out) {
     TestStorageFile *slot = NULL;
 
-    if (strstr(path, "client_pin") != NULL && strstr(path, ".tmp") != NULL) {
+    if (strstr(path, "client_pin") != NULL && strstr(path, ".bak") == NULL &&
+        strstr(path, ".tmp") != NULL) {
         *size_out = &g_pin_temp_size;
         *exists_out = &g_pin_temp_exists;
         return g_pin_temp_data;
     }
-    if (strstr(path, "client_pin") != NULL && strstr(path, ".bin") != NULL) {
+    if (strstr(path, "client_pin") != NULL && strstr(path, ".bak") == NULL &&
+        strstr(path, ".bin") != NULL) {
         *size_out = &g_pin_file_size;
         *exists_out = &g_pin_file_exists;
         return g_pin_file_data;
@@ -224,6 +227,7 @@ static void test_storage_reset(void) {
     g_remove_attempted_pin_v2_temp = false;
     g_storage_fail_rename_match = NULL;
     g_storage_fail_remove_match = NULL;
+    g_storage_fail_copy_match = NULL;
     g_storage_fail_write_match = NULL;
     g_storage_fail_mkdir_match = NULL;
     g_approval_request_count = 0;
@@ -281,7 +285,7 @@ FS_Error storage_common_remove(Storage *storage, const char *path) {
     return FSE_OK;
 }
 
-FS_Error storage_common_rename(Storage *storage, const char *old_path, const char *new_path) {
+FS_Error storage_common_copy(Storage *storage, const char *old_path, const char *new_path) {
     size_t *old_size = NULL;
     size_t *new_size = NULL;
     bool *old_exists = NULL;
@@ -290,8 +294,8 @@ FS_Error storage_common_rename(Storage *storage, const char *old_path, const cha
     uint8_t *new_data = NULL;
 
     UNUSED(storage);
-    if (g_storage_fail_rename_match && (strstr(old_path, g_storage_fail_rename_match) != NULL ||
-                                        strstr(new_path, g_storage_fail_rename_match) != NULL)) {
+    if (g_storage_fail_copy_match && (strstr(old_path, g_storage_fail_copy_match) != NULL ||
+                                      strstr(new_path, g_storage_fail_copy_match) != NULL)) {
         return FSE_NOT_EXIST;
     }
     old_data = test_storage_select_data(old_path, &old_size, &old_exists);
@@ -299,13 +303,38 @@ FS_Error storage_common_rename(Storage *storage, const char *old_path, const cha
     if (old_data == NULL || new_data == NULL || !*old_exists) {
         return FSE_NOT_EXIST;
     }
+    memcpy(new_data, old_data, *old_size);
+    *new_size = *old_size;
+    *new_exists = true;
+    return FSE_OK;
+}
+
+FS_Error storage_common_rename(Storage *storage, const char *old_path, const char *new_path) {
+    FS_Error copy_result = FSE_NOT_EXIST;
+    size_t *old_size = NULL;
+    bool *old_exists = NULL;
+    uint8_t *old_data = NULL;
+
+    if (g_storage_fail_rename_match && (strstr(old_path, g_storage_fail_rename_match) != NULL ||
+                                        strstr(new_path, g_storage_fail_rename_match) != NULL)) {
+        return FSE_NOT_EXIST;
+    }
+    old_data = test_storage_select_data(old_path, &old_size, &old_exists);
+    if (old_data == NULL || !*old_exists) {
+        return FSE_NOT_EXIST;
+    }
+
+    if (storage_file_exists(storage, new_path)) {
+        storage_common_remove(storage, new_path);
+    }
+    copy_result = storage_common_copy(storage, old_path, new_path);
+    if (copy_result != FSE_OK) {
+        return copy_result;
+    }
     if (strstr(new_path, ".counter") != NULL) {
         g_storage_counter_rename_count++;
     }
 
-    memcpy(new_data, old_data, *old_size);
-    *new_size = *old_size;
-    *new_exists = true;
     memset(old_data, 0, *old_size);
     *old_size = 0;
     *old_exists = false;
@@ -337,14 +366,19 @@ bool storage_simply_mkdir(Storage *storage, const char *path) {
 }
 
 bool storage_file_exists(Storage *storage, const char *path) {
-    size_t *size = NULL;
-    bool *exists = NULL;
+    TestStorageFile *slot = NULL;
 
     UNUSED(storage);
-    if (test_storage_select_data(path, &size, &exists) == NULL) {
-        return false;
+    if (strstr(path, "client_pin") != NULL && strstr(path, ".bak") == NULL &&
+        strstr(path, ".tmp") != NULL) {
+        return g_pin_temp_exists;
     }
-    return *exists;
+    if (strstr(path, "client_pin") != NULL && strstr(path, ".bak") == NULL &&
+        strstr(path, ".bin") != NULL) {
+        return g_pin_file_exists;
+    }
+    slot = test_storage_file_slot(path, false);
+    return slot && slot->exists;
 }
 
 bool storage_dir_open(File *file, const char *path) {
@@ -8185,6 +8219,171 @@ static void test_store_cleanup_restores_backup_when_primary_is_missing(void) {
     expect(!backup->exists, "cleanup should remove the restored backup file");
 }
 
+static void test_store_remove_record_paths_deletes_atomic_backups(void) {
+    Storage storage = {0};
+    TestStorageFile *record = NULL;
+    TestStorageFile *record_temp = NULL;
+    TestStorageFile *record_backup = NULL;
+    TestStorageFile *counter = NULL;
+    TestStorageFile *counter_temp = NULL;
+    TestStorageFile *counter_backup = NULL;
+    char record_path[128];
+    char record_temp_path[128];
+    char record_backup_path[128];
+    char counter_path[128];
+    char counter_temp_path[128];
+    char counter_backup_path[128];
+
+    test_storage_reset();
+    zf_store_build_record_path(k_repeated_credential_file_name, record_path, sizeof(record_path));
+    zf_store_build_temp_path(k_repeated_credential_file_name, record_temp_path,
+                             sizeof(record_temp_path));
+    zf_store_build_counter_floor_path(k_repeated_credential_file_name, counter_path,
+                                      sizeof(counter_path));
+    zf_store_build_counter_floor_temp_path(k_repeated_credential_file_name, counter_temp_path,
+                                           sizeof(counter_temp_path));
+    snprintf(record_backup_path, sizeof(record_backup_path), "%s.bak", record_path);
+    snprintf(counter_backup_path, sizeof(counter_backup_path), "%s.bak", counter_path);
+
+    record = test_storage_file_slot(record_path, true);
+    record_temp = test_storage_file_slot(record_temp_path, true);
+    record_backup = test_storage_file_slot(record_backup_path, true);
+    counter = test_storage_file_slot(counter_path, true);
+    counter_temp = test_storage_file_slot(counter_temp_path, true);
+    counter_backup = test_storage_file_slot(counter_backup_path, true);
+    expect(record && record_temp && record_backup && counter && counter_temp && counter_backup,
+           "allocate record remove slots");
+    record->exists = true;
+    record_temp->exists = true;
+    record_backup->exists = true;
+    counter->exists = true;
+    counter_temp->exists = true;
+    counter_backup->exists = true;
+
+    expect(zf_store_recovery_remove_record_paths(&storage, k_repeated_credential_file_name),
+           "record path removal should include atomic companions");
+    expect(!record->exists, "record removal should delete primary record");
+    expect(!record_temp->exists, "record removal should delete temp record");
+    expect(!record_backup->exists, "record removal should delete backup record");
+    expect(!counter->exists, "record removal should delete counter floor");
+    expect(!counter_temp->exists, "record removal should delete counter temp");
+    expect(!counter_backup->exists, "record removal should delete counter backup");
+}
+
+static void test_atomic_file_write_overwrites_primary_without_predelete(void) {
+    Storage storage = {0};
+    TestStorageFile *primary = NULL;
+    static const char path[] = ZF_APP_DATA_DIR "/atomic.bin";
+    static const char temp_path[] = ZF_APP_DATA_DIR "/atomic.tmp";
+    static const uint8_t old_value[] = {0x10, 0x11, 0x12};
+    static const uint8_t new_value[] = {0x20, 0x21, 0x22, 0x23};
+
+    test_storage_reset();
+    primary = test_storage_file_slot(path, true);
+    expect(primary != NULL, "allocate primary slot for atomic write overwrite");
+    memcpy(primary->data, old_value, sizeof(old_value));
+    primary->size = sizeof(old_value);
+    primary->exists = true;
+
+    expect(zf_storage_write_file_atomic(&storage, path, temp_path, new_value, sizeof(new_value)),
+           "atomic write should publish temp over existing primary");
+    expect(primary->exists, "atomic write should leave a primary file after overwrite");
+    expect(primary->size == sizeof(new_value), "atomic write should replace primary size");
+    expect(memcmp(primary->data, new_value, sizeof(new_value)) == 0,
+           "atomic write should replace primary contents");
+}
+
+static void test_atomic_file_write_failure_keeps_primary(void) {
+    Storage storage = {0};
+    TestStorageFile *primary = NULL;
+    TestStorageFile *temp = NULL;
+    static const char path[] = ZF_APP_DATA_DIR "/atomic.bin";
+    static const char temp_path[] = ZF_APP_DATA_DIR "/atomic.tmp";
+    static const uint8_t old_value[] = {0x30, 0x31, 0x32};
+    static const uint8_t new_value[] = {0x40, 0x41, 0x42, 0x43};
+
+    test_storage_reset();
+    primary = test_storage_file_slot(path, true);
+    temp = test_storage_file_slot(temp_path, true);
+    expect(primary != NULL && temp != NULL, "allocate slots for failed atomic write");
+    memcpy(primary->data, old_value, sizeof(old_value));
+    primary->size = sizeof(old_value);
+    primary->exists = true;
+
+    g_storage_fail_copy_match = temp_path;
+    expect(!zf_storage_write_file_atomic(&storage, path, temp_path, new_value, sizeof(new_value)),
+           "atomic write should report failed publish");
+    g_storage_fail_copy_match = NULL;
+
+    expect(primary->exists, "failed atomic publish should keep the old primary");
+    expect(primary->size == sizeof(old_value), "failed atomic publish should keep primary size");
+    expect(memcmp(primary->data, old_value, sizeof(old_value)) == 0,
+           "failed atomic publish should keep primary contents");
+    expect(!temp->exists, "failed atomic publish should clean up the temp file");
+}
+
+static void test_atomic_file_recovery_restores_backup_when_primary_missing(void) {
+    Storage storage = {0};
+    TestStorageFile *primary = NULL;
+    TestStorageFile *backup = NULL;
+    TestStorageFile *temp = NULL;
+    static const char path[] = ZF_APP_DATA_DIR "/atomic.bin";
+    static const char temp_path[] = ZF_APP_DATA_DIR "/atomic.tmp";
+    static const char backup_path[] = ZF_APP_DATA_DIR "/atomic.bin.bak";
+    static const uint8_t old_value[] = {0x50, 0x51, 0x52};
+    static const uint8_t temp_value[] = {0x60, 0x61, 0x62};
+
+    test_storage_reset();
+    primary = test_storage_file_slot(path, true);
+    backup = test_storage_file_slot(backup_path, true);
+    temp = test_storage_file_slot(temp_path, true);
+    expect(primary != NULL && backup != NULL && temp != NULL,
+           "allocate slots for atomic backup recovery");
+    memcpy(backup->data, old_value, sizeof(old_value));
+    backup->size = sizeof(old_value);
+    backup->exists = true;
+    memcpy(temp->data, temp_value, sizeof(temp_value));
+    temp->size = sizeof(temp_value);
+    temp->exists = true;
+
+    expect(zf_storage_recover_atomic_file(&storage, path, temp_path),
+           "atomic recovery should restore the backup");
+    expect(primary->exists, "atomic recovery should restore primary existence");
+    expect(primary->size == sizeof(old_value), "atomic recovery should restore primary size");
+    expect(memcmp(primary->data, old_value, sizeof(old_value)) == 0,
+           "atomic recovery should restore old primary contents");
+    expect(!backup->exists, "atomic recovery should consume the backup");
+    expect(!temp->exists, "atomic recovery should remove stale temp data");
+}
+
+static void test_atomic_file_remove_deletes_primary_temp_and_backup(void) {
+    Storage storage = {0};
+    TestStorageFile *primary = NULL;
+    TestStorageFile *backup = NULL;
+    TestStorageFile *temp = NULL;
+    static const char path[] = ZF_APP_DATA_DIR "/atomic.bin";
+    static const char temp_path[] = ZF_APP_DATA_DIR "/atomic.tmp";
+    static const char backup_path[] = ZF_APP_DATA_DIR "/atomic.bin.bak";
+
+    test_storage_reset();
+    primary = test_storage_file_slot(path, true);
+    backup = test_storage_file_slot(backup_path, true);
+    temp = test_storage_file_slot(temp_path, true);
+    expect(primary != NULL && backup != NULL && temp != NULL, "allocate slots for atomic remove");
+    primary->exists = true;
+    primary->size = 1U;
+    backup->exists = true;
+    backup->size = 1U;
+    temp->exists = true;
+    temp->size = 1U;
+
+    expect(zf_storage_remove_atomic_file(&storage, path, temp_path),
+           "atomic remove should remove all related paths");
+    expect(!primary->exists, "atomic remove should remove primary");
+    expect(!backup->exists, "atomic remove should remove backup");
+    expect(!temp->exists, "atomic remove should remove temp");
+}
+
 static void test_pin_auth_mismatch_keeps_block_state_when_persist_fails(void) {
     Storage storage = {0};
     ZfClientPinState state = {0};
@@ -8774,6 +8973,11 @@ int main(void) {
     test_selection_touch_rejects_default_ctap2_0_profile();
     test_selection_touch_auto_accept_bypasses_approval_prompt();
     test_store_cleanup_restores_backup_when_primary_is_missing();
+    test_store_remove_record_paths_deletes_atomic_backups();
+    test_atomic_file_write_overwrites_primary_without_predelete();
+    test_atomic_file_write_failure_keeps_primary();
+    test_atomic_file_recovery_restores_backup_when_primary_missing();
+    test_atomic_file_remove_deletes_primary_temp_and_backup();
     test_pin_auth_mismatch_keeps_block_state_when_persist_fails();
     test_wrong_pin_keeps_retry_state_when_persist_fails();
     test_pin_persist_failure_poison_blocks_reinit_after_wrong_pin();

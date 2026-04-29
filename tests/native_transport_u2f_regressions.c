@@ -929,7 +929,7 @@ FS_Error storage_common_remove(Storage *storage, const char *path) {
     return FSE_OK;
 }
 
-FS_Error storage_common_rename(Storage *storage, const char *old_path, const char *new_path) {
+FS_Error storage_common_copy(Storage *storage, const char *old_path, const char *new_path) {
     TestStorageFile *old_slot = NULL;
     TestStorageFile *new_slot = NULL;
 
@@ -943,6 +943,26 @@ FS_Error storage_common_rename(Storage *storage, const char *old_path, const cha
     memcpy(new_slot->data, old_slot->data, old_slot->size);
     new_slot->size = old_slot->size;
     new_slot->exists = true;
+    return FSE_OK;
+}
+
+FS_Error storage_common_rename(Storage *storage, const char *old_path, const char *new_path) {
+    TestStorageFile *old_slot = NULL;
+    FS_Error copy_result = FSE_NOT_EXIST;
+
+    old_slot = test_storage_file_slot(old_path, false);
+    if (!old_slot || !old_slot->exists) {
+        return FSE_NOT_EXIST;
+    }
+
+    if (storage_file_exists(storage, new_path)) {
+        storage_common_remove(storage, new_path);
+    }
+    copy_result = storage_common_copy(storage, old_path, new_path);
+    if (copy_result != FSE_OK) {
+        return copy_result;
+    }
+
     old_slot->exists = false;
     old_slot->size = 0;
     memset(old_slot->data, 0, sizeof(old_slot->data));
@@ -971,6 +991,14 @@ bool storage_simply_mkdir(Storage *storage, const char *path) {
         return true;
     }
     return false;
+}
+
+bool storage_file_exists(Storage *storage, const char *path) {
+    TestStorageFile *slot = NULL;
+
+    UNUSED(storage);
+    slot = test_storage_file_slot(path, false);
+    return slot && slot->exists;
 }
 
 bool storage_dir_open(File *file, const char *path) {

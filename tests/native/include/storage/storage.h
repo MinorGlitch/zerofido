@@ -25,9 +25,11 @@ typedef enum {
 
 bool file_info_is_dir(const FileInfo *info);
 FS_Error storage_common_remove(Storage *storage, const char *path);
+FS_Error storage_common_copy(Storage *storage, const char *old_path, const char *new_path);
 FS_Error storage_common_rename(Storage *storage, const char *old_path, const char *new_path);
 bool storage_dir_exists(Storage *storage, const char *path);
 bool storage_simply_mkdir(Storage *storage, const char *path);
+bool storage_file_exists(Storage *storage, const char *path);
 bool storage_dir_open(File *file, const char *path);
 bool storage_dir_read(File *file, FileInfo *info, char *name, size_t name_size);
 void storage_dir_close(File *file);

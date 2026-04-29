@@ -253,23 +253,26 @@ static bool zf_local_attestation_ensure_directories(const ZfLocalAttestationProf
 
 static bool zf_local_attestation_remove_paths(const ZfLocalAttestationProfile *profile,
                                               Storage *storage, bool remove_committed) {
-    const char *paths[4];
+    const char *paths[2];
     size_t count = 0U;
 
     if (!zf_profile_is_valid(profile)) {
         return false;
     }
+    if (remove_committed) {
+        return zf_storage_remove_atomic_file(storage, profile->cert_file,
+                                             profile->cert_temp_file) &&
+               zf_storage_remove_atomic_file(storage, profile->key_file, profile->key_temp_file);
+    }
     paths[count++] = profile->cert_temp_file;
     paths[count++] = profile->key_temp_file;
-    if (remove_committed) {
-        paths[count++] = profile->cert_file;
-        paths[count++] = profile->key_file;
-    }
     return zf_storage_remove_optional_paths(storage, paths, count);
 }
 
 static void zf_local_attestation_cleanup_temps(const ZfLocalAttestationProfile *profile,
                                                Storage *storage) {
+    zf_storage_recover_atomic_file(storage, profile->cert_file, profile->cert_temp_file);
+    zf_storage_recover_atomic_file(storage, profile->key_file, profile->key_temp_file);
     if (!zf_local_attestation_remove_paths(profile, storage, false)) {
         zf_telemetry_log("attestation temp cleanup failed");
     }

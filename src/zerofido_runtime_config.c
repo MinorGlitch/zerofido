@@ -96,6 +96,8 @@ void zf_runtime_config_load(Storage *storage, ZfRuntimeConfig *config) {
     if (!storage || !config) {
         return;
     }
+    zf_storage_recover_atomic_file(storage, ZF_RUNTIME_CONFIG_FILE_PATH,
+                                   ZF_RUNTIME_CONFIG_FILE_TEMP_PATH);
 
     file = storage_file_alloc(storage);
     if (!file) {

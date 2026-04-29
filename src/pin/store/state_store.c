@@ -123,9 +123,9 @@ static bool zf_pin_verify_retry_state(const uint8_t pin_hash[ZF_PIN_HASH_LEN], u
     return ok;
 }
 
-/* Removes stale temp files left by interrupted PIN persistence. */
+/* Recovers or removes files left by interrupted PIN persistence. */
 void zf_pin_state_store_cleanup_temp(Storage *storage) {
-    zf_storage_remove_optional(storage, ZF_PIN_FILE_TEMP_PATH);
+    zf_storage_recover_atomic_file(storage, ZF_PIN_FILE_PATH, ZF_PIN_FILE_TEMP_PATH);
 }
 
 /* Loads and authenticates persisted PIN hash/retry state. */
@@ -242,11 +242,9 @@ bool zf_pin_state_store_fail_closed(Storage *storage, const ZfClientPinState *st
         return true;
     }
 
-    zf_storage_remove_optional(storage, ZF_PIN_FILE_TEMP_PATH);
-    return zf_storage_remove_optional(storage, ZF_PIN_FILE_PATH);
+    return zf_storage_remove_atomic_file(storage, ZF_PIN_FILE_PATH, ZF_PIN_FILE_TEMP_PATH);
 }
 
 bool zf_pin_state_store_clear(Storage *storage) {
-    zf_storage_remove_optional(storage, ZF_PIN_FILE_TEMP_PATH);
-    return zf_storage_remove_optional(storage, ZF_PIN_FILE_PATH);
+    return zf_storage_remove_atomic_file(storage, ZF_PIN_FILE_PATH, ZF_PIN_FILE_TEMP_PATH);
 }
