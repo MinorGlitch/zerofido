@@ -45,12 +45,22 @@ uv sync
 ## Build Profiles
 
 The app manifest reads `ZEROFIDO_PROFILE` at build time. The default is `nfc`.
+Release builds also default to `ZEROFIDO_RELEASE_DIAGNOSTICS=0` and
+`ZEROFIDO_DEV_ATTESTATION=0`.
 
 | Profile | Build flag | Use |
 | --- | --- | --- |
 | NFC only | `ZEROFIDO_PROFILE=nfc` | Phone and NFC conformance work. This is the default. |
 | USB HID only | `ZEROFIDO_PROFILE=usb` | Desktop browser WebAuthn and U2F testing. |
 | Full | `ZEROFIDO_PROFILE=full` | Builds both transports and lets the app choose at runtime. |
+
+Release-default builds do not compile the NFC trace implementation and do not compile the bundled
+development attestation chain. Diagnostic and private-trust builds must opt in explicitly:
+
+```bash
+ZEROFIDO_PROFILE=nfc ZEROFIDO_RELEASE_DIAGNOSTICS=1 uv run python -m ufbt
+ZEROFIDO_PROFILE=usb ZEROFIDO_DEV_ATTESTATION=1 uv run python -m ufbt
+```
 
 Build the profile you want:
 
@@ -194,7 +204,10 @@ Build a release `.fap` for the selected profile and verify that only the app ent
 remains exported:
 
 ```bash
-ZEROFIDO_PROFILE=usb uv run python host_tools/package_release.py
+ZEROFIDO_PROFILE=usb \
+ZEROFIDO_RELEASE_DIAGNOSTICS=0 \
+ZEROFIDO_DEV_ATTESTATION=0 \
+uv run python host_tools/package_release.py
 ```
 
 Package an existing `dist/zerofido.fap` without rebuilding:
@@ -273,7 +286,8 @@ If the conformance tool changes the PIN state, regenerate metadata with the matc
 - Flipper Zero hardware does not give this app a secure element for credential keys.
 - Software attestation proves a local app install identity, not vendor hardware provenance.
 - Physical access to the device changes the threat model.
-- Diagnostic and conformance builds may log protocol data. Review build flags before release use.
+- Diagnostic and conformance builds may log protocol data. Release-default builds set
+  `ZF_RELEASE_DIAGNOSTICS=0`.
 
 ## License
 

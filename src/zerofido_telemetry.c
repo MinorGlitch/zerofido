@@ -9,6 +9,8 @@
 
 #include "zerofido_telemetry.h"
 
+#include "zerofido_types.h"
+
 #include <furi.h>
 
 #ifndef ZF_HOST_TEST
@@ -18,7 +20,7 @@
 
 #define ZF_TELEMETRY_TAG "ZeroFIDO:MEM"
 
-#ifndef ZF_HOST_TEST
+#if !defined(ZF_HOST_TEST) && ZF_RELEASE_DIAGNOSTICS
 void zf_telemetry_log(const char *event) {
     FuriThreadId thread_id = furi_thread_get_current_id();
 
@@ -37,6 +39,19 @@ void zf_telemetry_log_oom(const char *event, size_t requested_size) {
                (unsigned)memmgr_get_minimum_free_heap(),
                (unsigned)memmgr_heap_get_max_free_block(),
                (unsigned long)(thread_id ? furi_thread_get_stack_space(thread_id) : 0U));
+}
+
+size_t zf_telemetry_heap_max_free_block(void) {
+    return memmgr_heap_get_max_free_block();
+}
+#elif !defined(ZF_HOST_TEST)
+void zf_telemetry_log(const char *event) {
+    (void)event;
+}
+
+void zf_telemetry_log_oom(const char *event, size_t requested_size) {
+    (void)event;
+    (void)requested_size;
 }
 
 size_t zf_telemetry_heap_max_free_block(void) {

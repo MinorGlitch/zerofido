@@ -5,16 +5,51 @@ profile = os.environ.get("ZEROFIDO_PROFILE", "nfc").lower()
 if profile not in ("usb", "nfc", "full"):
     raise ValueError("ZEROFIDO_PROFILE must be one of: usb, nfc, full")
 
-cdefines = ["ZF_RELEASE_DIAGNOSTICS=1"]
+def env_flag(name, default=False):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    value = value.lower()
+    if value in ("1", "true", "yes", "on"):
+        return True
+    if value in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(f"{name} must be a boolean value")
+
+
+release_diagnostics = env_flag("ZEROFIDO_RELEASE_DIAGNOSTICS", False)
+dev_attestation = env_flag("ZEROFIDO_DEV_ATTESTATION", False)
+
+cdefines = [
+    f"ZF_RELEASE_DIAGNOSTICS={1 if release_diagnostics else 0}",
+    f"ZF_DEV_ATTESTATION={1 if dev_attestation else 0}",
+]
 sources = [
     "*.c",
+    "!.git",
+    "!.github",
+    "!.idea",
+    "!.tmp",
+    "!.ufbt",
+    "!.venv",
+    "!.vscode",
+    "!__pycache__",
     "!dist",
     "!docs",
     "!fixtures",
     "!host_tools",
     "!include",
+    "!metadata",
     "!tests",
     "!tools",
+    "!*_debug.c",
+    "!debug_*.c",
+    "!*_diag.c",
+    "!diag_*.c",
+    "!*_fixture.c",
+    "!fixture_*.c",
+    "!*_test.c",
+    "!test_*.c",
 ]
 requires = [
     "gui",
@@ -41,6 +76,9 @@ elif profile == "nfc":
 else:
     requires.append("nfc")
     description = "CTAP2 authenticator over USB HID or NFC"
+
+if not release_diagnostics:
+    sources.append("!nfc_trace.c")
 
 App(
     appid="zerofido",

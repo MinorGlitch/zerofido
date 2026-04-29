@@ -1,0 +1,71 @@
+name: Build profiles
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-profiles-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build ${{ matrix.profile }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        profile:
+          - nfc
+          - usb
+          - full
+    env:
+      UV_PYTHON: "3.14"
+      ZEROFIDO_PROFILE: ${{ matrix.profile }}
+      ZEROFIDO_RELEASE_DIAGNOSTICS: "0"
+      ZEROFIDO_DEV_ATTESTATION: "0"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install Python
+        run: uv python install 3.14
+
+      - name: Sync tools
+        run: uv sync --locked
+
+      - name: Check release build defaults
+        run: uv run python -m unittest tests.test_application_manifest
+
+      - name: Build profile
+        run: uv run python -m ufbt
+
+      - name: Package release FAP
+        run: >
+          uv run python host_tools/package_release.py
+          --skip-build
+          --fap dist/zerofido.fap
+          --output-fap dist/zerofido-${{ matrix.profile }}-release.fap
+
+      - name: Upload FAP artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: zerofido-${{ matrix.profile }}
+          if-no-files-found: error
+          path: |
+            dist/zerofido.fap
+            dist/zerofido-${{ matrix.profile }}-release.fap
