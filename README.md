@@ -52,8 +52,6 @@ Open ZeroFIDO before starting a passkey or security-key flow.
 - When the Flipper asks for approval, confirm only if the site and account look right.
 - If a site asks for a PIN, use the browser or phone prompt. ZeroFIDO keeps the PIN retry state on
   the Flipper and uses the standard CTAP PIN token flow.
-- Older U2F registrations and sign-ins use the same app. Choose security key or U2F in the service
-  when passkeys are not available.
 
 ## Settings
 
