@@ -78,20 +78,19 @@ ZeroFIDO includes an on-device Settings screen.
 
 ## Security Model and Limits
 
-- Flipper Zero gives ZeroFIDO no secure element for credential keys.
-- ZeroFIDO generates credential private keys on the device. It wraps each private key with the
-  Flipper crypto enclave unique key and a per-record IV before writing the credential record to app
-  storage. The record still stores the relying-party ID, user fields, public key, wrapped private
-  key, IV, and counters needed to find and use the credential.
-- ZeroFIDO wraps key material. It does not encrypt the whole app directory.
-- Counter floor files and PIN retry state are sealed with the same Flipper crypto APIs so stale
-  files cannot roll counters or retry state backward.
-- Physical access to the device changes the risk model. Keep at least one backup sign-in method for
-  accounts you care about.
-- ZeroFIDO uses local software attestation, not hardware-backed vendor attestation.
-- ZeroFIDO has not passed FIDO Alliance certification.
+- ZeroFIDO runs on general-purpose Flipper Zero hardware. There is no secure element, so physical
+  access to the device changes the risk model.
+- Credential private keys are generated on the device and stored only after being wrapped with the
+  Flipper crypto enclave unique key and a per-record IV. App storage still contains the metadata
+  needed to find and use credentials, including relying-party IDs, user fields, public keys, wrapped
+  private keys, IVs, and counters.
+- Counter floor files and PIN retry state are sealed with the same Flipper crypto APIs. ZeroFIDO
+  protects key material and rollback-sensitive state; it does not encrypt the whole app directory.
+- Attestation is local software attestation, not hardware-backed vendor provenance, and ZeroFIDO is
+  not FIDO Alliance certified.
 - Release builds set `ZF_RELEASE_DIAGNOSTICS=0`; diagnostic and conformance builds may log
   protocol data.
+- Keep at least one backup sign-in method for accounts you care about.
 
 ## Attestation
 
