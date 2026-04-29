@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import unittest
 from base64 import b64encode
 from datetime import datetime, timedelta, timezone
 from hashlib import sha1
-from pathlib import Path
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -23,8 +21,28 @@ from host_tools.export_certification_metadata import (
 
 class ExportCertificationMetadataTests(unittest.TestCase):
     def load_statement(self) -> dict:
-        root = Path(__file__).resolve().parents[1]
-        return json.loads((root / "metadata.json").read_text())
+        return {
+            "legalHeader": "https://fidoalliance.org/metadata/metadata-statement-legal-header/",
+            "aaguid": "b51a976a-0b02-40aa-9d8a-36c8b91bbd1a",
+            "upv": [{"major": 1, "minor": 0}],
+            "attestationTypes": ["basic_full"],
+            "attestationRootCertificates": ["dGVzdC1yb290"],
+            "authenticationAlgorithms": ["secp256r1_ecdsa_sha256_raw"],
+            "authenticatorGetInfo": {
+                "versions": ["FIDO_2_0", "U2F_V2"],
+                "extensions": ["credProtect", "hmac-secret"],
+                "aaguid": "b51a976a0b0240aa9d8a36c8b91bbd1a",
+                "options": {"rk": True, "up": True, "plat": False},
+                "maxMsgSize": 1024,
+                "pinUvAuthProtocols": [1],
+            },
+            "userVerificationDetails": [
+                [
+                    {"userVerificationMethod": "passcode_external"},
+                    {"userVerificationMethod": "presence_internal"},
+                ]
+            ],
+        }
 
     def build_test_u2f_cert_der(self) -> tuple[bytes, bytes]:
         key = ec.generate_private_key(ec.SECP256R1())

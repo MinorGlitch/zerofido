@@ -35,8 +35,10 @@ DEFAULT_REPORT_DIR = ROOT / ".tmp" / "conformance_suite"
 DEFAULT_MANIFEST_PATH = ROOT / "host_tools" / "conformance_manifest.json"
 DEFAULT_CONFIG_PATH = ROOT / "host_tools" / "fixture_config.local.json"
 DEFAULT_CONFIG_FALLBACK_PATH = ROOT / "host_tools" / "fixture_config.example.json"
-DEFAULT_METADATA_PATH = ROOT / "docs" / "12-metadata-statement.json"
-DEFAULT_ROOT_CERT_PATH = ROOT / "docs" / "11-attestation-root.pem"
+DEFAULT_METADATA_DIR = ROOT / "metadata"
+DEFAULT_METADATA_PATH = DEFAULT_METADATA_DIR / "metadata-ctap20.json"
+DEFAULT_ROOT_CERT_PATH = DEFAULT_METADATA_DIR / "11-attestation-root.pem"
+DEFAULT_LEAF_CERT_PATH = DEFAULT_METADATA_DIR / "11-attestation-leaf.pem"
 
 EXPECTED_STATIC_USER_VERIFICATION_DETAILS = [
     [
@@ -44,6 +46,19 @@ EXPECTED_STATIC_USER_VERIFICATION_DETAILS = [
         {"userVerificationMethod": "presence_internal"},
     ]
 ]
+
+DEFAULT_STATIC_METADATA: dict[str, Any] = {
+    "aaguid": "b51a976a-0b02-40aa-9d8a-36c8b91bbd1a",
+    "authenticatorGetInfo": {
+        "versions": ["FIDO_2_0", "U2F_V2"],
+        "extensions": ["credProtect", "hmac-secret"],
+        "aaguid": "b51a976a0b0240aa9d8a36c8b91bbd1a",
+        "options": {"rk": True, "up": True, "plat": False},
+        "maxMsgSize": 1024,
+        "pinUvAuthProtocols": [1],
+    },
+    "userVerificationDetails": EXPECTED_STATIC_USER_VERIFICATION_DETAILS,
+}
 
 
 def utc_now_iso() -> str:
@@ -150,7 +165,9 @@ class ConformanceSuiteService:
         return index
 
     def _load_static_metadata(self) -> dict[str, Any]:
-        return json.loads(DEFAULT_METADATA_PATH.read_text())
+        if DEFAULT_METADATA_PATH.exists():
+            return json.loads(DEFAULT_METADATA_PATH.read_text())
+        return copy.deepcopy(DEFAULT_STATIC_METADATA)
 
     def _pem_to_der(self, path: Path) -> bytes:
         encoded_lines = [
@@ -1111,9 +1128,9 @@ class ConformanceSuiteService:
         return fn(self._get_run_device(matched))
 
     def _scenario_static_attestation_assets(self) -> dict[str, Any]:
-        root_pem = ROOT / "docs" / "11-attestation-root.pem"
-        leaf_pem = ROOT / "docs" / "11-attestation-leaf.pem"
-        statement = ROOT / "docs" / "12-metadata-statement.json"
+        root_pem = DEFAULT_ROOT_CERT_PATH
+        leaf_pem = DEFAULT_LEAF_CERT_PATH
+        statement = DEFAULT_METADATA_PATH
         missing = [str(path) for path in (root_pem, leaf_pem, statement) if not path.exists()]
         if missing:
             return {"status": "failed", "summary": "attestation assets missing", "details": {"missing": missing}}

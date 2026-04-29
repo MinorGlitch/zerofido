@@ -158,29 +158,32 @@ Private relying parties can pin a local certificate when that fits their test se
 
 Export metadata for certification tools:
 
+Create `metadata/statement.json` from the authenticator you are testing. The `metadata/`
+directory is ignored because these files are local certification artifacts.
+
 ```bash
 uv run python host_tools/export_certification_metadata.py \
-  --statement metadata.json \
+  --statement metadata/statement.json \
   --profile fido2-2.0 \
   --client-pin-state unset \
-  --output metadata-ctap20.json
+  --output metadata/metadata-ctap20.json
 
 uv run python host_tools/export_certification_metadata.py \
-  --statement metadata.json \
+  --statement metadata/statement.json \
   --profile fido2-2.1-experimental \
   --client-pin-state unset \
-  --output metadata-ctap21-experimental.json
+  --output metadata/metadata-ctap21-experimental.json
 ```
 
 For U2F, export metadata from the same device certificate returned by U2F Register:
 
 ```bash
-uv run python host_tools/ctaphid_probe.py --cmd u2fregister --u2f-cert-out u2f-attestation.der
+uv run python host_tools/ctaphid_probe.py --cmd u2fregister --u2f-cert-out metadata/u2f-attestation.der
 uv run python host_tools/export_certification_metadata.py \
-  --statement metadata.json \
+  --statement metadata/statement.json \
   --profile u2f \
-  --u2f-attestation-cert u2f-attestation.der \
-  --output metadata-u2f.json
+  --u2f-attestation-cert metadata/u2f-attestation.der \
+  --output metadata/metadata-u2f.json
 ```
 
 ## Security Notes

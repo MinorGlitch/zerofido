@@ -20,7 +20,8 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_STATEMENT_PATH = ROOT / "metadata.json"
+DEFAULT_METADATA_DIR = ROOT / "metadata"
+DEFAULT_STATEMENT_PATH = DEFAULT_METADATA_DIR / "statement.json"
 MDS3_LEGAL_HEADER = (
     "Submission of this statement and retrieval and use of this statement indicates acceptance "
     "of the appropriate agreement located at "
@@ -323,8 +324,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output",
-        default="metadata.json",
-        help="Path to write the certification metadata JSON",
+        help=(
+            "Path to write the certification metadata JSON. Defaults to "
+            "metadata/metadata-<profile>.json."
+        ),
     )
     parser.add_argument(
         "--profile",
@@ -358,7 +361,10 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     statement_path = Path(args.statement)
-    output_path = Path(args.output)
+    profile_name = "ctap20" if args.profile in ("fido2", "fido2-2.0") else args.profile
+    if profile_name == "fido2-2.1-experimental":
+        profile_name = "ctap21-experimental"
+    output_path = Path(args.output) if args.output else DEFAULT_METADATA_DIR / f"metadata-{profile_name}.json"
 
     statement = json.loads(statement_path.read_text())
     fido2_cert_der = None
@@ -384,6 +390,7 @@ def main() -> int:
         u2f_attestation_cert_der=u2f_cert_der,
         client_pin_state=args.client_pin_state,
     )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(exported, indent=2) + "\n")
     print(output_path)
     return 0

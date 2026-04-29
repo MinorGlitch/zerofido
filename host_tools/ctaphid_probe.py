@@ -728,6 +728,7 @@ def run_make_credential(device: hid.device, timeout_ms: int, verbose: bool, args
     if args.fido2_cert_out:
         cert_der = extract_make_credential_attestation_certificate(response_payload)
         cert_out = Path(args.fido2_cert_out)
+        cert_out.parent.mkdir(parents=True, exist_ok=True)
         cert_out.write_bytes(cert_der)
         print(f"attestation_certificate_path={cert_out}")
         print(f"attestation_certificate_len={len(cert_der)}")
@@ -1550,6 +1551,7 @@ def run_u2f_register(device: hid.device, timeout_ms: int, verbose: bool, args: a
     decoded["attestation_certificate_len"] = len(cert_der)
     if args.u2f_cert_out:
         cert_out = Path(args.u2f_cert_out)
+        cert_out.parent.mkdir(parents=True, exist_ok=True)
         cert_out.write_bytes(cert_der)
         decoded["attestation_certificate_path"] = str(cert_out)
     print(json.dumps(decoded, indent=2, sort_keys=True))

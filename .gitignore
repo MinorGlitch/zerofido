@@ -33,3 +33,10 @@ coverage/
 tmp/
 .tmp/
 host_tools/fixture_config.local.json
+
+# Generated certification and attestation artifacts.
+/metadata/
+/metadata.json
+/metadata-*.json
+/u2f-attestation.der
+/fido2-attestation.der
