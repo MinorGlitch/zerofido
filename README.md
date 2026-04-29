@@ -4,6 +4,8 @@
 
 ![ZeroFIDO banner: FIDO2 for Flipper Zero](docs/assets/zerofido-banner.png)
 
+> **Warning:** ZeroFIDO is experimental beta software. Keep backup sign-in methods.
+
 ZeroFIDO turns a Flipper Zero into a passkey and security-key app. Install the `.fap`,
 open ZeroFIDO, and approve sign-ins on services that support FIDO2/WebAuthn or legacy U2F.
 
