@@ -5,53 +5,138 @@
 ![Protocols: FIDO2 + U2F](https://img.shields.io/badge/protocols-FIDO2%20%2B%20U2F-green)
 
 ZeroFIDO turns a Flipper Zero into a passkey and security-key app. Install the `.fap`,
-open the app, and approve sign-ins on services that support FIDO2/WebAuthn or legacy U2F.
+open ZeroFIDO, and approve sign-ins on services that support FIDO2/WebAuthn or legacy U2F.
 
 The app stores credentials on the Flipper, asks for local approval, supports `ClientPIN`,
 and speaks the CTAP2/FIDO2 protocol used by browsers and security keys. USB HID handles
-desktop browser flows. NFC builds handle phone flows and conformance work.
+desktop browser flows. NFC builds handle phone flows.
 
-ZeroFIDO runs on general-purpose Flipper hardware. Treat it as a useful authenticator app
-with software-stored credentials, local approval, and local software attestation. For
-certified hardware-backed security, use a certified security key.
+ZeroFIDO runs on general-purpose Flipper hardware. Treat it as an authenticator app with
+software-stored credentials and local software attestation. Use a certified security key when you
+need certified hardware-backed security.
 
-## Supported
+## Quick Start
+
+1. Download a release `.fap` from [GitHub Releases](https://github.com/MinorGlitch/zerofido/releases).
+2. Copy it to your Flipper SD card under the Tools apps folder, or install it through qFlipper
+   or Flipper Lab.
+3. Open ZeroFIDO on the Flipper.
+4. Register it as a passkey or security key on a site that supports WebAuthn/FIDO2.
+5. Approve registration and sign-in prompts on the Flipper screen.
+
+Use the `usb` release for desktop browser flows. Use the `nfc` release for phone flows.
+Use `full` if you want both transports in one build.
+
+## What Works
 
 | Capability | Status |
 | --- | --- |
-| USB HID | Supported in the `usb` and `full` build profiles |
-| NFC | Supported in the default `nfc` build profile |
+| USB HID | Supported in the `usb` and `full` release profiles |
+| NFC | Supported in the `nfc` and `full` release profiles |
 | U2F V2 | Supported |
 | FIDO2.0 / CTAP2.0 | Supported |
-| FIDO2.1 / CTAP2.1 | Experimental metadata profile |
+| FIDO2.1 / CTAP2.1 | Experimental profile |
 | `ClientPIN` | Supported |
 | Discoverable credentials | Supported |
-| Attestation | Local software attestation, optional per relying-party request |
+| Attestation | Local software attestation when requested |
 
 ZeroFIDO builds as an external `.fap` in the Flipper Tools category.
 
-## Install
+## Daily Use
 
-Download a release `.fap`, then copy it to your Flipper SD card under the Tools apps folder.
-You can also install it through qFlipper or Flipper Lab.
+### Register A Passkey
 
-To build from source, install `uv`, then sync the Python tools:
+1. Open ZeroFIDO on the Flipper.
+2. Start passkey or security-key registration on the website or app.
+3. Choose the ZeroFIDO transport you installed: USB for desktop, NFC for phone.
+4. Approve the registration prompt on the Flipper.
+
+### Sign In
+
+1. Start sign-in on the website or app.
+2. Connect over USB or hold the Flipper near the phone NFC reader.
+3. Approve the sign-in prompt on the Flipper.
+
+### Use A PIN
+
+Some sites request `ClientPIN`. Set the PIN when your browser or phone prompts for it.
+ZeroFIDO stores PIN retry state on the device and uses the standard CTAP PIN token flow.
+
+### Legacy U2F
+
+Older services may ask for a U2F security key instead of a passkey. Use the same ZeroFIDO app.
+
+## Settings
+
+ZeroFIDO includes an on-device Settings screen.
+
+| Setting | Use |
+| --- | --- |
+| Transport | Choose USB, NFC, or automatic behavior when the build includes both transports. |
+| FIDO2 profile | Use FIDO2.0 for normal compatibility. Use FIDO2.1 for experimental testing. |
+| Attestation | Choose packed local software attestation or `Attest: none`. |
+| Auto-accept | Test mode for flows that should not require a touch prompt. Keep it off for normal use. |
+
+`Attest: none` makes MakeCredential return `fmt: "none"` unless the CTAP request lists a
+supported attestation format preference. `Attest: packed` allows local software packed
+attestation when the relying party requests direct attestation.
+
+## Security Model
+
+- Flipper Zero hardware gives this app no secure element for credential keys.
+- ZeroFIDO stores credentials in app storage on the Flipper.
+- Physical access to the device changes the risk model.
+- Software attestation identifies a local app install. It proves no FIDO-certified vendor hardware
+  provenance.
+- `attestation: "none"` suppresses the local attestation certificate and signature. The generated
+  credential keypair still signs later assertions.
+- Release builds set `ZF_RELEASE_DIAGNOSTICS=0`; diagnostic and conformance builds may log
+  protocol data.
+
+Keep at least one backup sign-in method for accounts you care about. Avoid making ZeroFIDO your
+sole account recovery factor.
+
+## Attestation
+
+ZeroFIDO generates local attestation material on the device. Public builds provide no
+hardware-backed vendor provenance, enterprise attestation, or a FIDO Metadata Service trust path.
+Private relying parties can pin a local certificate when that fits their setup.
+
+Attestation identifies the authenticator install. Credential keypairs authenticate accounts. When
+a relying party requests `attestation: "none"`, ZeroFIDO returns `fmt: "none"` with an empty
+attestation statement. ZeroFIDO still creates the credential keypair, but it withholds the local
+attestation certificate chain and skips the local attestation signature.
+
+When the relying party requests direct attestation, ZeroFIDO returns packed attestation from that
+install's local software attestation material.
+
+## For Developers
+
+Install `uv`, then sync the Python tools:
 
 ```bash
 uv sync
 ```
 
+The Python toolchain declares Python `3.14+` in `pyproject.toml`. C validation expects
+`clang-format`, `clang-tidy`, `cppcheck`, and a host C compiler.
+
+On macOS:
+
+```bash
+brew install llvm cppcheck
+```
+
 ## Build Profiles
 
-The app manifest reads `ZEROFIDO_PROFILE` at build time. The default is `nfc`.
-Release builds also default to `ZEROFIDO_RELEASE_DIAGNOSTICS=0` and
-`ZEROFIDO_DEV_ATTESTATION=0`.
+The app manifest reads `ZEROFIDO_PROFILE` at build time. The default profile is `nfc`.
+Release builds default to `ZEROFIDO_RELEASE_DIAGNOSTICS=0` and `ZEROFIDO_DEV_ATTESTATION=0`.
 
 | Profile | Build flag | Use |
 | --- | --- | --- |
-| NFC only | `ZEROFIDO_PROFILE=nfc` | Phone and NFC conformance work. This is the default. |
+| NFC only | `ZEROFIDO_PROFILE=nfc` | Phone and NFC conformance work. |
 | USB HID only | `ZEROFIDO_PROFILE=usb` | Desktop browser WebAuthn and U2F testing. |
-| Full | `ZEROFIDO_PROFILE=full` | Builds both transports and lets the app choose at runtime. |
+| Full | `ZEROFIDO_PROFILE=full` | Both transports in one app. |
 
 Release-default builds exclude the NFC trace implementation and the bundled development
 attestation chain. Diagnostic and private-trust builds must opt in:
@@ -61,7 +146,7 @@ ZEROFIDO_PROFILE=nfc ZEROFIDO_RELEASE_DIAGNOSTICS=1 uv run python -m ufbt
 ZEROFIDO_PROFILE=usb ZEROFIDO_DEV_ATTESTATION=1 uv run python -m ufbt
 ```
 
-Build the profile you want:
+Build a profile:
 
 ```bash
 ZEROFIDO_PROFILE=nfc uv run python -m ufbt
@@ -77,37 +162,9 @@ ZEROFIDO_PROFILE=usb uv run python -m ufbt launch
 
 The normal build output is `dist/zerofido.fap`.
 
-The Python toolchain declares Python `3.14+` in `pyproject.toml`. C validation expects
-`clang-format`, `clang-tidy`, `cppcheck`, and a host C compiler.
-
-On macOS:
-
-```bash
-brew install llvm cppcheck
-```
-
-## How To Use
-
-1. Build or install the profile that matches the transport you need.
-2. Open ZeroFIDO on the Flipper.
-3. Register the Flipper as a passkey or security key on a site that supports WebAuthn/FIDO2.
-4. Approve credential creation or sign-in on the Flipper screen.
-
-For older services, use the same app through the legacy U2F flow.
-
-## Features
-
-- WebAuthn/FIDO2 registration and sign-in
-- Legacy U2F register, authenticate, and version handling
-- Local approval for credential creation and assertions
-- `ClientPIN`, retry state, and PIN token flow
-- Discoverable credentials for resident-key/passkey-style use
-- Build-time transport profiles for USB HID, NFC, and full builds
-- Metadata exports for FIDO2.0, experimental FIDO2.1, and U2F certification tooling
-
 ## Validation
 
-Run the maintained host-tool tests:
+Run the maintained Python tests:
 
 ```bash
 uv run python -m unittest \
@@ -225,8 +282,8 @@ The packaged artifact lands at `dist/zerofido-release.fap` by default.
 
 ## GitHub Releases
 
-The `Build profiles` workflow verifies every push and pull request. The `Release`
-workflow publishes GitHub Releases from existing `v*` tags.
+The `Build profiles` workflow verifies every push and pull request. The `Release` workflow
+publishes GitHub Releases from existing `v*` tags.
 
 Create and push a tag:
 
@@ -236,28 +293,12 @@ git push origin v1.0.0
 ```
 
 The release workflow builds the `nfc`, `usb`, and `full` profiles with
-`ZEROFIDO_RELEASE_DIAGNOSTICS=0` and `ZEROFIDO_DEV_ATTESTATION=0`, packages only the stripped
+`ZEROFIDO_RELEASE_DIAGNOSTICS=0` and `ZEROFIDO_DEV_ATTESTATION=0`, packages the stripped
 `*-release.fap` artifacts, and uploads `SHA256SUMS`.
 
-You can also run the workflow manually from GitHub Actions with an existing tag such as `v1.0.0`.
+You can also run the workflow from GitHub Actions with an existing tag such as `v1.0.0`.
 
-## Metadata And Attestation
-
-ZeroFIDO generates local attestation material on the device. Public builds do not provide
-hardware-backed vendor provenance, enterprise attestation, or a FIDO Metadata Service trust
-path. Private relying parties can pin a local certificate when that fits their test setup.
-
-Attestation identifies the authenticator install. Credential keypairs authenticate accounts. When
-a relying party requests `attestation: "none"`, ZeroFIDO returns `fmt: "none"` with an empty
-attestation statement. ZeroFIDO still creates the credential keypair, but it withholds the local
-attestation certificate chain and skips the local attestation signature. When the relying party
-requests direct attestation, ZeroFIDO returns packed attestation from that install's local
-software attestation material.
-
-The on-device Settings screen also has an attestation mode. `Attest: none` makes `fmt: "none"`
-the default MakeCredential response unless the CTAP request explicitly lists a supported
-attestation format preference. `Attest: packed` allows local software packed attestation when
-requested.
+## Certification Metadata
 
 Metadata and captured attestation certificates belong to your local certification run. Keep them
 under `metadata/`; git ignores that directory.
@@ -312,17 +353,6 @@ uv run python host_tools/export_certification_metadata.py \
 
 If the conformance tool changes PIN state, regenerate metadata with the matching
 `--client-pin-state` before rerunning that profile.
-
-## Security Notes
-
-- Flipper Zero hardware does not give this app a secure element for credential keys.
-- Software attestation proves a local app install identity, not FIDO-certified vendor hardware
-  provenance.
-- `attestation: "none"` suppresses the local attestation certificate and signature. The generated
-  credential keypair still signs later assertions.
-- Physical access to the device changes the threat model.
-- Diagnostic and conformance builds may log protocol data. Release-default builds set
-  `ZF_RELEASE_DIAGNOSTICS=0`.
 
 ## License
 
