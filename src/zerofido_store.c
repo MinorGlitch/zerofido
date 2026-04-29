@@ -148,6 +148,9 @@ bool zf_store_ensure_capacity(ZfCredentialStore *store, size_t min_capacity) {
         return false;
     }
     old_capacity = zf_store_effective_capacity(store);
+    if (old_capacity > ZF_MAX_CREDENTIALS) {
+        return false;
+    }
     if (min_capacity <= old_capacity) {
         return true;
     }

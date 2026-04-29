@@ -438,7 +438,8 @@ static bool zerofido_finish_assertion_selection_locked(ZerofidoApp *app, uint32_
     uint16_t record_index;
 
     if (!zerofido_assertion_selection_pending_locked(app) || !app->store.records ||
-        menu_index > UINT16_MAX || menu_index >= app->approval.details.selection.credential_count) {
+        menu_index > UINT16_MAX || menu_index >= ZF_MAX_CREDENTIALS ||
+        menu_index >= app->approval.details.selection.credential_count) {
         return false;
     }
 
@@ -522,7 +523,10 @@ static void zerofido_refresh_credentials_menu(ZerofidoApp *app) {
 
     if (app->store.records) {
         credential_count = app->approval.details.selection.credential_count;
-        for (size_t i = 0; i < app->approval.details.selection.credential_count; ++i) {
+        if (credential_count > ZF_MAX_CREDENTIALS) {
+            credential_count = ZF_MAX_CREDENTIALS;
+        }
+        for (size_t i = 0; i < credential_count; ++i) {
             uint32_t record_index = app->approval.details.selection.credential_indices[i];
             if (record_index >= app->store.count || !app->store.records[record_index].in_use) {
                 continue;
@@ -778,8 +782,13 @@ static void zerofido_settings_menu_callback(void *context, uint32_t index) {
 static bool zerofido_pin_input_validator_callback(const char *text, FuriString *error,
                                                   void *context) {
     ZerofidoApp *app = context;
-    ZfPinBuffers *pin_buffers = app ? app->pin_buffers : NULL;
-    furi_assert(app);
+    ZfPinBuffers *pin_buffers = NULL;
+
+    if (!app) {
+        furi_string_set(error, "PIN input unavailable");
+        return false;
+    }
+    pin_buffers = app->pin_buffers;
 
     switch (app->pin_input_state) {
     case ZfPinInputSetNew:
@@ -1600,7 +1609,7 @@ void zerofido_ui_deinit(ZerofidoApp *app) {
     zerofido_pin_reset_buffers(app);
 
     if (app->view_dispatcher) {
-        for (uint8_t view_id = 0; view_id < ZfViewCount; ++view_id) {
+        for (ZfViewId view_id = ZfViewStatus; view_id < ZfViewCount; ++view_id) {
             if ((app->ui_registered_views & (1U << view_id)) != 0U) {
                 view_dispatcher_remove_view(app->view_dispatcher, view_id);
             }

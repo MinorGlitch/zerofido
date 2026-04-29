@@ -333,10 +333,15 @@ bool u2f_data_cert_key_load(uint8_t *cert_key) {
 /* Derives the cert public key from the private key and compares it to the stored cert. */
 bool u2f_data_cert_key_matches(const uint8_t *cert_key) {
     bool state = false;
-    uint8_t *cert = malloc(U2F_CERT_MAX_SIZE);
+    uint8_t *cert = NULL;
     uint32_t cert_len = 0;
 
-    if (!cert_key || !cert) {
+    if (!cert_key) {
+        return false;
+    }
+
+    cert = malloc(U2F_CERT_MAX_SIZE);
+    if (!cert) {
         return false;
     }
 
@@ -534,7 +539,7 @@ bool u2f_data_cnt_read(uint32_t *cnt_val) {
     furi_assert(cnt_val);
 
     bool state = false;
-    U2fCounterData cnt;
+    U2fCounterData cnt = {0};
     Storage *storage = furi_record_open(RECORD_STORAGE);
     const uint32_t accepted_versions[] = {U2F_COUNTER_VERSION};
 

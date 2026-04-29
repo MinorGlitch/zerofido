@@ -50,7 +50,7 @@ typedef enum {
     ZfViewPinMenu = 5,
     ZfViewPinInput = 6,
     ZfViewPinConfirm = 7,
-    ZfViewCount,
+    ZfViewCount = 8,
 } ZfViewId;
 
 typedef enum {

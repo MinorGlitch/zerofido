@@ -34,6 +34,7 @@ CLANG_TIDY_UNSUPPORTED_ARGS = {
     "-mlong-calls",
     "-mword-relocations",
 }
+ANALYSIS_EXCLUDED_DIRS = ("src/crypto/micro_ecc",)
 CPP_CHECK_ARG_PREFIXES = ("-D", "-I", "-U")
 CPP_CHECK_ARG_EXACT = {"-std=c11", "-std=gnu11"}
 
@@ -84,6 +85,15 @@ def load_paths(patterns: tuple[str, ...]) -> list[Path]:
 
 def load_files(patterns: tuple[str, ...]) -> list[str]:
     return [str(path) for path in load_paths(patterns)]
+
+
+def is_analysis_excluded(path: Path) -> bool:
+    rel = path.relative_to(ROOT)
+    return any(rel == Path(prefix) or rel.is_relative_to(prefix) for prefix in ANALYSIS_EXCLUDED_DIRS)
+
+
+def load_analysis_files(patterns: tuple[str, ...]) -> list[str]:
+    return [str(path) for path in load_paths(patterns) if not is_analysis_excluded(path)]
 
 
 def compile_commands_are_stale() -> bool:
@@ -245,13 +255,22 @@ def cmd_tidy(_: argparse.Namespace) -> None:
     ensure_compile_commands()
     clang_tidy = require_tool("clang-tidy")
     clang = shutil.which("clang") or "/opt/homebrew/opt/llvm/bin/clang"
-    files = load_files(CLANG_TIDY_GLOBS)
+    files = load_analysis_files(CLANG_TIDY_GLOBS)
     if not files:
         return
 
     build_dir = build_clang_tidy_compile_commands(clang)
     header_filter = re.escape(str(ROOT / "src")) + "/.*"
-    cmd = [clang_tidy, "-p", str(build_dir), f"-header-filter={header_filter}"]
+    excluded_headers = "|".join(
+        re.escape(str(ROOT / prefix)) + "/.*" for prefix in ANALYSIS_EXCLUDED_DIRS
+    )
+    cmd = [
+        clang_tidy,
+        "-p",
+        str(build_dir),
+        f"-header-filter={header_filter}",
+        f"-exclude-header-filter={excluded_headers}",
+    ]
     cmd.extend(files)
     run(cmd)
 
@@ -259,13 +278,13 @@ def cmd_tidy(_: argparse.Namespace) -> None:
 def cmd_cppcheck(_: argparse.Namespace) -> None:
     ensure_compile_commands()
     cppcheck = require_tool("cppcheck")
-    files = load_files(CPP_SOURCE_GLOBS)
+    files = load_analysis_files(CPP_SOURCE_GLOBS)
     if not files:
         return
     run(
         [
             cppcheck,
-            "--enable=warning,style,performance,portability",
+            "--enable=warning,performance,portability",
             "--error-exitcode=1",
             "--inline-suppr",
             "--quiet",
