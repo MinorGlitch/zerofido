@@ -43,27 +43,17 @@ ZeroFIDO builds as an external `.fap` in the Flipper Tools category.
 
 ## Daily Use
 
-### Register A Passkey
+Open ZeroFIDO before starting a passkey or security-key flow.
 
-1. Open ZeroFIDO on the Flipper.
-2. Start passkey or security-key registration on the website or app.
-3. Choose the ZeroFIDO transport you installed: USB for desktop, NFC for phone.
-4. Approve the registration prompt on the Flipper.
-
-### Sign In
-
-1. Start sign-in on the website or app.
-2. Connect over USB or hold the Flipper near the phone NFC reader.
-3. Approve the sign-in prompt on the Flipper.
-
-### Use A PIN
-
-Some sites request `ClientPIN`. Set the PIN when your browser or phone prompts for it.
-ZeroFIDO stores PIN retry state on the device and uses the standard CTAP PIN token flow.
-
-### Legacy U2F
-
-Older services may ask for a U2F security key instead of a passkey. Use the same ZeroFIDO app.
+- On desktop, connect the Flipper over USB and use the USB HID build.
+- On phones, hold the Flipper near the NFC reader and use the NFC build. NFC is currently tested on
+  iPhone; Android NFC support is planned. If the phone supports USB security keys, USB is the
+  fallback.
+- When the Flipper asks for approval, confirm only if the site and account look right.
+- If a site asks for a PIN, use the browser or phone prompt. ZeroFIDO keeps the PIN retry state on
+  the Flipper and uses the standard CTAP PIN token flow.
+- Older U2F registrations and sign-ins use the same app. Choose security key or U2F in the service
+  when passkeys are not available.
 
 ## Settings
 
