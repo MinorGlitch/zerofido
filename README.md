@@ -71,9 +71,10 @@ ZeroFIDO includes an on-device Settings screen.
 
 | Setting | Use |
 | --- | --- |
-| Transport | Choose USB, NFC, or automatic behavior when the build includes both transports. |
+| Transport | Choose USB HID or NFC when the build includes both transports. |
 | FIDO2 profile | Use FIDO2.0 for normal compatibility. Use FIDO2.1 for experimental testing. |
 | Attestation | Choose how MakeCredential answers attestation requests. |
+| PIN | Set, change, or manage the ClientPIN used by sites that require user verification. |
 | Auto-accept | Test mode for flows that should not require a touch prompt. Keep it off for normal use. |
 
 ## Security Model and Limits
