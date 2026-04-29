@@ -1,6 +1,8 @@
 .venv/
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 .python-version
 .ufbt/
 dist/
@@ -28,7 +30,15 @@ venv/
 target/
 vendor/
 *.log
+.coverage
+.coverage.*
 coverage/
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
 .cache/
 tmp/
 .tmp/
