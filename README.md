@@ -81,6 +81,14 @@ ZeroFIDO includes an on-device Settings screen.
 supported attestation format preference. `Attest: packed` allows local software packed
 attestation when the relying party requests direct attestation.
 
+## Known Limits
+
+- Flipper Zero gives ZeroFIDO no secure element for credential keys.
+- ZeroFIDO uses local software attestation, not hardware-backed vendor attestation.
+- ZeroFIDO has not passed FIDO Alliance certification.
+- Keep at least one backup sign-in method for accounts you care about. Avoid making ZeroFIDO your
+  sole account recovery factor.
+
 ## Security Model
 
 - Flipper Zero hardware gives this app no secure element for credential keys.
@@ -92,9 +100,6 @@ attestation when the relying party requests direct attestation.
   credential keypair still signs later assertions.
 - Release builds set `ZF_RELEASE_DIAGNOSTICS=0`; diagnostic and conformance builds may log
   protocol data.
-
-Keep at least one backup sign-in method for accounts you care about. Avoid making ZeroFIDO your
-sole account recovery factor.
 
 ## Attestation
 
