@@ -221,6 +221,24 @@ uv run python host_tools/package_release.py \
 
 The packaged artifact lands at `dist/zerofido-release.fap` by default.
 
+## GitHub Releases
+
+The `Build profiles` workflow verifies every push and pull request. The `Release`
+workflow publishes GitHub Releases from existing `v*` tags.
+
+Create and push a tag:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The release workflow rebuilds the `nfc`, `usb`, and `full` profiles with
+`ZEROFIDO_RELEASE_DIAGNOSTICS=0` and `ZEROFIDO_DEV_ATTESTATION=0`, packages only the stripped
+`*-release.fap` artifacts, and uploads `SHA256SUMS`.
+
+You can also run the workflow manually from GitHub Actions with an existing tag such as `v1.0.0`.
+
 ## Metadata And Attestation
 
 ZeroFIDO generates local attestation material on the device. Public builds do not provide
