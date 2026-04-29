@@ -57,9 +57,11 @@ enum {
     ZfRecordKeyCreatedAt = 12,
     ZfRecordKeyResidentKey = 13,
     ZfRecordKeyCredProtect = 14,
-    ZfRecordKeyHmacSecretWithoutUv = 15,
-    ZfRecordKeyHmacSecretWithUv = 16,
+    ZfRecordKeyHmacSecretWrapped = 15,
+    ZfRecordKeyHmacSecretIv = 16,
 };
+
+#define ZF_RECORD_HMAC_SECRET_STORAGE_LEN (ZF_HMAC_SECRET_LEN * 2U)
 
 typedef struct {
     uint32_t magic;
@@ -289,6 +291,56 @@ static bool zf_store_counter_floor_validate_index(Storage *storage, const char *
                                                   out_high_water);
 }
 
+static bool zf_record_wrap_hmac_secret(const ZfCredentialRecord *record,
+                                       uint8_t wrapped[ZF_RECORD_HMAC_SECRET_STORAGE_LEN],
+                                       uint8_t iv[ZF_WRAP_IV_LEN]) {
+    uint8_t plain[ZF_RECORD_HMAC_SECRET_STORAGE_LEN];
+    bool ok = false;
+
+    if (!record || !wrapped || !iv) {
+        return false;
+    }
+
+    memcpy(plain, record->hmac_secret_without_uv, ZF_HMAC_SECRET_LEN);
+    memcpy(plain + ZF_HMAC_SECRET_LEN, record->hmac_secret_with_uv, ZF_HMAC_SECRET_LEN);
+    furi_hal_random_fill_buf(iv, ZF_WRAP_IV_LEN);
+
+    if (furi_hal_crypto_enclave_load_key(FURI_HAL_CRYPTO_ENCLAVE_UNIQUE_KEY_SLOT, iv)) {
+        ok = furi_hal_crypto_encrypt(plain, wrapped, sizeof(plain));
+        furi_hal_crypto_enclave_unload_key(FURI_HAL_CRYPTO_ENCLAVE_UNIQUE_KEY_SLOT);
+    }
+
+    zf_crypto_secure_zero(plain, sizeof(plain));
+    if (!ok) {
+        zf_crypto_secure_zero(wrapped, ZF_RECORD_HMAC_SECRET_STORAGE_LEN);
+        zf_crypto_secure_zero(iv, ZF_WRAP_IV_LEN);
+    }
+    return ok;
+}
+
+static bool zf_record_unwrap_hmac_secret(ZfCredentialRecord *record,
+                                         const uint8_t wrapped[ZF_RECORD_HMAC_SECRET_STORAGE_LEN],
+                                         const uint8_t iv[ZF_WRAP_IV_LEN]) {
+    uint8_t plain[ZF_RECORD_HMAC_SECRET_STORAGE_LEN];
+    bool ok = false;
+
+    if (!record || !wrapped || !iv) {
+        return false;
+    }
+
+    if (furi_hal_crypto_enclave_load_key(FURI_HAL_CRYPTO_ENCLAVE_UNIQUE_KEY_SLOT, iv)) {
+        ok = furi_hal_crypto_decrypt(wrapped, plain, sizeof(plain));
+        furi_hal_crypto_enclave_unload_key(FURI_HAL_CRYPTO_ENCLAVE_UNIQUE_KEY_SLOT);
+    }
+    if (ok) {
+        memcpy(record->hmac_secret_without_uv, plain, ZF_HMAC_SECRET_LEN);
+        memcpy(record->hmac_secret_with_uv, plain + ZF_HMAC_SECRET_LEN, ZF_HMAC_SECRET_LEN);
+    }
+
+    zf_crypto_secure_zero(plain, sizeof(plain));
+    return ok;
+}
+
 bool zf_store_record_format_reserve_counter(Storage *storage, const ZfCredentialRecord *record,
                                             uint32_t *out_high_water) {
     uint32_t high_water = 0;
@@ -310,6 +362,8 @@ bool zf_store_record_format_reserve_counter(Storage *storage, const ZfCredential
 bool zf_store_record_format_encode(const ZfCredentialRecord *record, uint8_t *out,
                                    size_t *out_size) {
     ZfCborEncoder enc;
+    uint8_t hmac_secret_wrapped[ZF_RECORD_HMAC_SECRET_STORAGE_LEN] = {0};
+    uint8_t hmac_secret_iv[ZF_WRAP_IV_LEN] = {0};
     uint8_t effective_cred_protect =
         record->cred_protect == 0 ? ZF_CRED_PROTECT_UV_OPTIONAL : record->cred_protect;
 
@@ -320,6 +374,9 @@ bool zf_store_record_format_encode(const ZfCredentialRecord *record, uint8_t *ou
     size_t pairs = 14;
     if (record->hmac_secret) {
         pairs += 2;
+        if (!zf_record_wrap_hmac_secret(record, hmac_secret_wrapped, hmac_secret_iv)) {
+            return false;
+        }
     }
 
     bool ok =
@@ -352,19 +409,21 @@ bool zf_store_record_format_encode(const ZfCredentialRecord *record, uint8_t *ou
         zf_cbor_encode_uint(&enc, effective_cred_protect);
 
     if (ok && record->hmac_secret) {
-        ok = zf_cbor_encode_uint(&enc, ZfRecordKeyHmacSecretWithoutUv) &&
-             zf_cbor_encode_bytes(&enc, record->hmac_secret_without_uv,
-                                  sizeof(record->hmac_secret_without_uv)) &&
-             zf_cbor_encode_uint(&enc, ZfRecordKeyHmacSecretWithUv) &&
-             zf_cbor_encode_bytes(&enc, record->hmac_secret_with_uv,
-                                  sizeof(record->hmac_secret_with_uv));
+        ok = zf_cbor_encode_uint(&enc, ZfRecordKeyHmacSecretWrapped) &&
+             zf_cbor_encode_bytes(&enc, hmac_secret_wrapped, sizeof(hmac_secret_wrapped)) &&
+             zf_cbor_encode_uint(&enc, ZfRecordKeyHmacSecretIv) &&
+             zf_cbor_encode_bytes(&enc, hmac_secret_iv, sizeof(hmac_secret_iv));
     }
 
     if (!ok) {
+        zf_crypto_secure_zero(hmac_secret_wrapped, sizeof(hmac_secret_wrapped));
+        zf_crypto_secure_zero(hmac_secret_iv, sizeof(hmac_secret_iv));
         return false;
     }
 
     *out_size = zf_cbor_encoder_size(&enc);
+    zf_crypto_secure_zero(hmac_secret_wrapped, sizeof(hmac_secret_wrapped));
+    zf_crypto_secure_zero(hmac_secret_iv, sizeof(hmac_secret_iv));
     return true;
 }
 
@@ -499,12 +558,6 @@ static bool zf_record_decode_field(ZfCborCursor *cursor, uint64_t key, ZfCredent
         record->cred_protect = (uint8_t)raw;
         return true;
     }
-    case ZfRecordKeyHmacSecretWithoutUv:
-        return zf_record_decode_bytes(record->hmac_secret_without_uv,
-                                      sizeof(record->hmac_secret_without_uv), cursor);
-    case ZfRecordKeyHmacSecretWithUv:
-        return zf_record_decode_bytes(record->hmac_secret_with_uv,
-                                      sizeof(record->hmac_secret_with_uv), cursor);
     default:
         return zf_cbor_skip(cursor);
     }
@@ -527,8 +580,11 @@ static bool zf_record_decode(const uint8_t *data, size_t data_size, const char *
     bool saw_created_at = false;
     bool saw_resident_key = false;
     bool saw_cred_protect = false;
-    bool saw_hmac_secret_without_uv = false;
-    bool saw_hmac_secret_with_uv = false;
+    bool saw_hmac_secret_wrapped = false;
+    bool saw_hmac_secret_iv = false;
+    uint8_t hmac_secret_wrapped[ZF_RECORD_HMAC_SECRET_STORAGE_LEN] = {0};
+    uint8_t hmac_secret_iv[ZF_WRAP_IV_LEN] = {0};
+    bool ok = false;
 
     memset(out_record, 0, sizeof(*out_record));
     strncpy(out_record->file_name, file_name, sizeof(out_record->file_name) - 1);
@@ -536,16 +592,33 @@ static bool zf_record_decode(const uint8_t *data, size_t data_size, const char *
 
     zf_cbor_cursor_init(&cursor, data, data_size);
     if (!zf_cbor_read_map_start(&cursor, &pairs)) {
-        return false;
+        goto cleanup;
     }
 
     for (size_t i = 0; i < pairs; ++i) {
         uint64_t key = 0;
         if (!zf_cbor_read_uint(&cursor, &key)) {
-            return false;
+            goto cleanup;
         }
-        if (!zf_record_decode_field(&cursor, key, out_record, &version)) {
-            return false;
+        if (key == ZfRecordKeyHmacSecretWrapped) {
+            if (saw_hmac_secret_wrapped) {
+                goto cleanup;
+            }
+            if (!zf_record_decode_bytes(hmac_secret_wrapped, sizeof(hmac_secret_wrapped),
+                                        &cursor)) {
+                goto cleanup;
+            }
+            saw_hmac_secret_wrapped = true;
+        } else if (key == ZfRecordKeyHmacSecretIv) {
+            if (saw_hmac_secret_iv) {
+                goto cleanup;
+            }
+            if (!zf_record_decode_bytes(hmac_secret_iv, sizeof(hmac_secret_iv), &cursor)) {
+                goto cleanup;
+            }
+            saw_hmac_secret_iv = true;
+        } else if (!zf_record_decode_field(&cursor, key, out_record, &version)) {
+            goto cleanup;
         }
         switch (key) {
         case ZfRecordKeyVersion:
@@ -584,38 +657,41 @@ static bool zf_record_decode(const uint8_t *data, size_t data_size, const char *
         case ZfRecordKeyCredProtect:
             saw_cred_protect = true;
             break;
-        case ZfRecordKeyHmacSecretWithoutUv:
-            saw_hmac_secret_without_uv = true;
-            break;
-        case ZfRecordKeyHmacSecretWithUv:
-            saw_hmac_secret_with_uv = true;
-            break;
         default:
             break;
         }
     }
 
     if (cursor.ptr != cursor.end) {
-        return false;
+        goto cleanup;
     }
     if (!saw_version || !saw_credential_id || !saw_rp_id || !saw_user_id || !saw_public_x ||
         !saw_public_y || !saw_private_wrapped || !saw_private_iv || !saw_sign_count ||
         !saw_created_at || !saw_resident_key || !saw_cred_protect) {
-        return false;
+        goto cleanup;
     }
-    if (saw_hmac_secret_without_uv != saw_hmac_secret_with_uv) {
-        return false;
+    if (saw_hmac_secret_wrapped != saw_hmac_secret_iv) {
+        goto cleanup;
     }
     if (version != ZF_STORE_VERSION || out_record->rp_id[0] == '\0' ||
         !zf_record_id_matches_file_name(out_record->credential_id, out_record->credential_id_len,
                                         file_name)) {
-        return false;
+        goto cleanup;
     }
-    out_record->hmac_secret = saw_hmac_secret_without_uv && saw_hmac_secret_with_uv;
+    if (saw_hmac_secret_wrapped &&
+        !zf_record_unwrap_hmac_secret(out_record, hmac_secret_wrapped, hmac_secret_iv)) {
+        goto cleanup;
+    }
+    out_record->hmac_secret = saw_hmac_secret_wrapped;
 
     out_record->storage_version = version;
     out_record->in_use = true;
-    return true;
+    ok = true;
+
+cleanup:
+    zf_crypto_secure_zero(hmac_secret_wrapped, sizeof(hmac_secret_wrapped));
+    zf_crypto_secure_zero(hmac_secret_iv, sizeof(hmac_secret_iv));
+    return ok;
 }
 
 bool zf_store_record_format_is_record_name(const char *name) {

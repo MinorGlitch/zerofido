@@ -580,12 +580,16 @@ bool furi_hal_crypto_unload_key(void) {
 }
 
 bool furi_hal_crypto_encrypt(const uint8_t *input, uint8_t *output, size_t size) {
-    memcpy(output, input, size);
+    for (size_t i = 0; i < size; ++i) {
+        output[i] = input[i] ^ 0xA5U;
+    }
     return true;
 }
 
 bool furi_hal_crypto_decrypt(const uint8_t *input, uint8_t *output, size_t size) {
-    memcpy(output, input, size);
+    for (size_t i = 0; i < size; ++i) {
+        output[i] = input[i] ^ 0xA5U;
+    }
     return true;
 }
 
@@ -2053,6 +2057,132 @@ static void fill_large_resident_hmac_secret_record(ZfCredentialRecord *record) {
     record->in_use = true;
 }
 
+static void fill_hmac_secret_record(ZfCredentialRecord *record) {
+    memset(record, 0, sizeof(*record));
+    memset(record->credential_id, 0x10, sizeof(record->credential_id));
+    record->credential_id_len = sizeof(record->credential_id);
+    strcpy(record->file_name, k_repeated_credential_file_name);
+    strcpy(record->rp_id, "example.com");
+    memcpy(record->user_id, "user-1", 6);
+    record->user_id_len = 6;
+    strcpy(record->user_name, "alice");
+    strcpy(record->user_display_name, "Alice Example");
+    memset(record->public_x, 0x21, sizeof(record->public_x));
+    memset(record->public_y, 0x22, sizeof(record->public_y));
+    memset(record->private_wrapped, 0x23, sizeof(record->private_wrapped));
+    memset(record->private_iv, 0x24, sizeof(record->private_iv));
+    record->sign_count = 7;
+    record->created_at = 1234;
+    record->resident_key = true;
+    record->cred_protect = ZF_CRED_PROTECT_UV_OPTIONAL;
+    record->hmac_secret = true;
+    memset(record->hmac_secret_without_uv, 0x55, sizeof(record->hmac_secret_without_uv));
+    memset(record->hmac_secret_with_uv, 0x66, sizeof(record->hmac_secret_with_uv));
+}
+
+static bool read_record_hmac_secret_storage_fields(const uint8_t *buffer, size_t size,
+                                                   const uint8_t **wrapped, size_t *wrapped_len,
+                                                   size_t *iv_len) {
+    ZfCborCursor cursor;
+    size_t pairs = 0;
+    bool saw_wrapped = false;
+    bool saw_iv = false;
+
+    zf_cbor_cursor_init(&cursor, buffer, size);
+    if (!zf_cbor_read_map_start(&cursor, &pairs)) {
+        return false;
+    }
+    for (size_t i = 0; i < pairs; ++i) {
+        uint64_t key = 0;
+        const uint8_t *bytes = NULL;
+        size_t bytes_len = 0;
+
+        if (!zf_cbor_read_uint(&cursor, &key)) {
+            return false;
+        }
+        if (key == ZfRecordKeyHmacSecretWrapped) {
+            if (!zf_cbor_read_bytes_ptr(&cursor, &bytes, &bytes_len)) {
+                return false;
+            }
+            *wrapped = bytes;
+            *wrapped_len = bytes_len;
+            saw_wrapped = true;
+        } else if (key == ZfRecordKeyHmacSecretIv) {
+            if (!zf_cbor_read_bytes_ptr(&cursor, &bytes, &bytes_len)) {
+                return false;
+            }
+            *iv_len = bytes_len;
+            saw_iv = true;
+        } else if (!zf_cbor_skip(&cursor)) {
+            return false;
+        }
+    }
+    return saw_wrapped && saw_iv && cursor.ptr == cursor.end;
+}
+
+static bool append_duplicate_hmac_secret_field(uint8_t *buffer, size_t capacity, size_t *size,
+                                               uint64_t key, size_t field_size) {
+    ZfCborEncoder enc;
+    uint8_t field[ZF_RECORD_HMAC_SECRET_STORAGE_LEN] = {0};
+
+    if (!buffer || !size || *size >= capacity || field_size > sizeof(field) || buffer[0] != 0xB0) {
+        return false;
+    }
+    buffer[0] = 0xB1;
+    memset(field, 0xCC, field_size);
+    if (!zf_cbor_encoder_init(&enc, buffer + *size, capacity - *size) ||
+        !zf_cbor_encode_uint(&enc, key) || !zf_cbor_encode_bytes(&enc, field, field_size)) {
+        return false;
+    }
+    *size += zf_cbor_encoder_size(&enc);
+    return true;
+}
+
+static size_t encode_legacy_plaintext_hmac_secret_record(uint8_t *buffer, size_t capacity) {
+    ZfCredentialRecord record = {0};
+    ZfCborEncoder enc;
+
+    fill_hmac_secret_record(&record);
+
+    expect(zf_cbor_encoder_init(&enc, buffer, capacity), "init legacy hmac-secret record encoder");
+    expect(zf_cbor_encode_map(&enc, 16) && zf_cbor_encode_uint(&enc, ZfRecordKeyVersion) &&
+               zf_cbor_encode_uint(&enc, ZF_STORE_VERSION) &&
+               zf_cbor_encode_uint(&enc, ZfRecordKeyCredentialId) &&
+               zf_cbor_encode_bytes(&enc, record.credential_id, record.credential_id_len) &&
+               zf_cbor_encode_uint(&enc, ZfRecordKeyRpId) &&
+               zf_cbor_encode_text(&enc, record.rp_id) &&
+               zf_cbor_encode_uint(&enc, ZfRecordKeyUserId) &&
+               zf_cbor_encode_bytes(&enc, record.user_id, record.user_id_len) &&
+               zf_cbor_encode_uint(&enc, ZfRecordKeyUserName) &&
+               zf_cbor_encode_text(&enc, record.user_name) &&
+               zf_cbor_encode_uint(&enc, ZfRecordKeyDisplayName) &&
+               zf_cbor_encode_text(&enc, record.user_display_name) &&
+               zf_cbor_encode_uint(&enc, ZfRecordKeyPublicX) &&
+               zf_cbor_encode_bytes(&enc, record.public_x, sizeof(record.public_x)) &&
+               zf_cbor_encode_uint(&enc, ZfRecordKeyPublicY) &&
+               zf_cbor_encode_bytes(&enc, record.public_y, sizeof(record.public_y)) &&
+               zf_cbor_encode_uint(&enc, ZfRecordKeyPrivateWrapped) &&
+               zf_cbor_encode_bytes(&enc, record.private_wrapped, sizeof(record.private_wrapped)) &&
+               zf_cbor_encode_uint(&enc, ZfRecordKeyPrivateIv) &&
+               zf_cbor_encode_bytes(&enc, record.private_iv, sizeof(record.private_iv)) &&
+               zf_cbor_encode_uint(&enc, ZfRecordKeySignCount) &&
+               zf_cbor_encode_uint(&enc, record.sign_count) &&
+               zf_cbor_encode_uint(&enc, ZfRecordKeyCreatedAt) &&
+               zf_cbor_encode_uint(&enc, record.created_at) &&
+               zf_cbor_encode_uint(&enc, ZfRecordKeyResidentKey) &&
+               zf_cbor_encode_bool(&enc, record.resident_key) &&
+               zf_cbor_encode_uint(&enc, ZfRecordKeyCredProtect) &&
+               zf_cbor_encode_uint(&enc, record.cred_protect) &&
+               zf_cbor_encode_uint(&enc, ZfRecordKeyHmacSecretWrapped) &&
+               zf_cbor_encode_bytes(&enc, record.hmac_secret_without_uv,
+                                    sizeof(record.hmac_secret_without_uv)) &&
+               zf_cbor_encode_uint(&enc, ZfRecordKeyHmacSecretIv) &&
+               zf_cbor_encode_bytes(&enc, record.hmac_secret_with_uv,
+                                    sizeof(record.hmac_secret_with_uv)),
+           "encode legacy plaintext hmac-secret record");
+    return zf_cbor_encoder_size(&enc);
+}
+
 static void test_record_decode_rejects_partial_record(void) {
     uint8_t buffer[128];
     ZfCborEncoder enc;
@@ -2091,6 +2221,76 @@ static void test_record_encode_accepts_large_resident_record_with_hmac_secret(vo
     expect(zf_store_record_format_encode(&record, buffer, &encoded_size),
            "large resident hmac-secret record should encode");
     expect(encoded_size <= sizeof(buffer), "large resident hmac-secret record should fit buffer");
+}
+
+static void test_record_hmac_secret_storage_uses_wrapped_blob(void) {
+    uint8_t buffer[ZF_STORE_RECORD_MAX_SIZE];
+    ZfCredentialRecord record = {0};
+    ZfCredentialRecord decoded = {0};
+    size_t encoded_size = 0;
+    const uint8_t *wrapped = NULL;
+    size_t wrapped_len = 0;
+    size_t iv_len = 0;
+
+    fill_hmac_secret_record(&record);
+
+    expect(zf_store_record_format_encode(&record, buffer, &encoded_size),
+           "encode hmac-secret record with wrapped storage");
+    expect(read_record_hmac_secret_storage_fields(buffer, encoded_size, &wrapped, &wrapped_len,
+                                                  &iv_len),
+           "encoded hmac-secret record should expose wrapped storage fields");
+    expect(wrapped_len == ZF_RECORD_HMAC_SECRET_STORAGE_LEN,
+           "hmac-secret storage should use one wrapped seed blob");
+    expect(iv_len == ZF_WRAP_IV_LEN, "hmac-secret storage should carry a wrap IV");
+    expect(memcmp(wrapped, record.hmac_secret_without_uv, sizeof(record.hmac_secret_without_uv)) !=
+               0,
+           "wrapped hmac-secret blob should not start with plaintext without-UV seed");
+    expect(memcmp(wrapped + sizeof(record.hmac_secret_without_uv), record.hmac_secret_with_uv,
+                  sizeof(record.hmac_secret_with_uv)) != 0,
+           "wrapped hmac-secret blob should not end with plaintext with-UV seed");
+    expect(zf_record_decode(buffer, encoded_size, k_repeated_credential_file_name, &decoded),
+           "wrapped hmac-secret record should decode");
+    expect(decoded.hmac_secret, "decoded record should preserve hmac-secret capability");
+    expect(memcmp(decoded.hmac_secret_without_uv, record.hmac_secret_without_uv,
+                  sizeof(record.hmac_secret_without_uv)) == 0,
+           "decoded hmac-secret without-UV seed");
+    expect(memcmp(decoded.hmac_secret_with_uv, record.hmac_secret_with_uv,
+                  sizeof(record.hmac_secret_with_uv)) == 0,
+           "decoded hmac-secret with-UV seed");
+}
+
+static void test_record_decode_rejects_legacy_plaintext_hmac_secret_storage(void) {
+    uint8_t buffer[ZF_STORE_RECORD_MAX_SIZE];
+    ZfCredentialRecord record = {0};
+    size_t size = encode_legacy_plaintext_hmac_secret_record(buffer, sizeof(buffer));
+
+    expect(!zf_record_decode(buffer, size, k_repeated_credential_file_name, &record),
+           "legacy plaintext hmac-secret storage should be rejected");
+}
+
+static void test_record_decode_rejects_duplicate_hmac_secret_storage_fields(void) {
+    uint8_t buffer[ZF_STORE_RECORD_MAX_SIZE];
+    ZfCredentialRecord source = {0};
+    ZfCredentialRecord record = {0};
+    size_t size = 0;
+
+    fill_hmac_secret_record(&source);
+    expect(zf_store_record_format_encode(&source, buffer, &size),
+           "encode hmac-secret record for duplicate wrapped test");
+    expect(append_duplicate_hmac_secret_field(buffer, sizeof(buffer), &size,
+                                              ZfRecordKeyHmacSecretWrapped,
+                                              ZF_RECORD_HMAC_SECRET_STORAGE_LEN),
+           "append duplicate hmac-secret wrapped field");
+    expect(!zf_record_decode(buffer, size, k_repeated_credential_file_name, &record),
+           "duplicate hmac-secret wrapped fields should be rejected");
+
+    expect(zf_store_record_format_encode(&source, buffer, &size),
+           "encode hmac-secret record for duplicate IV test");
+    expect(append_duplicate_hmac_secret_field(buffer, sizeof(buffer), &size,
+                                              ZfRecordKeyHmacSecretIv, ZF_WRAP_IV_LEN),
+           "append duplicate hmac-secret IV field");
+    expect(!zf_record_decode(buffer, size, k_repeated_credential_file_name, &record),
+           "duplicate hmac-secret IV fields should be rejected");
 }
 
 static void test_record_decode_rejects_embedded_nul_text(void) {
@@ -8787,6 +8987,9 @@ int main(void) {
     test_record_decode_rejects_partial_record();
     test_record_decode_accepts_complete_record();
     test_record_encode_accepts_large_resident_record_with_hmac_secret();
+    test_record_hmac_secret_storage_uses_wrapped_blob();
+    test_record_decode_rejects_legacy_plaintext_hmac_secret_storage();
+    test_record_decode_rejects_duplicate_hmac_secret_storage_fields();
     test_record_decode_rejects_embedded_nul_text();
     test_record_decode_rejects_file_name_mismatch();
     test_record_decode_rejects_oversized_version();
