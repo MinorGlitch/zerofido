@@ -73,12 +73,8 @@ ZeroFIDO includes an on-device Settings screen.
 | --- | --- |
 | Transport | Choose USB, NFC, or automatic behavior when the build includes both transports. |
 | FIDO2 profile | Use FIDO2.0 for normal compatibility. Use FIDO2.1 for experimental testing. |
-| Attestation | Choose packed local software attestation or `Attest: none`. |
+| Attestation | Choose how MakeCredential answers attestation requests. |
 | Auto-accept | Test mode for flows that should not require a touch prompt. Keep it off for normal use. |
-
-`Attest: none` makes MakeCredential return `fmt: "none"` unless the CTAP request lists a
-supported attestation format preference. `Attest: packed` allows local software packed
-attestation when the relying party requests direct attestation.
 
 ## Security Model and Limits
 
@@ -100,19 +96,18 @@ attestation when the relying party requests direct attestation.
 ## Attestation
 
 <details>
-<summary>Local software attestation and <code>Attest: none</code></summary>
+<summary>Choosing <code>Attest: none</code> or <code>Attest: packed</code></summary>
 
-ZeroFIDO generates local attestation material on the device. Public builds provide no
-hardware-backed vendor provenance, enterprise attestation, or a FIDO Metadata Service trust path.
-Private relying parties can pin a local certificate when that fits their setup.
+ZeroFIDO supports two MakeCredential attestation modes from the on-device Settings screen:
 
-Attestation identifies the authenticator install. Credential keypairs authenticate accounts. When
-a relying party requests `attestation: "none"`, ZeroFIDO returns `fmt: "none"` with an empty
-attestation statement. ZeroFIDO still creates the credential keypair, but it withholds the local
-attestation certificate chain and skips the local attestation signature.
+- `Attest: none` returns `fmt: "none"` with an empty attestation statement. The credential is still
+  created normally, but ZeroFIDO does not include the local attestation certificate chain or
+  attestation signature.
+- `Attest: packed` allows local software packed attestation when the relying party requests direct
+  attestation. This identifies the ZeroFIDO install, not hardware-backed vendor provenance.
 
-When the relying party requests direct attestation, ZeroFIDO returns packed attestation from that
-install's local software attestation material.
+If the CTAP request includes `attestationFormats` and names a supported format, that explicit
+preference wins over the saved setting. ZeroFIDO currently supports `none` and `packed`.
 
 </details>
 
