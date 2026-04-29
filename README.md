@@ -11,6 +11,9 @@ The app stores credentials on the Flipper, asks for local approval, supports `Cl
 and speaks the CTAP2/FIDO2 protocol used by browsers and security keys. USB HID handles
 desktop browser flows. NFC builds handle phone flows.
 
+NFC has been tested on iPhone. Android NFC support is next. In the meantime, connect the
+Flipper to the phone over USB when the phone accepts USB security keys.
+
 ZeroFIDO runs on general-purpose Flipper hardware. Treat it as an authenticator app with
 software-stored credentials and local software attestation. Use a certified security key when you
 need certified hardware-backed security.
@@ -358,6 +361,14 @@ uv run python host_tools/export_certification_metadata.py \
 
 If the conformance tool changes PIN state, regenerate metadata with the matching
 `--client-pin-state` before rerunning that profile.
+
+## Support
+
+ZeroFIDO is built and maintained in spare time. If it helped you, you can support the work here:
+
+[Buy me a coffee](https://buymeacoffee.com/astoyanov)
+
+Support is optional and does not affect releases, issues, or support requests.
 
 ## License
 
