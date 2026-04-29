@@ -27,8 +27,8 @@ need certified hardware-backed security.
 4. Register it as a passkey or security key on a site that supports WebAuthn/FIDO2.
 5. Approve registration and sign-in prompts on the Flipper screen.
 
-Use the `usb` release for desktop browser flows. Use the `nfc` release for phone flows.
-Use `full` if you want both transports in one build.
+U2F and FIDO2.0 pass their respective tests in the current FIDO Conformance Tools suite.
+FIDO2.1 support is in development. Bug reports, feature requests, and pull requests are welcome.
 
 ## What Works
 
@@ -118,7 +118,26 @@ attestation certificate chain and skips the local attestation signature.
 When the relying party requests direct attestation, ZeroFIDO returns packed attestation from that
 install's local software attestation material.
 
+## Support
+
+ZeroFIDO is built and maintained in spare time. If it helped you, you can support the work here:
+
+[![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-astoyanov-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=000)](https://buymeacoffee.com/astoyanov)
+
+Support is optional and does not affect releases, issues, or support requests.
+
+## License
+
+ZeroFIDO uses the GNU General Public License, version 3 or later. See [`LICENSE`](LICENSE).
+
+Dependency and provenance notes live in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+
 ## For Developers
+
+<details>
+<summary>Developer setup, builds, validation, releases, and certification metadata</summary>
+
+### Setup
 
 Install `uv`, then sync the Python tools:
 
@@ -135,7 +154,7 @@ On macOS:
 brew install llvm cppcheck
 ```
 
-## Build Profiles
+### Build Profiles
 
 The app manifest reads `ZEROFIDO_PROFILE` at build time. The default profile is `nfc`.
 Release builds default to `ZEROFIDO_RELEASE_DIAGNOSTICS=0` and `ZEROFIDO_DEV_ATTESTATION=0`.
@@ -170,7 +189,7 @@ ZEROFIDO_PROFILE=usb uv run python -m ufbt launch
 
 The normal build output is `dist/zerofido.fap`.
 
-## Validation
+### Validation
 
 Run the maintained Python tests:
 
@@ -216,7 +235,7 @@ uv run python host_tools/check_symbol_gate.py \
   --output-fap dist/zerofido-release.fap
 ```
 
-## Host Tools
+### Host Tools
 
 List and probe FIDO HID devices:
 
@@ -265,7 +284,7 @@ Print firmware footprint data after building:
 uv run python host_tools/size_ledger.py --artifact dist/zerofido.fap --artifact dist/zerofido-release.fap
 ```
 
-## Release Packaging
+### Release Packaging
 
 Build a release `.fap` for the selected profile and verify that the app exports only
 `zerofido_main`:
@@ -288,7 +307,7 @@ uv run python host_tools/package_release.py \
 
 The packaged artifact lands at `dist/zerofido-release.fap` by default.
 
-## GitHub Releases
+### GitHub Releases
 
 The `Build profiles` workflow verifies every push and pull request. The `Release` workflow
 publishes GitHub Releases from existing `v*` tags.
@@ -306,7 +325,7 @@ The release workflow builds the `nfc`, `usb`, and `full` profiles with
 
 You can also run the workflow from GitHub Actions with an existing tag such as `v1.0.0`.
 
-## Certification Metadata
+### Certification Metadata
 
 Metadata and captured attestation certificates belong to your local certification run. Keep them
 under `metadata/`; git ignores that directory.
@@ -362,16 +381,4 @@ uv run python host_tools/export_certification_metadata.py \
 If the conformance tool changes PIN state, regenerate metadata with the matching
 `--client-pin-state` before rerunning that profile.
 
-## Support
-
-ZeroFIDO is built and maintained in spare time. If it helped you, you can support the work here:
-
-[![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-astoyanov-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=000)](https://buymeacoffee.com/astoyanov)
-
-Support is optional and does not affect releases, issues, or support requests.
-
-## License
-
-ZeroFIDO uses the GNU General Public License, version 3 or later. See [`LICENSE`](LICENSE).
-
-Dependency and provenance notes live in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+</details>
