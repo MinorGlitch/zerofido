@@ -237,6 +237,8 @@ uv run python host_tools/nfc_trace_console.py --port auto
 uv run python host_tools/nfc_trace_console.py --port <serial-port> --level info --output .tmp/nfc-trace.log
 ```
 
+The iPhone NFC transport notes are in [docs/writeup_ios.md](docs/writeup_ios.md).
+
 Capture reconnecting crash logs from the same CDC console:
 
 ```bash
