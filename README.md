@@ -4,80 +4,69 @@
 ![Platform: Flipper Zero](https://img.shields.io/badge/platform-Flipper%20Zero-orange)
 ![Protocols: FIDO2 + U2F](https://img.shields.io/badge/protocols-FIDO2%20%2B%20U2F-green)
 
-ZeroFIDO turns a Flipper Zero into a passkey and security-key app. Install the `.fap`, open the app,
-and approve sign-ins on services that support FIDO2/WebAuthn or legacy U2F.
+ZeroFIDO turns a Flipper Zero into a passkey and security-key app. Install the `.fap`,
+open the app, and approve sign-ins on services that support FIDO2/WebAuthn or legacy U2F.
 
-The app stores credentials on the Flipper, asks for local approval, supports `ClientPIN`, and speaks
-the CTAP2/FIDO2 protocol used by browsers and security keys. USB HID works as the main transport.
-NFC remains in development, with working iOS flows.
+The app stores credentials on the Flipper, asks for local approval, supports `ClientPIN`,
+and speaks the CTAP2/FIDO2 protocol used by browsers and security keys. USB HID is the
+desktop browser transport. NFC builds are used for phone flows and conformance work.
 
-ZeroFIDO runs on general-purpose Flipper hardware. Treat it as a useful authenticator app with
-software-stored credentials, local approval, and local software attestation. For certified
-hardware-backed security, use a certified security key.
+ZeroFIDO runs on general-purpose Flipper hardware. Treat it as a useful authenticator app
+with software-stored credentials, local approval, and local software attestation. For
+certified hardware-backed security, use a certified security key.
 
 ## Supported
 
 | Capability | Status |
 | --- | --- |
-| USB HID | Supported |
-| NFC | In development; works with iOS flows |
+| USB HID | Supported in the `usb` and `full` build profiles |
+| NFC | Supported in the default `nfc` build profile |
 | U2F V2 | Supported |
 | FIDO2.0 / CTAP2.0 | Supported |
-| FIDO2.1 / CTAP2.1 | Experimental profile |
+| FIDO2.1 / CTAP2.1 | Experimental metadata profile |
 | `ClientPIN` | Supported |
 | Discoverable credentials | Supported |
 | Attestation | Per-install software attestation |
 
-ZeroFIDO targets stock Flipper Zero firmware `1.4.3` and builds as an external `.fap` in the Tools
-category.
+ZeroFIDO builds as an external `.fap` in the Flipper Tools category.
 
 ## Install
 
-Download a release `.fap` when one is published, then copy it to your Flipper SD card under the
-Tools apps folder. You can also install it through qFlipper or Flipper Lab by choosing the `.fap`
-file.
+Download a release `.fap` when one is published, then copy it to your Flipper SD card under
+the Tools apps folder. You can also install it through qFlipper or Flipper Lab by choosing
+the `.fap` file.
 
-To build and launch from source:
+To build from source, install `uv`, then sync the Python tools:
 
 ```bash
 uv sync
-uv run python -m ufbt launch
 ```
 
-## How To Use
+## Build Profiles
 
-1. Open ZeroFIDO on the Flipper.
-2. Choose USB HID for normal desktop browser use.
-3. Use NFC for iOS flows while NFC support matures.
-4. Register the Flipper as a passkey or security key on a site that supports WebAuthn/FIDO2.
-5. Approve credential creation or sign-in on the Flipper screen.
+The app manifest reads `ZEROFIDO_PROFILE` at build time. The default is `nfc`.
 
-For older services, use the same app through the legacy U2F flow.
+| Profile | Build flag | Use |
+| --- | --- | --- |
+| NFC only | `ZEROFIDO_PROFILE=nfc` | Phone and NFC conformance work. This is the default. |
+| USB HID only | `ZEROFIDO_PROFILE=usb` | Desktop browser WebAuthn and U2F testing. |
+| Full | `ZEROFIDO_PROFILE=full` | Builds both transports and lets the app choose at runtime. |
 
-## Features
-
-- WebAuthn/FIDO2 registration and sign-in
-- Legacy U2F register, authenticate, and version handling
-- Local approval for credential creation and assertions
-- `ClientPIN`, retry state, and PIN token flow
-- Discoverable credentials for resident-key/passkey-style use
-- Runtime profile selection for FIDO2.0 and experimental FIDO2.1 metadata
-- USB HID transport and NFC transport work in the app runtime
-
-## Build From Source
-
-The project uses `uv` for Python tooling and `ufbt` for Flipper builds.
+Build the profile you want:
 
 ```bash
-uv sync
-uv run python -m ufbt
+ZEROFIDO_PROFILE=nfc uv run python -m ufbt
+ZEROFIDO_PROFILE=usb uv run python -m ufbt
+ZEROFIDO_PROFILE=full uv run python -m ufbt
 ```
 
 Build and launch on a connected Flipper:
 
 ```bash
-uv run python -m ufbt launch
+ZEROFIDO_PROFILE=usb uv run python -m ufbt launch
 ```
+
+The normal build output is `dist/zerofido.fap`.
 
 The Python toolchain declares Python `3.14+` in `pyproject.toml`. C validation expects
 `clang-format`, `clang-tidy`, `cppcheck`, and a host C compiler.
@@ -88,21 +77,35 @@ On macOS:
 brew install llvm cppcheck
 ```
 
+## How To Use
+
+1. Build or install the profile that matches the transport you need.
+2. Open ZeroFIDO on the Flipper.
+3. Register the Flipper as a passkey or security key on a site that supports WebAuthn/FIDO2.
+4. Approve credential creation or sign-in on the Flipper screen.
+
+For older services, use the same app through the legacy U2F flow.
+
+## Features
+
+- WebAuthn/FIDO2 registration and sign-in
+- Legacy U2F register, authenticate, and version handling
+- Local approval for credential creation and assertions
+- `ClientPIN`, retry state, and PIN token flow
+- Discoverable credentials for resident-key/passkey-style use
+- Build-time transport profiles for USB HID, NFC, and full builds
+- Metadata exports for FIDO2.0, experimental FIDO2.1, and U2F certification tooling
+
 ## Validation
 
-Run the Python tests:
+Run the maintained host-tool tests:
 
 ```bash
-uv run python -m unittest discover tests
-```
-
-Run C formatting and analyzers:
-
-```bash
-uv run python tools/check_c.py format
-uv run python tools/check_c.py tidy
-uv run python tools/check_c.py cppcheck
-uv run python tools/check_c.py all
+uv run python -m unittest \
+  tests.test_ctaphid_probe \
+  tests.test_export_certification_metadata \
+  tests.test_conformance_suite \
+  tests.test_symbol_gate
 ```
 
 Run native protocol regressions:
@@ -111,80 +114,159 @@ Run native protocol regressions:
 uv run python tools/run_protocol_regressions.py
 ```
 
+Run C formatting and analyzers:
+
+```bash
+uv run python tools/check_c.py format
+uv run python tools/check_c.py format --fix
+uv run python tools/check_c.py tidy
+uv run python tools/check_c.py cppcheck
+uv run python tools/check_c.py native
+uv run python tools/check_c.py all
+```
+
 Check SDK symbols against a local Flipper firmware checkout:
 
 ```bash
-uv run python host_tools/check_symbol_gate.py <flipper-firmware-checkout>
+uv run python host_tools/check_symbol_gate.py --sdk-root <flipper-firmware-checkout>
 ```
 
-## Developer Tools
+Check and package a built `.fap` with the release export gate:
 
-Probe a FIDO HID device during development:
+```bash
+uv run python host_tools/check_symbol_gate.py \
+  --fap dist/zerofido.fap \
+  --output-fap dist/zerofido-release.fap
+```
+
+## Host Tools
+
+List and probe FIDO HID devices:
 
 ```bash
 uv run python host_tools/ctaphid_probe.py --cmd list
+uv run python host_tools/ctaphid_probe.py --cmd init
 uv run python host_tools/ctaphid_probe.py --cmd getinfo
 uv run python host_tools/ctaphid_probe.py --cmd makecredential
 uv run python host_tools/ctaphid_probe.py --cmd getassertion
 ```
 
+Run U2F transport probes:
+
+```bash
+uv run python host_tools/ctaphid_probe.py --cmd u2fversion
+uv run python host_tools/ctaphid_probe.py --cmd u2fregister --u2f-cert-out metadata/u2f-attestation.der
+uv run python host_tools/ctaphid_probe.py --cmd u2finvalidcla
+uv run python host_tools/ctaphid_probe.py --cmd u2fversiondata
+uv run python host_tools/ctaphid_probe.py --cmd u2fauthinvalid
+```
+
+Capture a FIDO2 attestation leaf certificate from `MakeCredential`:
+
+```bash
+uv run python host_tools/ctaphid_probe.py \
+  --cmd makecredential \
+  --fido2-cert-out metadata/fido2-attestation.der
+```
+
 Capture NFC trace lines from the Flipper USB CDC console:
 
 ```bash
-uv run python host_tools/nfc_trace_console.py --port <serial-port>
+uv run python host_tools/nfc_trace_console.py --port auto
+uv run python host_tools/nfc_trace_console.py --port <serial-port> --level info --output .tmp/nfc-trace.log
+```
+
+Capture reconnecting crash logs from the same CDC console:
+
+```bash
+uv run python tools/flipper_crash_log.py --port auto --output .tmp/flipper-crash.log
+```
+
+Print firmware footprint data after building:
+
+```bash
+uv run python host_tools/size_ledger.py --artifact dist/zerofido.fap --artifact dist/zerofido-release.fap
 ```
 
 ## Release Packaging
 
-Build a release `.fap` and verify that only the app entry point remains exported:
+Build a release `.fap` for the selected profile and verify that only the app entry point
+remains exported:
 
 ```bash
-uv run python host_tools/package_release.py
+ZEROFIDO_PROFILE=usb uv run python host_tools/package_release.py
 ```
 
 Package an existing `dist/zerofido.fap` without rebuilding:
 
 ```bash
-uv run python host_tools/package_release.py --skip-build
+uv run python host_tools/package_release.py \
+  --skip-build \
+  --fap dist/zerofido.fap \
+  --output-fap dist/zerofido-release.fap
 ```
 
-The packaged artifact lands at `dist/zerofido-release.fap`.
+The packaged artifact lands at `dist/zerofido-release.fap` by default.
 
 ## Metadata And Attestation
 
 ZeroFIDO generates local attestation material on the device. Public builds do not provide
-hardware-backed vendor provenance, enterprise attestation, or a FIDO Metadata Service trust path.
-Private relying parties can pin a local certificate when that fits their test setup.
+hardware-backed vendor provenance, enterprise attestation, or a FIDO Metadata Service trust
+path. Private relying parties can pin a local certificate when that fits their test setup.
 
-Export metadata for certification tools:
+Metadata and captured attestation certificates are local certification artifacts. Keep them
+under `metadata/`, which is ignored by git.
 
-Create `metadata/statement.json` from the authenticator you are testing. The `metadata/`
-directory is ignored because these files are local certification artifacts.
+Create `metadata/statement.json` from the authenticator you are testing, then export a profile:
 
 ```bash
+mkdir -p metadata
+
 uv run python host_tools/export_certification_metadata.py \
   --statement metadata/statement.json \
   --profile fido2-2.0 \
-  --client-pin-state unset \
-  --output metadata/metadata-ctap20.json
+  --client-pin-state unset
 
 uv run python host_tools/export_certification_metadata.py \
   --statement metadata/statement.json \
   --profile fido2-2.1-experimental \
-  --client-pin-state unset \
-  --output metadata/metadata-ctap21-experimental.json
+  --client-pin-state unset
 ```
 
-For U2F, export metadata from the same device certificate returned by U2F Register:
+The default outputs are:
+
+- `metadata/metadata-ctap20.json`
+- `metadata/metadata-ctap21-experimental.json`
+
+For FIDO2 packed attestation chain checks, export metadata with the certificate returned by
+the same device:
 
 ```bash
-uv run python host_tools/ctaphid_probe.py --cmd u2fregister --u2f-cert-out metadata/u2f-attestation.der
+uv run python host_tools/ctaphid_probe.py \
+  --cmd makecredential \
+  --fido2-cert-out metadata/fido2-attestation.der
+
+uv run python host_tools/export_certification_metadata.py \
+  --statement metadata/statement.json \
+  --profile fido2-2.0 \
+  --fido2-attestation-cert metadata/fido2-attestation.der
+```
+
+For U2F, export metadata from the certificate returned by U2F Register:
+
+```bash
+uv run python host_tools/ctaphid_probe.py \
+  --cmd u2fregister \
+  --u2f-cert-out metadata/u2f-attestation.der
+
 uv run python host_tools/export_certification_metadata.py \
   --statement metadata/statement.json \
   --profile u2f \
-  --u2f-attestation-cert metadata/u2f-attestation.der \
-  --output metadata/metadata-u2f.json
+  --u2f-attestation-cert metadata/u2f-attestation.der
 ```
+
+If the conformance tool changes the PIN state, regenerate metadata with the matching
+`--client-pin-state` value before rerunning that profile.
 
 ## Security Notes
 
