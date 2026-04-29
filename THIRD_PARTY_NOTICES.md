@@ -1,7 +1,7 @@
 # Third-Party Notices
 
-This project is licensed under the GNU General Public License, version 3 only
-(`GPL-3.0-only`). This file records the third-party license information checked before
+This project is licensed under the GNU General Public License, version 3 or later
+(`GPL-3.0-or-later`). This file records the third-party license information checked before
 declaring the project license.
 
 This is not a complete legal review. Before public release, keep this file in sync with

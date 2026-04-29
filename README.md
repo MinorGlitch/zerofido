@@ -1,4 +1,4 @@
-![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue)
+![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)
 ![Platform: Flipper Zero](https://img.shields.io/badge/platform-Flipper%20Zero-orange)
 ![Protocols: FIDO2 + U2F](https://img.shields.io/badge/protocols-FIDO2%20%2B%20U2F-green)
 
@@ -366,12 +366,12 @@ If the conformance tool changes PIN state, regenerate metadata with the matching
 
 ZeroFIDO is built and maintained in spare time. If it helped you, you can support the work here:
 
-[Buy me a coffee](https://buymeacoffee.com/astoyanov)
+[![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-astoyanov-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=000)](https://buymeacoffee.com/astoyanov)
 
 Support is optional and does not affect releases, issues, or support requests.
 
 ## License
 
-ZeroFIDO uses the GNU General Public License, version 3 only. See [`LICENSE`](LICENSE).
+ZeroFIDO uses the GNU General Public License, version 3 or later. See [`LICENSE`](LICENSE).
 
 Dependency and provenance notes live in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
