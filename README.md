@@ -26,7 +26,7 @@ certified hardware-backed security, use a certified security key.
 | FIDO2.1 / CTAP2.1 | Experimental metadata profile |
 | `ClientPIN` | Supported |
 | Discoverable credentials | Supported |
-| Attestation | Per-install software attestation |
+| Attestation | Local software attestation, optional per relying-party request |
 
 ZeroFIDO builds as an external `.fap` in the Flipper Tools category.
 
@@ -123,6 +123,10 @@ Run native protocol regressions:
 ```bash
 uv run python tools/run_protocol_regressions.py
 ```
+
+Those native regressions cover packed attestation, runtime `Attest: none`, explicit
+`attestationFormats: ["none"]`, and the no-downgrade behavior when packed attestation is
+required.
 
 Run C formatting and analyzers:
 
@@ -245,6 +249,18 @@ ZeroFIDO generates local attestation material on the device. Public builds do no
 hardware-backed vendor provenance, enterprise attestation, or a FIDO Metadata Service trust
 path. Private relying parties can pin a local certificate when that fits their test setup.
 
+Attestation is a provenance signal, not the credential itself. A relying party that requests
+`attestation: "none"` gets a WebAuthn registration response with `fmt: "none"` and an empty
+attestation statement. In that mode ZeroFIDO still creates the credential keypair, but it does
+not expose the local attestation certificate chain and does not sign the registration with the
+local attestation key. If the relying party requests direct attestation, ZeroFIDO returns packed
+attestation from the local software attestation material for that install.
+
+The on-device Settings screen also has an attestation mode. `Attest: none` makes `fmt: "none"`
+the default MakeCredential response unless the CTAP request explicitly lists a supported
+attestation format preference. `Attest: packed` allows local software packed attestation when
+requested.
+
 Metadata and captured attestation certificates are local certification artifacts. Keep them
 under `metadata/`, which is ignored by git.
 
@@ -302,7 +318,10 @@ If the conformance tool changes the PIN state, regenerate metadata with the matc
 ## Security Notes
 
 - Flipper Zero hardware does not give this app a secure element for credential keys.
-- Software attestation proves a local app install identity, not vendor hardware provenance.
+- Software attestation proves a local app install identity, not FIDO-certified vendor hardware
+  provenance.
+- `attestation: "none"` suppresses the local attestation certificate and attestation signature;
+  it does not weaken the generated credential keypair used later for assertions.
 - Physical access to the device changes the threat model.
 - Diagnostic and conformance builds may log protocol data. Release-default builds set
   `ZF_RELEASE_DIAGNOSTICS=0`.
