@@ -30,9 +30,9 @@ Momentum was a useful starting point, not a complete answer. The important limit
 
 For our iPhone flow, those TODOs mattered.
 
-The first gap was R-block recovery. When iOS sends an R-NAK like `B2`/`B3`, the correct practical behavior is not “invent a new NAK” or lose state. It is to replay the last transmitted ISO-DEP I-block byte-for-byte. We added an explicit raw last-TX cache for that in [nfc_iso_dep.c](<repo>/src/transport/nfc_iso_dep.c:15).
+The first gap was R-block recovery. When iOS sends an R-NAK like `B2`/`B3`, the correct practical behavior is not “invent a new NAK” or lose state. It is to replay the last transmitted ISO-DEP I-block byte-for-byte. We added an explicit raw last-TX cache for that in [nfc_iso_dep.c](../src/transport/nfc_iso_dep.c).
 
-The second gap was response chaining. Momentum’s response encoder clears the chaining bit and treats responses as one block. That was enough for tiny responses like SELECT and getInfo, but not enough once makeCredential/getAssertion produced 180+ byte NFC responses. We added an app-owned transmit chain: large APDU response bytes plus final status word are queued, first I-block is sent with the ISO-DEP chaining bit, R-ACK advances to the next block, and R-NAK replays the previous block. That lives in [nfc_iso_dep.c](<repo>/src/transport/nfc_iso_dep.c:173) and is driven from [nfc_worker.c](<repo>/src/transport/nfc_worker.c:658).
+The second gap was response chaining. Momentum’s response encoder clears the chaining bit and treats responses as one block. That was enough for tiny responses like SELECT and getInfo, but not enough once makeCredential/getAssertion produced 180+ byte NFC responses. We added an app-owned transmit chain: large APDU response bytes plus final status word are queued, first I-block is sent with the ISO-DEP chaining bit, R-ACK advances to the next block, and R-NAK replays the previous block. That lives in [nfc_iso_dep.c](../src/transport/nfc_iso_dep.c) and is driven from [nfc_worker.c](../src/transport/nfc_worker.c).
 
 The third gap was PPS/control tolerance. iOS sometimes sends `D9 33 63` late in the session. We ACK the PPSS byte and preserve the previous I-block replay cache, because otherwise the next `B2` R-NAK would replay the PPS ACK or nothing instead of replaying the actual CTAP response.
 

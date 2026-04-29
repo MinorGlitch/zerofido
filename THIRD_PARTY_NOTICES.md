@@ -12,7 +12,7 @@ or vendored source.
 
 | Component | Observed license metadata | Notes |
 | --- | --- | --- |
-| Flipper Zero firmware reference | GPLv3 | Checked local target checkout at `<flipper-firmware-checkout>/LICENSE`. |
+| Flipper Zero firmware reference | GPLv3 | Checked against the Flipper Zero firmware license for the target SDK. |
 | uFBT (`ufbt`) | GPL-3.0 / GPLv3+ classifier | Build tool dependency from `pyproject.toml` and `uv.lock`. |
 | cbor2 | MIT | Python host-tool dependency. |
 | cryptography | Apache-2.0 OR BSD-3-Clause | Python host-tool dependency. |
