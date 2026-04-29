@@ -122,7 +122,7 @@ bool u2f_parse_apdu_header(const uint8_t *buf, uint16_t len, bool allow_short,
 
     if (len >= 7 && buf[4] == 0x00) {
         uint32_t lc = ((uint32_t)buf[5] << 8) | buf[6];
-        if (len != (uint16_t)(7 + lc) && len != (uint16_t)(9 + lc)) {
+        if ((size_t)len != 7U + lc && (size_t)len != 9U + lc) {
             return false;
         }
         apdu->data = &buf[7];
@@ -132,7 +132,7 @@ bool u2f_parse_apdu_header(const uint8_t *buf, uint16_t len, bool allow_short,
 
     {
         uint32_t lc = buf[4];
-        if (len != (uint16_t)(5 + lc) && len != (uint16_t)(6 + lc)) {
+        if ((size_t)len != 5U + lc && (size_t)len != 6U + lc) {
             return false;
         }
         apdu->data = &buf[5];

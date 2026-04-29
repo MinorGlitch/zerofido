@@ -4739,6 +4739,21 @@ static void test_u2f_version_extended_length_with_data_returns_wrong_length(void
            "extended-length U2F VERSION APDU with data must encode SW_WRONG_LENGTH");
 }
 
+static void test_u2f_extended_length_wrap_is_rejected(void) {
+    const uint8_t seven_byte_request[] = {
+        0x00, U2F_CMD_AUTHENTICATE, U2fCheckOnly, 0x00, 0x00, 0xff, 0xfe,
+    };
+    const uint8_t eight_byte_request[] = {
+        0x00, U2F_CMD_AUTHENTICATE, U2fCheckOnly, 0x00, 0x00, 0xff, 0xff, 0x00,
+    };
+    U2fParsedApdu apdu = {0};
+
+    expect(!u2f_parse_apdu_header(seven_byte_request, sizeof(seven_byte_request), false, &apdu),
+           "extended APDU length 0xfffe must not wrap to a seven-byte request");
+    expect(!u2f_parse_apdu_header(eight_byte_request, sizeof(eight_byte_request), false, &apdu),
+           "extended APDU length 0xffff must not wrap to an eight-byte request");
+}
+
 static void test_u2f_register_allows_nonzero_p1_p2_for_stock_compatibility(void) {
     uint8_t request[7 + U2F_CHALLENGE_SIZE + U2F_APP_ID_SIZE] = {0};
 
@@ -6342,6 +6357,7 @@ int main(void) {
     test_u2f_version_accepts_exact_response_buffer();
     test_u2f_version_accepts_extended_length_encoding();
     test_u2f_version_extended_length_with_data_returns_wrong_length();
+    test_u2f_extended_length_wrap_is_rejected();
     test_u2f_register_allows_nonzero_p1_p2_for_stock_compatibility();
     test_u2f_dont_enforce_authenticate_mode_is_accepted_without_presence();
     test_u2f_enforce_authenticate_rejects_invalid_handle_before_presence();
