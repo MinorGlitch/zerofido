@@ -14,9 +14,8 @@ desktop browser flows. NFC builds handle phone flows.
 NFC has been tested on iPhone. Android NFC support is next. In the meantime, connect the
 Flipper to the phone over USB when the phone accepts USB security keys.
 
-ZeroFIDO runs on general-purpose Flipper hardware. Treat it as an authenticator app with
-software-stored credentials and local software attestation. Use a certified security key when you
-need certified hardware-backed security.
+U2F and FIDO2.0 pass their respective tests in the current FIDO Conformance Tools suite. FIDO2.1
+support is in development. Bug reports, feature requests, and pull requests are welcome.
 
 ## Quick Start
 
@@ -26,9 +25,6 @@ need certified hardware-backed security.
 3. Open ZeroFIDO on the Flipper.
 4. Register it as a passkey or security key on a site that supports WebAuthn/FIDO2.
 5. Approve registration and sign-in prompts on the Flipper screen.
-
-U2F and FIDO2.0 pass their respective tests in the current FIDO Conformance Tools suite.
-FIDO2.1 support is in development. Bug reports, feature requests, and pull requests are welcome.
 
 ## What Works
 
@@ -84,27 +80,27 @@ ZeroFIDO includes an on-device Settings screen.
 supported attestation format preference. `Attest: packed` allows local software packed
 attestation when the relying party requests direct attestation.
 
-## Known Limits
+## Security Model and Limits
 
 - Flipper Zero gives ZeroFIDO no secure element for credential keys.
+- ZeroFIDO generates credential private keys on the device. It wraps each private key with the
+  Flipper crypto enclave unique key and a per-record IV before writing the credential record to app
+  storage. The record still stores the relying-party ID, user fields, public key, wrapped private
+  key, IV, and counters needed to find and use the credential.
+- ZeroFIDO wraps key material. It does not encrypt the whole app directory.
+- Counter floor files and PIN retry state are sealed with the same Flipper crypto APIs so stale
+  files cannot roll counters or retry state backward.
+- Physical access to the device changes the risk model. Keep at least one backup sign-in method for
+  accounts you care about.
 - ZeroFIDO uses local software attestation, not hardware-backed vendor attestation.
 - ZeroFIDO has not passed FIDO Alliance certification.
-- Keep at least one backup sign-in method for accounts you care about. Avoid making ZeroFIDO your
-  sole account recovery factor.
-
-## Security Model
-
-- Flipper Zero hardware gives this app no secure element for credential keys.
-- ZeroFIDO stores credentials in app storage on the Flipper.
-- Physical access to the device changes the risk model.
-- Software attestation identifies a local app install. It proves no FIDO-certified vendor hardware
-  provenance.
-- `attestation: "none"` suppresses the local attestation certificate and signature. The generated
-  credential keypair still signs later assertions.
 - Release builds set `ZF_RELEASE_DIAGNOSTICS=0`; diagnostic and conformance builds may log
   protocol data.
 
 ## Attestation
+
+<details>
+<summary>Local software attestation and <code>Attest: none</code></summary>
 
 ZeroFIDO generates local attestation material on the device. Public builds provide no
 hardware-backed vendor provenance, enterprise attestation, or a FIDO Metadata Service trust path.
@@ -118,19 +114,7 @@ attestation certificate chain and skips the local attestation signature.
 When the relying party requests direct attestation, ZeroFIDO returns packed attestation from that
 install's local software attestation material.
 
-## Support
-
-ZeroFIDO is built and maintained in spare time. If it helped you, you can support the work here:
-
-[![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-astoyanov-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=000)](https://buymeacoffee.com/astoyanov)
-
-Support is optional and does not affect releases, issues, or support requests.
-
-## License
-
-ZeroFIDO uses the GNU General Public License, version 3 or later. See [`LICENSE`](LICENSE).
-
-Dependency and provenance notes live in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+</details>
 
 ## For Developers
 
@@ -382,3 +366,17 @@ If the conformance tool changes PIN state, regenerate metadata with the matching
 `--client-pin-state` before rerunning that profile.
 
 </details>
+
+## Support
+
+ZeroFIDO is built and maintained in spare time. If it helped you, you can support the work here:
+
+[![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-astoyanov-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=000)](https://buymeacoffee.com/astoyanov)
+
+Support is optional and does not affect releases, issues, or support requests.
+
+## License
+
+ZeroFIDO uses the GNU General Public License, version 3 or later. See [`LICENSE`](LICENSE).
+
+Dependency and provenance notes live in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
