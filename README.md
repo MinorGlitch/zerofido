@@ -86,7 +86,8 @@ ZeroFIDO includes an on-device Settings screen.
 <details>
 <summary>Choosing <code>Attest: none</code> or <code>Attest: packed</code></summary>
 
-ZeroFIDO supports two MakeCredential attestation modes from the on-device Settings screen:
+ZeroFIDO defaults to `Attest: none` and supports two MakeCredential attestation modes from the
+on-device Settings screen:
 
 - `Attest: none` returns `fmt: "none"` with an empty attestation statement. The credential is still
   created normally, but ZeroFIDO does not include the local attestation certificate chain or

@@ -25,21 +25,8 @@
 #if ZF_RELEASE_DIAGNOSTICS
 #define ZF_PIN_OP_DIAG(...) FURI_LOG_I("ZeroFIDO:CTAP", __VA_ARGS__)
 static void zf_client_pin_diag_secret_block(const char *label, const uint8_t *data, size_t len) {
-    size_t capped = len < ZF_PIN_NEW_PIN_BLOCK_MAX_LEN ? len : ZF_PIN_NEW_PIN_BLOCK_MAX_LEN;
-
-    for (size_t off = 0; off < capped; off += 16U) {
-        uint8_t b[16] = {0};
-        size_t chunk = capped - off;
-        if (chunk > sizeof(b)) {
-            chunk = sizeof(b);
-        }
-        memcpy(b, data + off, chunk);
-        FURI_LOG_I("ZeroFIDO:CTAP",
-                   "%s[%u] %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X "
-                   "%02X %02X",
-                   label, (unsigned)off, b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9],
-                   b[10], b[11], b[12], b[13], b[14], b[15]);
-    }
+    UNUSED(data);
+    FURI_LOG_I("ZeroFIDO:CTAP", "%s len=%u redacted", label, (unsigned)len);
 }
 #else
 #define ZF_PIN_OP_DIAG(...)                                                                        \

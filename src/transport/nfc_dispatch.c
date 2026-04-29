@@ -199,6 +199,7 @@ static bool zf_transport_nfc_send_get_info_response(ZerofidoApp *app, ZfNfcTrans
     size_t body_capacity = 0U;
     size_t body_len = 0U;
     size_t response_len = 0U;
+    bool client_pin_set = false;
     uint8_t status = ZF_CTAP_ERR_OTHER;
 
     if (!app || !state) {
@@ -218,12 +219,18 @@ static bool zf_transport_nfc_send_get_info_response(ZerofidoApp *app, ZfNfcTrans
         zf_runtime_get_effective_capabilities(app, &capabilities);
     }
     zf_transport_nfc_force_get_info_nfc_capabilities(&capabilities);
+    client_pin_set = zf_transport_nfc_pin_is_set_snapshot(app, caller_holds_ui_mutex);
 
     ZF_NFC_CTAP_DIAG("start cmd=GI len=1");
     ZF_NFC_CTAP_DIAG("dispatch cmd=GI");
-    status = zf_ctap_build_get_info_response(
-        &capabilities, zf_transport_nfc_pin_is_set_snapshot(app, caller_holds_ui_mutex),
-        response + 1U, body_capacity, &body_len);
+    ZF_NFC_CTAP_DIAG("GI caps f21=%u pin=%u p2=%u token=%u mcu=%u rk=1 nfc=%u",
+                     capabilities.advertise_fido_2_1 ? 1U : 0U, client_pin_set ? 1U : 0U,
+                     capabilities.pin_uv_auth_protocol_2_enabled ? 1U : 0U,
+                     capabilities.pin_uv_auth_token_enabled ? 1U : 0U,
+                     capabilities.make_cred_uv_not_required ? 1U : 0U,
+                     capabilities.advertise_nfc_transport ? 1U : 0U);
+    status = zf_ctap_build_get_info_response(&capabilities, client_pin_set, response + 1U,
+                                             body_capacity, &body_len);
     if (status != ZF_CTAP_SUCCESS) {
         body_len = 0U;
     }

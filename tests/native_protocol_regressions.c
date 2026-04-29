@@ -4461,8 +4461,8 @@ static void test_runtime_config_load_defaults_auto_accept_off(void) {
     expect(config.fido2_enabled, "runtime config defaults should keep FIDO2 enabled");
     expect(config.fido2_profile == ZfFido2ProfileCtap2_0,
            "runtime config defaults should use the CTAP 2.0 profile");
-    expect(config.attestation_mode == ZfAttestationModePacked,
-           "runtime config defaults should use packed attestation");
+    expect(config.attestation_mode == ZfAttestationModeNone,
+           "runtime config defaults should use none attestation");
 }
 
 static void test_runtime_config_persist_round_trips_auto_accept_setting(void) {
@@ -4786,12 +4786,12 @@ static void test_runtime_config_set_attestation_preserves_runtime_state_on_persi
     app.capabilities_resolved = true;
     g_storage_fail_write_match = "runtime_config.tmp";
 
-    expect(!zf_runtime_config_set_attestation_mode(&app, &storage, ZfAttestationModeNone),
+    expect(!zf_runtime_config_set_attestation_mode(&app, &storage, ZfAttestationModePacked),
            "runtime config attestation mutation should fail when persistence fails");
-    expect(app.runtime_config.attestation_mode == ZfAttestationModePacked,
-           "failed attestation persist should keep packed mode");
-    expect(app.capabilities.attestation_mode == ZfAttestationModePacked,
-           "failed attestation persist should keep resolved packed mode");
+    expect(app.runtime_config.attestation_mode == ZfAttestationModeNone,
+           "failed attestation persist should keep none mode");
+    expect(app.capabilities.attestation_mode == ZfAttestationModeNone,
+           "failed attestation persist should keep resolved none mode");
 }
 
 static void test_get_key_agreement_does_not_rotate_runtime_secrets(void) {
@@ -6341,7 +6341,7 @@ static void test_make_credential_legacy_pin_token_keeps_mc_ga_after_up(void) {
            "CTAP 2.0 legacy getPinToken permissions should survive successful UP");
 }
 
-static void test_make_credential_requires_pin_auth_when_pin_is_set(void) {
+static void test_make_credential_allows_pinless_non_resident_when_pin_is_set(void) {
     Storage storage = {0};
     ZerofidoApp app = {0};
     ZfCredentialIndexEntry app_store_records[ZF_MAX_CREDENTIALS] = {0};
@@ -6360,12 +6360,95 @@ static void test_make_credential_requires_pin_auth_when_pin_is_set(void) {
         &app, 0x01020304, request, encode_make_credential_ctap_request(request, sizeof(request)),
         response, sizeof(response));
 
+    expect(response_len > 1, "non-resident MakeCredential without pinAuth should succeed");
+    expect(response[0] == ZF_CTAP_SUCCESS,
+           "non-resident MakeCredential should remain PIN-less when UV is discouraged");
+    expect(g_approval_request_count == 1,
+           "non-resident MakeCredential without pinAuth should still require approval");
+}
+
+static void test_make_credential_requires_pin_auth_for_resident_when_pin_is_set(void) {
+    Storage storage = {0};
+    ZerofidoApp app = {0};
+    ZfCredentialIndexEntry app_store_records[ZF_MAX_CREDENTIALS] = {0};
+    app.store.records = app_store_records;
+    FuriMutex ui_mutex = {0};
+    uint8_t request[256];
+    uint8_t response[512];
+    size_t response_len = 0;
+
+    test_storage_reset();
+    app.storage = &storage;
+    app.ui_mutex = &ui_mutex;
+    app.pin_state.pin_set = true;
+
+    response_len = zerofido_handle_ctap2(
+        &app, 0x01020304, request,
+        encode_resident_make_credential_ctap_request(request, sizeof(request)), response,
+        sizeof(response));
+
     expect(response_len == 1,
-           "MakeCredential without pinAuth should return only a CTAP status byte");
+           "resident MakeCredential without pinAuth should return only a CTAP status byte");
     expect(response[0] == ZF_CTAP_ERR_PIN_REQUIRED,
-           "MakeCredential without pinAuth should require PIN when a PIN is set");
+           "resident MakeCredential without pinAuth should require PIN when a PIN is set");
     expect(g_approval_request_count == 0,
-           "MakeCredential without pinAuth should fail before approval");
+           "resident MakeCredential without pinAuth should fail before approval");
+}
+
+static void test_make_credential_2_1_make_cred_uv_not_required_allows_pinless_non_resident(void) {
+    Storage storage = {0};
+    ZerofidoApp app = {0};
+    ZfCredentialIndexEntry app_store_records[ZF_MAX_CREDENTIALS] = {0};
+    app.store.records = app_store_records;
+    FuriMutex ui_mutex = {0};
+    uint8_t request[256];
+    uint8_t response[512];
+    size_t response_len = 0;
+
+    test_storage_reset();
+    app.storage = &storage;
+    app.ui_mutex = &ui_mutex;
+    test_enable_fido2_1_experimental(&app);
+
+    response_len = zerofido_handle_ctap2(
+        &app, 0x01020304, request, encode_make_credential_ctap_request(request, sizeof(request)),
+        response, sizeof(response));
+
+    expect(response_len > 1,
+           "CTAP 2.1 makeCredUvNotRqd should allow pinless non-resident MakeCredential");
+    expect(response[0] == ZF_CTAP_SUCCESS,
+           "pinless non-resident MakeCredential should succeed when makeCredUvNotRqd is true");
+    expect(g_approval_request_count == 1,
+           "pinless non-resident MakeCredential should still require user presence");
+}
+
+static void
+test_make_credential_2_1_make_cred_uv_not_required_rejects_resident_without_pin_auth(void) {
+    Storage storage = {0};
+    ZerofidoApp app = {0};
+    ZfCredentialIndexEntry app_store_records[ZF_MAX_CREDENTIALS] = {0};
+    app.store.records = app_store_records;
+    FuriMutex ui_mutex = {0};
+    uint8_t request[256];
+    uint8_t response[512];
+    size_t response_len = 0;
+
+    test_storage_reset();
+    app.storage = &storage;
+    app.ui_mutex = &ui_mutex;
+    test_enable_fido2_1_experimental(&app);
+
+    response_len = zerofido_handle_ctap2(
+        &app, 0x01020304, request,
+        encode_resident_make_credential_ctap_request(request, sizeof(request)), response,
+        sizeof(response));
+
+    expect(response_len == 1,
+           "resident MakeCredential without pinAuth should return only a CTAP status byte");
+    expect(response[0] == ZF_CTAP_ERR_PIN_REQUIRED,
+           "makeCredUvNotRqd should not allow resident credentials without PIN auth");
+    expect(g_approval_request_count == 0,
+           "resident MakeCredential without pinAuth should fail before approval");
 }
 
 static void test_make_credential_auto_accept_bypasses_approval_prompt(void) {
@@ -6431,6 +6514,9 @@ static void test_make_credential_returns_packed_attestation(void) {
     app.storage = &storage;
     app.ui_mutex = &ui_mutex;
     test_enable_auto_accept_requests(&app);
+    app.runtime_config.attestation_mode = ZfAttestationModePacked;
+    zf_runtime_config_resolve_capabilities(&app.runtime_config, &app.capabilities);
+    app.capabilities_resolved = true;
 
     response_len = zerofido_handle_ctap2(
         &app, 0x01020304, request, encode_make_credential_ctap_request(request, sizeof(request)),
@@ -9115,7 +9201,10 @@ int main(void) {
     test_make_credential_pin_auth_takes_precedence_over_uv();
     test_make_credential_pin_auth_clears_permission_scoped_token_after_up();
     test_make_credential_legacy_pin_token_keeps_mc_ga_after_up();
-    test_make_credential_requires_pin_auth_when_pin_is_set();
+    test_make_credential_allows_pinless_non_resident_when_pin_is_set();
+    test_make_credential_requires_pin_auth_for_resident_when_pin_is_set();
+    test_make_credential_2_1_make_cred_uv_not_required_allows_pinless_non_resident();
+    test_make_credential_2_1_make_cred_uv_not_required_rejects_resident_without_pin_auth();
     test_make_credential_auto_accept_bypasses_approval_prompt();
     test_make_credential_unknown_option_succeeds();
     test_make_credential_returns_packed_attestation();

@@ -76,6 +76,7 @@ extern const uint8_t zf_transport_nfc_fido2_select_response[8];
 
 size_t zf_transport_nfc_normalize_le(const ZfNfcApdu *apdu);
 bool zf_transport_nfc_is_fido_select_apdu(const ZfNfcApdu *apdu);
+bool zf_transport_nfc_is_ndef_select_apdu(const uint8_t *buffer, size_t buffer_len);
 bool zf_transport_nfc_parse_apdu(const uint8_t *buffer, size_t buffer_len, ZfNfcApdu *apdu);
 uint16_t zf_transport_nfc_status_update_sw(size_t remaining);
 size_t zf_transport_nfc_encode_u2f_request(const ZfNfcApdu *apdu, uint8_t *out,

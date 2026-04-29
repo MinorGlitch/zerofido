@@ -2468,8 +2468,8 @@ static void test_nfc_3a_r_ack_advances_chained_response_and_r_nak_replays(void) 
     expect(g_last_nfc_tx[g_last_nfc_tx_len - 4U] == 0x90 &&
                g_last_nfc_tx[g_last_nfc_tx_len - 3U] == 0x00,
            "final chained response should terminate with SW_SUCCESS before CRC");
-    expect(test_log_contains("NFC R-ACK chain A2 len=0"),
-           "R-ACK chaining should expose the recovery breadcrumb");
+    expect(!test_log_contains("NFC R-ACK chain"),
+           "response-chain R-ACKs should avoid timing-sensitive per-frame logging");
 
     bit_buffer_free(buffer);
     test_nfc_deinit_app(&app);

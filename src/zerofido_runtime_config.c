@@ -84,7 +84,7 @@ void zf_runtime_config_load_defaults(ZfRuntimeConfig *config) {
     config->u2f_enabled = true;
     config->u2f_profile = ZfU2fProfileCurrent;
     config->auto_accept_requests = false;
-    config->attestation_mode = ZfAttestationModePacked;
+    config->attestation_mode = ZfAttestationModeNone;
 }
 
 void zf_runtime_config_load(Storage *storage, ZfRuntimeConfig *config) {
@@ -132,7 +132,7 @@ void zf_runtime_config_load(Storage *storage, ZfRuntimeConfig *config) {
     if (record.version == 1U) {
         config->transport_mode = zf_runtime_config_default_transport_mode();
         config->fido2_profile = ZfFido2ProfileCtap2_0;
-        config->attestation_mode = ZfAttestationModePacked;
+        config->attestation_mode = ZfAttestationModeNone;
     } else if (record.version == 2U) {
         if (!zf_transport_mode_is_valid(record.transport_mode)) {
             return;
@@ -142,7 +142,7 @@ void zf_runtime_config_load(Storage *storage, ZfRuntimeConfig *config) {
             return;
         }
         config->fido2_profile = ZfFido2ProfileCtap2_0;
-        config->attestation_mode = ZfAttestationModePacked;
+        config->attestation_mode = ZfAttestationModeNone;
     } else if (record.version == 3U || record.version == ZF_RUNTIME_CONFIG_FILE_VERSION) {
         if (!zf_transport_mode_is_valid(record.transport_mode) ||
             !zf_fido2_profile_is_valid(record.fido2_profile)) {
@@ -156,7 +156,7 @@ void zf_runtime_config_load(Storage *storage, ZfRuntimeConfig *config) {
             }
             config->attestation_mode = (ZfAttestationMode)record.attestation_mode;
         } else {
-            config->attestation_mode = ZfAttestationModePacked;
+            config->attestation_mode = ZfAttestationModeNone;
         }
     } else {
         return;
@@ -180,7 +180,7 @@ bool zf_runtime_config_persist(Storage *storage, const ZfRuntimeConfig *config) 
                                  : (uint8_t)zf_runtime_config_default_transport_mode(),
         .fido2_profile = config ? (uint8_t)config->fido2_profile : (uint8_t)ZfFido2ProfileCtap2_0,
         .attestation_mode =
-            config ? (uint8_t)config->attestation_mode : (uint8_t)ZfAttestationModePacked,
+            config ? (uint8_t)config->attestation_mode : (uint8_t)ZfAttestationModeNone,
     };
 
     if (!storage || !config || !zf_fido2_profile_is_valid((uint8_t)config->fido2_profile) ||

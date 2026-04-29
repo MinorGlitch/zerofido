@@ -106,19 +106,6 @@ static bool zf_transport_nfc_is_bare_apdu(const uint8_t *frame, size_t frame_len
     return zf_transport_nfc_parse_apdu(frame, frame_len, &apdu);
 }
 
-static bool zf_transport_nfc_is_ndef_select_apdu(const uint8_t *frame, size_t frame_len) {
-    ZfNfcApdu apdu;
-
-    if (!zf_transport_nfc_parse_apdu(frame, frame_len, &apdu)) {
-        return false;
-    }
-
-    return apdu.cla == 0x00U && apdu.ins == 0xA4U && apdu.p1 == 0x04U &&
-           (apdu.p2 == 0x00U || apdu.p2 == 0x0CU) && apdu.data &&
-           apdu.data_len == ZF_NFC_NDEF_AID_LEN &&
-           memcmp(apdu.data, zf_transport_nfc_ndef_aid, ZF_NFC_NDEF_AID_LEN) == 0;
-}
-
 static bool zf_transport_nfc_is_native_desfire_get_version_payload(const uint8_t *payload,
                                                                    size_t payload_len) {
     return payload && payload_len == 1U && payload[0] == ZF_NFC_DESFIRE_CMD_GET_VERSION;
@@ -860,20 +847,26 @@ NfcCommand zf_transport_nfc_event_callback(NfcGenericEvent event, void *context)
 
     if (zf_transport_nfc_is_r_block(frame[0])) {
         const bool r_nack = zf_transport_nfc_is_r_nack_block(frame[0]);
+        bool chain_ack_sent = false;
         bool sent = false;
 
         if (r_nack) {
             sent = zf_transport_nfc_replay_last_iso_response(state);
         } else if (state->iso4_tx_chain_active) {
             sent = zf_transport_nfc_send_next_tx_chain_block(state);
+            chain_ack_sent = sent;
         } else if (state->iso4_tx_chain_completed) {
             zf_transport_nfc_ack_completed_tx_chain_locked(state);
         }
-        zf_transport_nfc_trace_bytes("iso-rx", frame, frame_len);
+        if (!chain_ack_sent) {
+            zf_transport_nfc_trace_bytes("iso-rx", frame, frame_len);
+        }
         furi_mutex_release(app->ui_mutex);
-        zf_transport_nfc_set_frame_status(r_nack ? (sent ? "NFC R-NAK replay" : "NFC R-NAK")
-                                                 : (sent ? "NFC R-ACK chain" : "NFC R-ACK"),
-                                          frame[0], &frame[1], frame_len - 1U);
+        if (!chain_ack_sent) {
+            zf_transport_nfc_set_frame_status(r_nack ? (sent ? "NFC R-NAK replay" : "NFC R-NAK")
+                                                     : "NFC R-ACK",
+                                              frame[0], &frame[1], frame_len - 1U);
+        }
         return zf_transport_nfc_finish_unlocked(app, true, refresh_status, NfcCommandContinue);
     }
 

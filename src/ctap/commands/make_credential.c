@@ -96,9 +96,10 @@ uint8_t zf_ctap_handle_make_credential(ZerofidoApp *app, ZfTransportSessionId se
         goto cleanup;
     }
     ZF_CTAP_MC_DIAG("parsed");
+    zf_runtime_get_effective_capabilities(app, &capabilities);
     status = zf_ctap_validate_pin_auth_protocol(
         scratch->request.has_pin_auth, scratch->request.has_pin_protocol,
-        scratch->request.pin_protocol, app->capabilities.pin_uv_auth_protocol_2_enabled);
+        scratch->request.pin_protocol, capabilities.pin_uv_auth_protocol_2_enabled);
     if (status != ZF_CTAP_SUCCESS) {
         goto cleanup;
     }
@@ -114,11 +115,22 @@ uint8_t zf_ctap_handle_make_credential(ZerofidoApp *app, ZfTransportSessionId se
         status = ZF_CTAP_ERR_UNSUPPORTED_OPTION;
         goto cleanup;
     }
-    if (!scratch->request.has_pin_auth && zf_ctap_pin_is_set(app)) {
+    resident_key = scratch->request.has_rk && scratch->request.rk;
+    /*
+     * Several CTAP 2.0 NFC clients recover from PIN_REQUIRED by obtaining a
+     * PIN token, then retry non-resident MakeCredential without pinAuth. Keep
+     * that U2F-like registration path interoperable, but still require UV for
+     * resident credentials.
+     *
+     * TODO: Revisit this compatibility carveout once the default profile can
+     * move to CTAP 2.1 makeCredUvNotRqd. That is the spec-level way to express
+     * pinless non-resident MakeCredential; CTAP 2.0 strict mode would require
+     * the client to send pinAuth on the retry.
+     */
+    if (!scratch->request.has_pin_auth && zf_ctap_pin_is_set(app) && resident_key) {
         status = ZF_CTAP_ERR_PIN_REQUIRED;
         goto cleanup;
     }
-    resident_key = scratch->request.has_rk && scratch->request.rk;
     status = zf_ctap_require_pin_auth_with_state(
         app, &scratch->pin_state, scratch->request.has_uv && scratch->request.uv,
         scratch->request.has_pin_auth, scratch->request.client_data_hash, scratch->request.pin_auth,
@@ -178,7 +190,6 @@ uint8_t zf_ctap_handle_make_credential(ZerofidoApp *app, ZfTransportSessionId se
     }
     ZF_CTAP_MC_DIAG("keygen done");
     ZF_CTAP_MC_DIAG("response");
-    zf_runtime_get_effective_capabilities(app, &capabilities);
     ZfAttestationMode attestation_mode = scratch->request.has_attestation_format_preference
                                              ? scratch->request.preferred_attestation_mode
                                              : capabilities.attestation_mode;

@@ -17,7 +17,7 @@ def env_flag(name, default=False):
     raise ValueError(f"{name} must be a boolean value")
 
 
-release_diagnostics = env_flag("ZEROFIDO_RELEASE_DIAGNOSTICS", False)
+release_diagnostics = env_flag("ZEROFIDO_RELEASE_DIAGNOSTICS", True)
 dev_attestation = env_flag("ZEROFIDO_DEV_ATTESTATION", False)
 
 cdefines = [

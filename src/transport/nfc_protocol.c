@@ -54,6 +54,19 @@ bool zf_transport_nfc_is_fido_select_apdu(const ZfNfcApdu *apdu) {
     return apdu->data_len == ZF_NFC_AID_LEN || apdu->data[ZF_NFC_AID_LEN] == 0x00U;
 }
 
+bool zf_transport_nfc_is_ndef_select_apdu(const uint8_t *buffer, size_t buffer_len) {
+    ZfNfcApdu apdu;
+
+    if (!zf_transport_nfc_parse_apdu(buffer, buffer_len, &apdu)) {
+        return false;
+    }
+
+    return apdu.cla == 0x00U && apdu.ins == 0xA4U && apdu.p1 == 0x04U &&
+           (apdu.p2 == 0x00U || apdu.p2 == 0x0CU) && apdu.data &&
+           apdu.data_len == ZF_NFC_NDEF_AID_LEN &&
+           memcmp(apdu.data, zf_transport_nfc_ndef_aid, ZF_NFC_NDEF_AID_LEN) == 0;
+}
+
 /*
  * Parses the ISO 7816 APDU forms ZeroFIDO accepts: short and extended Lc/Le,
  * with the CLA chaining bit stripped into apdu->chained. Any trailing bytes
