@@ -376,6 +376,11 @@ uv run python host_tools/export_certification_metadata.py \
   --u2f-attestation-cert metadata/u2f-attestation.der
 ```
 
+If U2F metadata reports an attestation SKID or certificate-path mismatch, regenerate
+`metadata/u2f-attestation.der` and `metadata/metadata-u2f.json` from the same device build you are
+testing. Older builds regenerated U2F attestation during reset, so metadata captured before a reset
+can be stale.
+
 If the conformance tool changes PIN state, regenerate metadata with the matching
 `--client-pin-state` before rerunning that profile.
 

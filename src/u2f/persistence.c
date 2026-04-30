@@ -583,8 +583,6 @@ bool u2f_data_wipe(Storage *storage) {
         return false;
     }
 
-    return zf_storage_remove_atomic_file(storage, U2F_CERT_FILE, U2F_CERT_FILE_TMP) &&
-           zf_storage_remove_atomic_file(storage, U2F_CERT_KEY_FILE, U2F_CERT_KEY_FILE_TMP) &&
-           zf_storage_remove_atomic_file(storage, U2F_KEY_FILE, U2F_KEY_FILE_TMP) &&
+    return zf_storage_remove_atomic_file(storage, U2F_KEY_FILE, U2F_KEY_FILE_TMP) &&
            zf_storage_remove_atomic_file(storage, U2F_CNT_FILE, U2F_CNT_FILE_TMP);
 }

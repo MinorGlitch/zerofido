@@ -29,6 +29,10 @@ extern "C" {
  * attestation cert/key, device key, and monotonic counter. Load routines return
  * false for missing or invalid files so u2f_init can distinguish bootstrap from
  * corruption.
+ *
+ * Reset wipes relying-party state only. The local attestation cert/key are the
+ * authenticator identity used by certification metadata and must remain stable
+ * across CTAP reset.
  */
 bool u2f_data_check(bool cert_only);
 
