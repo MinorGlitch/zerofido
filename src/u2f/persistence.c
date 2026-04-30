@@ -133,16 +133,12 @@ static void u2f_data_recover_atomic_files(Storage *storage) {
 static bool u2f_data_file_exists(const char *path) {
     bool exists = false;
     Storage *storage = furi_record_open(RECORD_STORAGE);
-    File *file = storage_file_alloc(storage);
 
-    if (!file) {
-        furi_record_close(RECORD_STORAGE);
+    if (!storage) {
         return false;
     }
     u2f_data_recover_atomic_files(storage);
-    exists = storage_file_open(file, path, FSAM_READ, FSOM_OPEN_EXISTING);
-    storage_file_close(file);
-    storage_file_free(file);
+    exists = storage_file_exists(storage, path);
     furi_record_close(RECORD_STORAGE);
     return exists;
 }
@@ -173,37 +169,16 @@ bool u2f_data_cnt_exists(void) {
 }
 
 bool u2f_data_check(bool cert_only) {
-    bool state = false;
     Storage *fs_api = furi_record_open(RECORD_STORAGE);
-    File *file = storage_file_alloc(fs_api);
 
-    if (!file) {
-        furi_record_close(RECORD_STORAGE);
+    if (!fs_api) {
         return false;
     }
     u2f_data_recover_atomic_files(fs_api);
-    do {
-        if (!storage_file_open(file, U2F_CERT_FILE, FSAM_READ, FSOM_OPEN_EXISTING))
-            break;
-        storage_file_close(file);
-        if (!storage_file_open(file, U2F_CERT_KEY_FILE, FSAM_READ, FSOM_OPEN_EXISTING))
-            break;
-        if (cert_only) {
-            state = true;
-            break;
-        }
-        storage_file_close(file);
-        if (!storage_file_open(file, U2F_KEY_FILE, FSAM_READ, FSOM_OPEN_EXISTING))
-            break;
-        storage_file_close(file);
-        if (!storage_file_open(file, U2F_CNT_FILE, FSAM_READ, FSOM_OPEN_EXISTING))
-            break;
-        state = true;
-    } while (0);
-
-    storage_file_close(file);
-    storage_file_free(file);
-
+    bool state = storage_file_exists(fs_api, U2F_CERT_FILE) &&
+                 storage_file_exists(fs_api, U2F_CERT_KEY_FILE) &&
+                 (cert_only || (storage_file_exists(fs_api, U2F_KEY_FILE) &&
+                                storage_file_exists(fs_api, U2F_CNT_FILE)));
     furi_record_close(RECORD_STORAGE);
 
     return state;
@@ -240,26 +215,14 @@ uint32_t u2f_data_cert_load(uint8_t *cert, size_t capacity) {
     furi_assert(cert);
 
     Storage *fs_api = furi_record_open(RECORD_STORAGE);
-    File *file = storage_file_alloc(fs_api);
     uint32_t len_cur = 0;
+    size_t cert_len = 0U;
 
-    if (!file) {
-        furi_record_close(RECORD_STORAGE);
-        return 0;
-    }
     u2f_data_recover_atomic_files(fs_api);
-    if (storage_file_open(file, U2F_CERT_FILE, FSAM_READ, FSOM_OPEN_EXISTING)) {
-        uint32_t file_size = storage_file_size(file);
-        if (file_size <= capacity) {
-            len_cur = storage_file_read(file, cert, file_size);
-        }
-        if (len_cur != file_size) {
-            len_cur = 0;
-        }
+    if (zf_storage_read_file(fs_api, U2F_CERT_FILE, cert, capacity, &cert_len)) {
+        len_cur = cert_len;
     }
 
-    storage_file_close(file);
-    storage_file_free(file);
     furi_record_close(RECORD_STORAGE);
 
     return len_cur;

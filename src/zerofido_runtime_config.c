@@ -89,7 +89,6 @@ void zf_runtime_config_load_defaults(ZfRuntimeConfig *config) {
 
 void zf_runtime_config_load(Storage *storage, ZfRuntimeConfig *config) {
     ZfRuntimeConfigFileRecord record = {0};
-    File *file = NULL;
     size_t size = 0;
 
     zf_runtime_config_load_defaults(config);
@@ -99,26 +98,13 @@ void zf_runtime_config_load(Storage *storage, ZfRuntimeConfig *config) {
     zf_storage_recover_atomic_file(storage, ZF_RUNTIME_CONFIG_FILE_PATH,
                                    ZF_RUNTIME_CONFIG_FILE_TEMP_PATH);
 
-    file = storage_file_alloc(storage);
-    if (!file) {
+    if (!zf_storage_read_file(storage, ZF_RUNTIME_CONFIG_FILE_PATH, (uint8_t *)&record,
+                              sizeof(record), &size)) {
         return;
     }
-
-    if (!storage_file_open(file, ZF_RUNTIME_CONFIG_FILE_PATH, FSAM_READ, FSOM_OPEN_EXISTING)) {
-        storage_file_free(file);
+    if (size != ZF_RUNTIME_CONFIG_FILE_VERSION_3_SIZE && size != sizeof(record)) {
         return;
     }
-
-    size = storage_file_size(file);
-    if ((size != ZF_RUNTIME_CONFIG_FILE_VERSION_3_SIZE && size != sizeof(record)) ||
-        storage_file_read(file, &record, size) != size) {
-        storage_file_close(file);
-        storage_file_free(file);
-        return;
-    }
-
-    storage_file_close(file);
-    storage_file_free(file);
 
     if (record.magic != ZF_RUNTIME_CONFIG_FILE_MAGIC) {
         return;

@@ -67,6 +67,8 @@ bool zf_storage_remove_optional(Storage *storage, const char *path);
 bool zf_storage_remove_optional_paths(Storage *storage, const char *const *paths, size_t count);
 bool zf_storage_build_child_path(const char *dir_path, const char *name, char *path,
                                  size_t path_size);
+bool zf_storage_read_file(Storage *storage, const char *path, uint8_t *data, size_t capacity,
+                          size_t *out_size);
 bool zf_storage_for_each_dir_entry(Storage *storage, const char *dir_path, char *name_buffer,
                                    size_t name_buffer_size, ZfStorageDirEntryVisitor visitor,
                                    void *context);

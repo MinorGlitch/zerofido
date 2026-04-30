@@ -93,6 +93,39 @@ bool zf_storage_build_child_path(const char *dir_path, const char *name, char *p
     return true;
 }
 
+bool zf_storage_read_file(Storage *storage, const char *path, uint8_t *data, size_t capacity,
+                          size_t *out_size) {
+    File *file = NULL;
+    size_t size = 0U;
+    bool ok = false;
+
+    if (out_size) {
+        *out_size = 0U;
+    }
+    if (!storage || !path || !data || capacity == 0U || !out_size) {
+        return false;
+    }
+
+    file = storage_file_alloc(storage);
+    if (!file) {
+        return false;
+    }
+    if (!storage_file_open(file, path, FSAM_READ, FSOM_OPEN_EXISTING)) {
+        storage_file_free(file);
+        return false;
+    }
+
+    size = storage_file_size(file);
+    if (size > 0U && size <= capacity && storage_file_read(file, data, size) == size) {
+        *out_size = size;
+        ok = true;
+    }
+
+    storage_file_close(file);
+    storage_file_free(file);
+    return ok;
+}
+
 bool zf_storage_for_each_dir_entry(Storage *storage, const char *dir_path, char *name_buffer,
                                    size_t name_buffer_size, ZfStorageDirEntryVisitor visitor,
                                    void *context) {

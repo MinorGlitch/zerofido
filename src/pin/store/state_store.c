@@ -136,26 +136,14 @@ ZfPinLoadStatus zf_pin_state_store_load(Storage *storage, uint8_t pin_hash[ZF_PI
     const ZfPinFileRecord *record = NULL;
     size_t raw_size = 0;
     bool ok = false;
-    File *file = storage_file_alloc(storage);
 
-    if (!file) {
+    if (!storage) {
         return ZfPinLoadInvalid;
     }
-    if (!storage_file_open(file, ZF_PIN_FILE_PATH, FSAM_READ, FSOM_OPEN_EXISTING)) {
-        storage_file_free(file);
+    if (!zf_storage_read_file(storage, ZF_PIN_FILE_PATH, raw, sizeof(raw), &raw_size)) {
         return storage_file_exists(storage, ZF_PIN_FILE_PATH) ? ZfPinLoadInvalid : ZfPinLoadMissing;
     }
-
-    raw_size = storage_file_size(file);
     if (raw_size != sizeof(ZfPinFileRecord)) {
-        storage_file_close(file);
-        storage_file_free(file);
-        return ZfPinLoadInvalid;
-    }
-    ok = storage_file_read(file, raw, raw_size) == raw_size;
-    storage_file_close(file);
-    storage_file_free(file);
-    if (!ok) {
         return ZfPinLoadInvalid;
     }
     record = (const ZfPinFileRecord *)raw;

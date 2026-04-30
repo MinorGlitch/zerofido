@@ -208,7 +208,6 @@ static bool zf_store_counter_floor_validate_fields(
     uint8_t buffer[sizeof(ZfCounterFloorFile)] = {0};
     size_t size = 0;
     uint32_t stored_sign_count = 0;
-    File *file = NULL;
 
     if (out_high_water) {
         *out_high_water = sign_count ? *sign_count : 0;
@@ -241,24 +240,11 @@ static bool zf_store_counter_floor_validate_fields(
         return true;
     }
 
-    file = storage_file_alloc(storage);
-    if (!file) {
-        return false;
-    }
-    if (!storage_file_open(file, path, FSAM_READ, FSOM_OPEN_EXISTING)) {
-        storage_file_free(file);
+    if (!zf_storage_read_file(storage, path, buffer, sizeof(buffer), &size) ||
+        size != sizeof(ZfCounterFloorFile)) {
         return false;
     }
 
-    size = storage_file_size(file);
-    if (size != sizeof(ZfCounterFloorFile) || storage_file_read(file, buffer, size) != size) {
-        storage_file_close(file);
-        storage_file_free(file);
-        return false;
-    }
-
-    storage_file_close(file);
-    storage_file_free(file);
     if (!zf_counter_floor_decode_fields(credential_id, created_at,
                                         (const ZfCounterFloorFile *)buffer, &stored_sign_count)) {
         return false;
@@ -768,43 +754,22 @@ static bool zf_store_record_format_load_record_internal_with_buffer(
     size_t buffer_size, bool validate_counter_floor) {
     char path[128];
     size_t size = 0;
-    File *file = storage_file_alloc(storage);
     ZfCounterFloorFile embedded_counter_floor;
     bool has_embedded_counter_floor = false;
     bool decoded = false;
 
-    if (!file || !file_name || !record || !buffer || buffer_size == 0) {
-        if (file) {
-            storage_file_free(file);
-        }
+    if (!file_name || !record || !buffer || buffer_size == 0) {
         if (buffer && buffer_size > 0) {
             zf_crypto_secure_zero(buffer, buffer_size);
         }
         return false;
     }
     zf_store_build_record_path(file_name, path, sizeof(path));
-    if (!storage_file_open(file, path, FSAM_READ, FSOM_OPEN_EXISTING)) {
-        storage_file_free(file);
+    if (!zf_storage_read_file(storage, path, buffer, buffer_size, &size)) {
         zf_crypto_secure_zero(buffer, buffer_size);
         return false;
     }
 
-    size = storage_file_size(file);
-    if (size == 0 || size > buffer_size) {
-        storage_file_close(file);
-        storage_file_free(file);
-        zf_crypto_secure_zero(buffer, buffer_size);
-        return false;
-    }
-    if (storage_file_read(file, buffer, size) != size) {
-        storage_file_close(file);
-        storage_file_free(file);
-        zf_crypto_secure_zero(buffer, buffer_size);
-        return false;
-    }
-
-    storage_file_close(file);
-    storage_file_free(file);
     decoded = zf_record_decode(buffer, size, file_name, record, &embedded_counter_floor,
                                &has_embedded_counter_floor);
     zf_crypto_secure_zero(buffer, buffer_size);
@@ -843,38 +808,19 @@ bool zf_store_record_format_load_index_with_buffer(Storage *storage, const char 
                                                    size_t buffer_size) {
     char path[128];
     size_t size = 0;
-    File *file = storage_file_alloc(storage);
     ZfCounterFloorFile embedded_counter_floor;
     bool has_embedded_counter_floor = false;
     ZfCredentialRecord record = {0};
     uint32_t counter_high_water = 0;
 
-    if (!file || !file_name || !entry || !buffer || buffer_size == 0) {
-        if (file) {
-            storage_file_free(file);
-        }
+    if (!file_name || !entry || !buffer || buffer_size == 0) {
         return false;
     }
     zf_store_build_record_path(file_name, path, sizeof(path));
-    if (!storage_file_open(file, path, FSAM_READ, FSOM_OPEN_EXISTING)) {
-        storage_file_free(file);
+    if (!zf_storage_read_file(storage, path, buffer, buffer_size, &size)) {
         return false;
     }
 
-    size = storage_file_size(file);
-    if (size == 0 || size > buffer_size) {
-        storage_file_close(file);
-        storage_file_free(file);
-        return false;
-    }
-    if (storage_file_read(file, buffer, size) != size) {
-        storage_file_close(file);
-        storage_file_free(file);
-        return false;
-    }
-
-    storage_file_close(file);
-    storage_file_free(file);
     if (!zf_record_decode(buffer, size, file_name, &record, &embedded_counter_floor,
                           &has_embedded_counter_floor)) {
         zf_crypto_secure_zero(buffer, size);

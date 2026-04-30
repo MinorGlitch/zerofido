@@ -323,7 +323,7 @@ bool zf_local_attestation_load_cert(const ZfLocalAttestationProfile *profile, ui
                                     size_t out_capacity, size_t *out_len) {
     bool ok = false;
     Storage *storage = NULL;
-    File *file = NULL;
+    size_t file_size = 0U;
 
     if (!zf_profile_is_valid(profile) || !out || !out_len) {
         return false;
@@ -334,24 +334,11 @@ bool zf_local_attestation_load_cert(const ZfLocalAttestationProfile *profile, ui
     if (!storage) {
         return false;
     }
-    file = storage_file_alloc(storage);
-    if (!file) {
-        furi_record_close(RECORD_STORAGE);
-        return false;
-    }
-    if (storage_file_open(file, profile->cert_file, FSAM_READ, FSOM_OPEN_EXISTING)) {
-        uint32_t file_size = storage_file_size(file);
-        if (file_size > 0U && file_size <= out_capacity) {
-            size_t read = storage_file_read(file, out, file_size);
-            if (read == file_size) {
-                *out_len = read;
-                ok = true;
-            }
-        }
+    if (zf_storage_read_file(storage, profile->cert_file, out, out_capacity, &file_size)) {
+        *out_len = file_size;
+        ok = true;
     }
 
-    storage_file_close(file);
-    storage_file_free(file);
     furi_record_close(RECORD_STORAGE);
     return ok;
 }
