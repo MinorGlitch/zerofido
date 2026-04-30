@@ -36,6 +36,8 @@ static void test_furi_log_i(const char *tag, const char *fmt, ...);
 #define FURI_LOG_E(tag, fmt, ...) ((void)0)
 #define FURI_LOG_W(tag, fmt, ...) ((void)0)
 #define FURI_LOG_D(tag, fmt, ...) ((void)0)
+#define RECORD_GUI "gui"
+#define RECORD_NOTIFICATION "notification"
 #define RECORD_STORAGE "storage"
 #define EXT_PATH(path) path
 #define __REV(value) __builtin_bswap32(value)
@@ -70,6 +72,14 @@ struct FuriString {
     char value[64];
 };
 
+struct FuriThread {
+    FuriThreadCallback callback;
+    void *context;
+    size_t stack_size;
+    bool started;
+    bool joined;
+};
+
 static uint8_t g_key_agreement_seed = 1;
 static bool g_fail_crypto_encrypt = false;
 static bool g_fail_crypto_decrypt = false;
@@ -102,6 +112,10 @@ static uint32_t g_fake_tick = 1000;
 static uint8_t g_transport_poll_status = ZF_CTAP_SUCCESS;
 static size_t g_mutex_depth = 0;
 static bool g_transport_poll_requires_unlocked = false;
+static bool g_thread_alloc_fail = false;
+static size_t g_thread_start_count = 0;
+static size_t g_thread_join_count = 0;
+static size_t g_thread_free_count = 0;
 static bool g_u2f_adapter_init_ok = true;
 static size_t g_u2f_adapter_init_count = 0;
 static size_t g_u2f_adapter_deinit_count = 0;
@@ -246,6 +260,10 @@ static void test_storage_reset(void) {
     g_transport_poll_status = ZF_CTAP_SUCCESS;
     g_mutex_depth = 0;
     g_transport_poll_requires_unlocked = false;
+    g_thread_alloc_fail = false;
+    g_thread_start_count = 0;
+    g_thread_join_count = 0;
+    g_thread_free_count = 0;
     g_u2f_adapter_init_ok = true;
     g_u2f_adapter_init_count = 0;
     g_u2f_adapter_deinit_count = 0;
@@ -1047,8 +1065,30 @@ struct FuriMutex {
     int unused;
 };
 
+struct FuriSemaphore {
+    int unused;
+};
+
+typedef enum {
+    FuriMutexTypeNormal = 0,
+} FuriMutexType;
+
 #define FuriWaitForever 0U
 #define FuriStatusOk 0
+
+FuriMutex *furi_mutex_alloc(FuriMutexType type) {
+    FuriMutex *mutex = malloc(sizeof(*mutex));
+
+    UNUSED(type);
+    if (mutex) {
+        memset(mutex, 0, sizeof(*mutex));
+    }
+    return mutex;
+}
+
+void furi_mutex_free(FuriMutex *mutex) {
+    free(mutex);
+}
 
 FuriStatus furi_mutex_acquire(FuriMutex *mutex, uint32_t timeout) {
     UNUSED(mutex);
@@ -1064,6 +1104,21 @@ void furi_mutex_release(FuriMutex *mutex) {
     }
 }
 
+FuriSemaphore *furi_semaphore_alloc(uint32_t max_count, uint32_t initial_count) {
+    FuriSemaphore *semaphore = malloc(sizeof(*semaphore));
+
+    UNUSED(max_count);
+    UNUSED(initial_count);
+    if (semaphore) {
+        memset(semaphore, 0, sizeof(*semaphore));
+    }
+    return semaphore;
+}
+
+void furi_semaphore_free(FuriSemaphore *semaphore) {
+    free(semaphore);
+}
+
 uint32_t furi_get_tick(void) {
     return g_fake_tick;
 }
@@ -1075,6 +1130,56 @@ FuriThreadId furi_thread_get_current_id(void) {
 uint32_t furi_thread_get_stack_space(FuriThreadId thread_id) {
     UNUSED(thread_id);
     return 4096U;
+}
+
+FuriThread *furi_thread_alloc_ex(const char *name, size_t stack_size, FuriThreadCallback callback,
+                                 void *context) {
+    FuriThread *thread = NULL;
+
+    UNUSED(name);
+    if (g_thread_alloc_fail) {
+        return NULL;
+    }
+    thread = malloc(sizeof(*thread));
+    if (!thread) {
+        return NULL;
+    }
+    memset(thread, 0, sizeof(*thread));
+    thread->callback = callback;
+    thread->context = context;
+    thread->stack_size = stack_size;
+    return thread;
+}
+
+void furi_thread_set_appid(FuriThread *thread, const char *appid) {
+    UNUSED(thread);
+    UNUSED(appid);
+}
+
+void furi_thread_set_priority(FuriThread *thread, FuriThreadPriority priority) {
+    UNUSED(thread);
+    UNUSED(priority);
+}
+
+void furi_thread_start(FuriThread *thread) {
+    if (thread) {
+        thread->started = true;
+        g_thread_start_count++;
+    }
+}
+
+void furi_thread_join(FuriThread *thread) {
+    if (thread) {
+        thread->joined = true;
+        g_thread_join_count++;
+    }
+}
+
+void furi_thread_free(FuriThread *thread) {
+    if (thread) {
+        g_thread_free_count++;
+        free(thread);
+    }
 }
 
 bool zerofido_ui_request_approval(ZerofidoApp *app, ZfUiProtocol protocol, const char *operation,
@@ -1149,6 +1254,57 @@ void zerofido_ui_set_status(ZerofidoApp *app, const char *text) {
     g_last_status_text[sizeof(g_last_status_text) - 1] = '\0';
 }
 
+bool zerofido_ui_init(ZerofidoApp *app) {
+    UNUSED(app);
+    return true;
+}
+
+void zerofido_ui_deinit(ZerofidoApp *app) {
+    UNUSED(app);
+}
+
+void zerofido_ui_refresh_status_line(ZerofidoApp *app) {
+    UNUSED(app);
+}
+
+void zerofido_ui_refresh_credentials_status(ZerofidoApp *app) {
+    UNUSED(app);
+}
+
+static int32_t test_transport_worker(void *context) {
+    UNUSED(context);
+    return 0;
+}
+
+static void test_transport_stop(ZerofidoApp *app) {
+    UNUSED(app);
+}
+
+const ZfTransportAdapterOps zf_transport_usb_hid_adapter = {
+    .worker = test_transport_worker,
+    .worker_stack_size = 6 * 1024,
+    .stop = test_transport_stop,
+};
+
+const ZfTransportAdapterOps zf_transport_nfc_adapter = {
+    .worker = test_transport_worker,
+    .worker_stack_size = 4 * 1024,
+    .stop = test_transport_stop,
+};
+
+void zf_transport_stop(ZerofidoApp *app) {
+    test_transport_stop(app);
+}
+
+bool zerofido_notify_init(ZerofidoApp *app) {
+    UNUSED(app);
+    return true;
+}
+
+void zerofido_notify_deinit(ZerofidoApp *app) {
+    UNUSED(app);
+}
+
 bool u2f_data_wipe(Storage *storage) {
     UNUSED(storage);
     return true;
@@ -1163,6 +1319,10 @@ bool zf_u2f_adapter_init(ZerofidoApp *app) {
 void zf_u2f_adapter_deinit(ZerofidoApp *app) {
     UNUSED(app);
     g_u2f_adapter_deinit_count++;
+}
+
+bool zf_u2f_adapter_is_available(const ZerofidoApp *app) {
+    return app && g_u2f_adapter_init_ok;
 }
 
 #include "../../../src/zerofido_cbor.c"
@@ -1192,6 +1352,7 @@ void zf_u2f_adapter_deinit(ZerofidoApp *app) {
 #include "../../../src/pin/command.c"
 #include "../../../src/zerofido_storage.c"
 #include "../../../src/zerofido_runtime_config.c"
+#include "../../../src/app/lifecycle.c"
 #include "../../../src/store/bootstrap.c"
 #include "../../../src/store/record_format.c"
 #include "../../../src/store/recovery.c"
@@ -1392,6 +1553,7 @@ int main(void) {
     test_runtime_config_set_fido2_preserves_runtime_state_on_persist_failure();
     test_runtime_config_set_fido2_profile_preserves_runtime_state_on_persist_failure();
     test_runtime_config_set_attestation_preserves_runtime_state_on_persist_failure();
+    test_transport_mode_switch_failure_preserves_persisted_mode();
     test_ctap_error_response_omits_body_when_store_add_fails();
     test_make_credential_rejects_local_maintenance_window();
     test_make_credential_empty_pin_auth_requires_pin_protocol();

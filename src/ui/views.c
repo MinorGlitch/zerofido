@@ -769,8 +769,7 @@ static void zerofido_settings_menu_callback(void *context, uint32_t index) {
         ZfTransportMode mode = runtime_config.transport_mode == ZfTransportModeUsbHid
                                    ? ZfTransportModeNfc
                                    : ZfTransportModeUsbHid;
-        if (zf_runtime_config_set_transport_mode(app, app->storage, mode) &&
-            zf_app_lifecycle_restart_transport(app)) {
+        if (zf_app_lifecycle_set_transport_mode(app, app->storage, mode)) {
             zerofido_ui_set_status(app, mode == ZfTransportModeNfc ? "Transport: NFC"
                                                                    : "Transport: USB HID");
         } else {

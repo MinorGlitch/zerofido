@@ -460,6 +460,46 @@ bool zf_app_lifecycle_restart_transport(ZerofidoApp *app) {
     return zf_app_lifecycle_start_worker(app);
 }
 
+bool zf_app_lifecycle_set_transport_mode(ZerofidoApp *app, Storage *storage, ZfTransportMode mode) {
+    ZfRuntimeConfig previous_config;
+    ZfRuntimeConfig next_config;
+
+    if (!app || (mode != ZfTransportModeUsbHid && mode != ZfTransportModeNfc)) {
+        return false;
+    }
+#if defined(ZF_USB_ONLY)
+    if (mode != ZfTransportModeUsbHid) {
+        return false;
+    }
+#elif defined(ZF_NFC_ONLY)
+    if (mode != ZfTransportModeNfc) {
+        return false;
+    }
+#endif
+
+    previous_config = app->runtime_config;
+    if (previous_config.transport_mode == mode) {
+        return true;
+    }
+
+    next_config = previous_config;
+    next_config.transport_mode = mode;
+    zf_runtime_config_apply(app, &next_config);
+    if (!zf_app_lifecycle_restart_transport(app)) {
+        zf_runtime_config_apply(app, &previous_config);
+        (void)zf_app_lifecycle_restart_transport(app);
+        return false;
+    }
+
+    if (!zf_runtime_config_persist(storage, &next_config)) {
+        zf_runtime_config_apply(app, &previous_config);
+        (void)zf_app_lifecycle_restart_transport(app);
+        return false;
+    }
+
+    return true;
+}
+
 void zf_app_lifecycle_shutdown(ZerofidoApp *app) {
     furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
     app->running = false;
