@@ -299,6 +299,9 @@ static void test_u2f_adapter_auto_accept_bypasses_approval_prompt(void) {
     uint8_t request[5 + U2F_CHALLENGE_SIZE + U2F_APP_ID_SIZE] = {0};
     uint8_t response[512] = {0};
     size_t response_len = 0;
+    const size_t signature_preimage_len =
+        1U + U2F_APP_ID_SIZE + U2F_CHALLENGE_SIZE + (U2F_HASH_SIZE * 2U) + sizeof(U2fPubKey);
+    const uint8_t *signature_preimage = NULL;
 
     test_reset();
     g_auto_accept_requests = true;
@@ -313,6 +316,8 @@ static void test_u2f_adapter_auto_accept_bypasses_approval_prompt(void) {
     request[2] = 0x00;
     request[3] = 0x00;
     request[4] = U2F_CHALLENGE_SIZE + U2F_APP_ID_SIZE;
+    memset(request + 5, 0xA5, U2F_CHALLENGE_SIZE);
+    memset(request + 5 + U2F_CHALLENGE_SIZE, 0x5A, U2F_APP_ID_SIZE);
 
     response_len = zf_u2f_adapter_handle_msg(&app, 0x01020304U, request, sizeof(request), response,
                                              sizeof(response));
@@ -322,6 +327,16 @@ static void test_u2f_adapter_auto_accept_bypasses_approval_prompt(void) {
            "auto-accept U2F register should succeed");
     expect(g_approval_request_count == 0,
            "auto-accept U2F register should bypass the approval prompt");
+    expect(g_sha256_trace_len >= signature_preimage_len,
+           "short U2F register should hash a complete registration signature preimage");
+    signature_preimage = &g_sha256_trace[g_sha256_trace_len - signature_preimage_len];
+    expect(signature_preimage[0] == 0x00,
+           "U2F register signature preimage should start with the reserved byte");
+    expect(memcmp(signature_preimage + 1, request + 5 + U2F_CHALLENGE_SIZE, U2F_APP_ID_SIZE) == 0,
+           "short U2F register signature preimage should use appId from the short APDU payload");
+    expect(
+        memcmp(signature_preimage + 1 + U2F_APP_ID_SIZE, request + 5, U2F_CHALLENGE_SIZE) == 0,
+        "short U2F register signature preimage should use challenge from the short APDU payload");
 
     zf_u2f_adapter_deinit(&app);
 }

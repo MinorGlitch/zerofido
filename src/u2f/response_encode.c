@@ -93,9 +93,9 @@ static inline uint32_t zf_u2f_to_big_endian(uint32_t value) {
  * registration signature covers the U2F-defined app/challenge/key-handle/public
  * key base string and requires ready attestation assets.
  */
-uint16_t zf_u2f_encode_register_response(U2fData *instance, uint8_t *buf,
+uint16_t zf_u2f_encode_register_response(U2fData *instance, uint8_t *buf, uint16_t request_len,
                                          uint16_t response_capacity) {
-    const U2fRegisterReq *req = (const U2fRegisterReq *)buf;
+    U2fParsedApdu apdu = {0};
     U2fRegisterResp *resp = (U2fRegisterResp *)buf;
     U2fKeyHandle handle;
     uint8_t private_key[U2F_EC_KEY_SIZE];
@@ -108,6 +108,15 @@ uint16_t zf_u2f_encode_register_response(U2fData *instance, uint8_t *buf,
     size_t signature_len = 0;
     bool derived_key = false;
     uint16_t response_len = 0;
+
+    if (!u2f_parse_apdu_header(buf, request_len, false, &apdu)) {
+        return zf_u2f_write_status(buf, ZF_U2F_SW_WRONG_LENGTH);
+    }
+    if (apdu.lc != (U2F_CHALLENGE_SIZE + U2F_APP_ID_SIZE)) {
+        return zf_u2f_write_status(buf, ZF_U2F_SW_WRONG_LENGTH);
+    }
+    const uint8_t *challenge = apdu.data;
+    const uint8_t *app_id = apdu.data + U2F_CHALLENGE_SIZE;
 
     if (instance->callback != NULL) {
         instance->callback(U2fNotifyRegister, instance->context);
@@ -122,14 +131,13 @@ uint16_t zf_u2f_encode_register_response(U2fData *instance, uint8_t *buf,
     handle.len = U2F_HASH_SIZE * 2;
     for (size_t attempt = 0; attempt < ZF_U2F_DERIVE_PRIVATE_KEY_MAX_ATTEMPTS; ++attempt) {
         furi_hal_random_fill_buf(handle.nonce, sizeof(handle.nonce));
-        if (zf_u2f_derive_private_key(instance, req->app_id, handle.nonce, private_key)) {
+        if (zf_u2f_derive_private_key(instance, app_id, handle.nonce, private_key)) {
             derived_key = true;
             break;
         }
     }
 
-    if (!derived_key ||
-        !zf_u2f_compute_handle_mac(instance, private_key, req->app_id, handle.hash)) {
+    if (!derived_key || !zf_u2f_compute_handle_mac(instance, private_key, app_id, handle.hash)) {
         response_len = zf_u2f_write_status(buf, ZF_U2F_SW_INS_NOT_SUPPORTED);
         goto cleanup;
     }
@@ -143,16 +151,16 @@ uint16_t zf_u2f_encode_register_response(U2fData *instance, uint8_t *buf,
 
     {
         uint8_t reserved_byte = 0;
-        uint8_t preimage[1U + U2F_APP_ID_SIZE + U2F_CHALLENGE_SIZE + sizeof(U2fKeyHandle) +
+        uint8_t preimage[1U + U2F_APP_ID_SIZE + U2F_CHALLENGE_SIZE + (U2F_HASH_SIZE * 2U) +
                          sizeof(U2fPubKey)];
         size_t offset = 0;
 
         memcpy(preimage + offset, &reserved_byte, sizeof(reserved_byte));
         offset += sizeof(reserved_byte);
-        memcpy(preimage + offset, req->app_id, sizeof(req->app_id));
-        offset += sizeof(req->app_id);
-        memcpy(preimage + offset, req->challenge, sizeof(req->challenge));
-        offset += sizeof(req->challenge);
+        memcpy(preimage + offset, app_id, U2F_APP_ID_SIZE);
+        offset += U2F_APP_ID_SIZE;
+        memcpy(preimage + offset, challenge, U2F_CHALLENGE_SIZE);
+        offset += U2F_CHALLENGE_SIZE;
         memcpy(preimage + offset, handle.hash, handle.len);
         offset += handle.len;
         memcpy(preimage + offset, &public_key, sizeof(public_key));

@@ -135,7 +135,7 @@ uint16_t u2f_msg_parse(U2fData *U2F, uint8_t *buf, uint16_t request_len,
     }
 
     if (buf[1] == U2F_CMD_REGISTER) { // Register request
-        return zf_u2f_encode_register_response(U2F, buf, response_capacity);
+        return zf_u2f_encode_register_response(U2F, buf, request_len, response_capacity);
 
     } else if (buf[1] == U2F_CMD_AUTHENTICATE) { // Authenticate request
         return zf_u2f_encode_authenticate_response(U2F, buf, request_len, response_capacity);
