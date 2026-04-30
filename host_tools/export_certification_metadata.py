@@ -38,9 +38,13 @@ ICON_DATA_URL = (
 )
 DEFAULT_CANONICAL_STATEMENT: dict[str, Any] = {
     "legalHeader": "https://fidoalliance.org/metadata/metadata-statement-legal-header/",
+    "description": "ZeroFIDO",
+    "authenticatorVersion": 10000,
+    "schema": 3,
     "aaguid": "b51a976a-0b02-40aa-9d8a-36c8b91bbd1a",
     "upv": [{"major": 1, "minor": 0}],
     "authenticationAlgorithms": ["secp256r1_ecdsa_sha256_raw"],
+    "keyProtection": ["software"],
     "authenticatorGetInfo": {
         "versions": ["FIDO_2_0", "U2F_V2"],
         "extensions": ["credProtect", "hmac-secret"],
@@ -270,11 +274,19 @@ def build_u2f_metadata(
     exported.pop("authenticatorGetInfo", None)
     exported.pop("isSecondFactorOnly", None)
     exported.pop("friendlyNames", None)
+    exported["description"] = exported.get("description", "ZeroFIDO")
+    exported["authenticatorVersion"] = exported.get("authenticatorVersion", 10000)
+    exported["schema"] = 3
     exported["protocolFamily"] = "u2f"
     exported["upv"] = [{"major": 1, "minor": 2}]
+    exported["authenticationAlgorithms"] = exported.get(
+        "authenticationAlgorithms", ["secp256r1_ecdsa_sha256_raw"]
+    )
     exported["publicKeyAlgAndEncodings"] = ["ecc_x962_raw"]
     exported["userVerificationDetails"] = [[{"userVerificationMethod": "presence_internal"}]]
+    exported["keyProtection"] = ["software"]
     exported["matcherProtection"] = ["software"]
+    exported["tcDisplay"] = []
     exported["icon"] = ICON_DATA_URL
     if u2f_attestation_cert_der is not None:
         skid = compute_u2f_attestation_key_identifier(u2f_attestation_cert_der)
