@@ -17,7 +17,8 @@ NFC has been tested on iPhone. Android NFC support is next. In the meantime, con
 Flipper to the phone over USB when the phone accepts USB security keys.
 
 U2F and FIDO2.0 pass their respective tests in the current FIDO Conformance Tools suite. FIDO2.1
-support is in development. Bug reports, feature requests, and pull requests are welcome.
+support is in development behind a developer-only build flag. Bug reports, feature requests, and
+pull requests are welcome.
 
 ## Showcase
 
@@ -71,7 +72,7 @@ support is in development. Bug reports, feature requests, and pull requests are 
 | NFC | Supported in the `nfc` and `full` release profiles |
 | U2F V2 | Supported |
 | FIDO2.0 / CTAP2.0 | Supported |
-| FIDO2.1 / CTAP2.1 | Experimental profile |
+| FIDO2.1 / CTAP2.1 | Developer-only experimental build flag |
 | `ClientPIN` | Supported |
 | Discoverable credentials | Supported |
 | Attestation | Local software attestation when requested |
@@ -97,7 +98,6 @@ ZeroFIDO includes an on-device Settings screen.
 | Setting | Use |
 | --- | --- |
 | Transport | Choose USB HID or NFC when the build includes both transports. |
-| FIDO2 profile | Use FIDO2.0 for normal compatibility. Use FIDO2.1 for experimental testing. |
 | Attestation | Choose how MakeCredential answers attestation requests. |
 | PIN | Set, change, or manage the ClientPIN used by sites that require user verification. |
 | Auto-accept | Test mode for flows that should not require a touch prompt. Only appears when built with `ZEROFIDO_AUTO_ACCEPT_REQUESTS=1`. |
@@ -160,7 +160,7 @@ brew install llvm cppcheck
 ### Build Profiles
 
 The app manifest reads `ZEROFIDO_PROFILE` at build time. The default profile is `nfc`.
-Release builds default to `ZEROFIDO_RELEASE_DIAGNOSTICS=0` and `ZEROFIDO_DEV_ATTESTATION=0`.
+Release builds default to `ZEROFIDO_RELEASE_DIAGNOSTICS=0`.
 
 | Profile | Build flag | Use |
 | --- | --- | --- |
@@ -168,12 +168,10 @@ Release builds default to `ZEROFIDO_RELEASE_DIAGNOSTICS=0` and `ZEROFIDO_DEV_ATT
 | USB HID only | `ZEROFIDO_PROFILE=usb` | Desktop browser WebAuthn and U2F testing. |
 | Full | `ZEROFIDO_PROFILE=full` | Both transports in one app. |
 
-Release-default builds exclude the NFC trace implementation and the bundled development
-attestation chain. Diagnostic and private-trust builds must opt in:
+Release-default builds exclude the NFC trace implementation. Diagnostics must opt in:
 
 ```bash
 ZEROFIDO_PROFILE=nfc ZEROFIDO_RELEASE_DIAGNOSTICS=1 uv run python -m ufbt
-ZEROFIDO_PROFILE=usb ZEROFIDO_DEV_ATTESTATION=1 uv run python -m ufbt
 ```
 
 Build a profile:
@@ -293,7 +291,6 @@ Build a release `.fap` for the selected profile and verify that the app exports 
 ```bash
 ZEROFIDO_PROFILE=usb \
 ZEROFIDO_RELEASE_DIAGNOSTICS=0 \
-ZEROFIDO_DEV_ATTESTATION=0 \
 uv run python host_tools/package_release.py
 ```
 
@@ -321,8 +318,8 @@ git push origin v1.0.0
 ```
 
 The release workflow builds the `nfc`, `usb`, and `full` profiles with
-`ZEROFIDO_RELEASE_DIAGNOSTICS=0` and `ZEROFIDO_DEV_ATTESTATION=0`, packages the stripped
-`*-release.fap` artifacts, and uploads `SHA256SUMS`.
+`ZEROFIDO_RELEASE_DIAGNOSTICS=0`, packages the stripped `*-release.fap` artifacts, and uploads
+`SHA256SUMS`.
 
 You can also run the workflow from GitHub Actions with an existing tag such as `v1.0.0`.
 
@@ -343,6 +340,9 @@ uv run python host_tools/export_certification_metadata.py \
   --profile fido2-2.1-experimental \
   --client-pin-state unset
 ```
+
+The `fido2-2.1-experimental` metadata profile is for development builds created with
+`ZEROFIDO_DEV_FIDO2_1=1`; release builds ship the FIDO2.0 profile.
 
 The default outputs are:
 

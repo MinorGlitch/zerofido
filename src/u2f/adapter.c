@@ -25,7 +25,6 @@
 #include "persistence.h"
 #include "status.h"
 #include "../zerofido_app_i.h"
-#include "../zerofido_attestation.h"
 #include "../zerofido_crypto.h"
 #include "../zerofido_notify.h"
 #include "../zerofido_runtime_config.h"
@@ -63,17 +62,7 @@ bool zf_u2f_adapter_ensure_attestation_assets(void) {
         return true;
     }
 
-#if ZF_DEV_ATTESTATION
-    {
-        size_t cert_len = 0;
-        const uint8_t *cert = zf_attestation_get_leaf_cert_der(&cert_len);
-        const uint8_t *cert_key = zf_attestation_get_leaf_private_key();
-
-        return u2f_data_bootstrap_attestation_assets(cert, cert_len, cert_key, ZF_PRIVATE_KEY_LEN);
-    }
-#else
     return u2f_data_generate_attestation_assets();
-#endif
 }
 
 static void zf_u2f_format_app_id(const uint8_t *request, size_t request_len, char *out,

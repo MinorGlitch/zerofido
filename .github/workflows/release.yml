@@ -31,7 +31,6 @@ jobs:
     env:
       UV_PYTHON: "3.14"
       ZEROFIDO_RELEASE_DIAGNOSTICS: "0"
-      ZEROFIDO_DEV_ATTESTATION: "0"
       ZEROFIDO_AUTO_ACCEPT_REQUESTS: "0"
       ZEROFIDO_DEV_SCREENSHOT: "0"
       ZEROFIDO_DEV_FIDO2_1: "0"
@@ -117,7 +116,6 @@ jobs:
             echo "Build flags:"
             echo
             echo "- ZEROFIDO_RELEASE_DIAGNOSTICS=0"
-            echo "- ZEROFIDO_DEV_ATTESTATION=0"
             echo "- ZEROFIDO_AUTO_ACCEPT_REQUESTS=0"
             echo "- ZEROFIDO_DEV_SCREENSHOT=0"
             echo "- ZEROFIDO_DEV_FIDO2_1=0"

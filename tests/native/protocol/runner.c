@@ -608,17 +608,6 @@ const char *zf_attestation_get_aaguid_string(void) {
     return "b51a976a-0b02-40aa-9d8a-36c8b91bbd1a";
 }
 
-const uint8_t *zf_attestation_get_leaf_cert_der(size_t *out_len) {
-    static const uint8_t cert[] = {0x30, 0x82, 0x00, 0x00};
-    *out_len = sizeof(cert);
-    return cert;
-}
-
-const uint8_t *zf_attestation_get_leaf_private_key(void) {
-    static const uint8_t private_key[ZF_PRIVATE_KEY_LEN] = {0};
-    return private_key;
-}
-
 bool zf_attestation_ensure_ready(void) {
     return g_attestation_ensure_ready;
 }
@@ -640,16 +629,6 @@ bool zf_attestation_load_leaf_cert_der(uint8_t *out, size_t out_capacity, size_t
     memcpy(out, cert, sizeof(cert));
     *out_len = sizeof(cert);
     return true;
-}
-
-size_t zf_attestation_get_cert_chain(const uint8_t **certs, size_t *cert_lens, size_t max_certs) {
-    static const uint8_t cert[] = {0x30, 0x82, 0x00, 0x00};
-    if (max_certs == 0) {
-        return 0;
-    }
-    certs[0] = cert;
-    cert_lens[0] = sizeof(cert);
-    return 1;
 }
 
 bool zf_attestation_sign_input(const uint8_t *input, size_t input_len, uint8_t *out,

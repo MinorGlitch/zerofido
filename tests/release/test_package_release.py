@@ -69,7 +69,6 @@ class PackageReleaseTests(unittest.TestCase):
 
         run.assert_called_once()
         kwargs = run.call_args.kwargs
-        self.assertEqual(kwargs["env"]["ZEROFIDO_DEV_ATTESTATION"], "0")
         self.assertEqual(kwargs["env"]["ZEROFIDO_RELEASE_DIAGNOSTICS"], "0")
 
 

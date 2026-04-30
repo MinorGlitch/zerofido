@@ -1356,19 +1356,6 @@ bool zerofido_ui_request_approval(ZerofidoApp *app, ZfUiProtocol protocol, const
     return true;
 }
 
-const uint8_t *zf_attestation_get_leaf_cert_der(size_t *out_len) {
-    static const uint8_t cert[] = {0x30};
-    if (out_len) {
-        *out_len = sizeof(cert);
-    }
-    return cert;
-}
-
-const uint8_t *zf_attestation_get_leaf_private_key(void) {
-    static const uint8_t cert_key[32] = {0};
-    return cert_key;
-}
-
 const uint8_t *zf_attestation_get_aaguid(void) {
     static const uint8_t aaguid[ZF_AAGUID_LEN] = {
         0xB5, 0x1A, 0x97, 0x6A, 0x0B, 0x02, 0x40, 0xAA,
