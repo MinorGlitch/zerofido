@@ -1,8 +1,7 @@
-"""Symbol and release-FAP budget gates.
+"""Symbol and release-FAP launchability gates.
 
 This script has two related jobs: validate that imported symbols are available
-in the pinned Flipper SDK API surface, and validate/produce release FAP files
-whose global exports and relocation metadata stay within the app-loader budget.
+in the pinned Flipper SDK API surface, and validate/produce release FAP files.
 """
 
 from __future__ import annotations
@@ -11,8 +10,10 @@ import argparse
 import csv
 import os
 import shutil
+import struct
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -144,6 +145,28 @@ def parse_readelf_sections(output: str) -> list[ElfSection]:
     return sections
 
 
+def parse_readelf_section_indices(output: str) -> dict[int, str]:
+    sections: dict[int, str] = {}
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("["):
+            continue
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        try:
+            if parts[0] == "[":
+                index = int(parts[1].rstrip("]"))
+                name = parts[2]
+            else:
+                index = int(parts[0].lstrip("[").rstrip("]"))
+                name = parts[1]
+        except ValueError:
+            continue
+        sections[index] = name
+    return sections
+
+
 def parse_readelf_symbols(output: str) -> list[ElfSymbol]:
     symbols: list[ElfSymbol] = []
     for raw_line in output.splitlines():
@@ -169,6 +192,10 @@ def read_elf_sections(readelf: str, fap_path: Path) -> list[ElfSection]:
     return parse_readelf_sections(_run_tool([readelf, "-S", "--wide", str(fap_path)]))
 
 
+def read_elf_section_indices(readelf: str, fap_path: Path) -> dict[int, str]:
+    return parse_readelf_section_indices(_run_tool([readelf, "-S", "--wide", str(fap_path)]))
+
+
 def read_elf_symbols(readelf: str, fap_path: Path) -> list[ElfSymbol]:
     return parse_readelf_symbols(_run_tool([readelf, "-s", "--wide", str(fap_path)]))
 
@@ -186,6 +213,7 @@ def fap_budget_violations(sections: list[ElfSection], symbols: list[ElfSymbol]) 
         for section in sections
         if section.name.startswith(".rel.") or section.name.startswith(".rela.")
     )
+    fast_relocations = sorted(section.name for section in sections if section.name.startswith(".fast.rel."))
 
     if unexpected_exports:
         violations.append(
@@ -203,6 +231,8 @@ def fap_budget_violations(sections: list[ElfSection], symbols: list[ElfSymbol]) 
             "standard relocation sections remain after fastfap: "
             + ", ".join(standard_relocations)
         )
+    if not fast_relocations:
+        violations.append("fast relocation sections missing from optimized release FAP")
 
     symtab_size = section_by_name.get(".symtab", ElfSection(".symtab", "SYMTAB", 0)).size
     strtab_size = section_by_name.get(".strtab", ElfSection(".strtab", "STRTAB", 0)).size
@@ -214,8 +244,86 @@ def fap_budget_violations(sections: list[ElfSection], symbols: list[ElfSymbol]) 
     return violations
 
 
+def _remap_fast_relocation_data(data: bytes, old_to_new_section: dict[int, int]) -> bytes:
+    remapped = bytearray(data)
+    if len(remapped) < 5:
+        raise RuntimeError("fast relocation section is truncated")
+
+    offset = 0
+    version = remapped[offset]
+    offset += 1
+    if version != 1:
+        raise RuntimeError(f"unsupported fast relocation version {version}")
+
+    group_count = struct.unpack_from("<I", remapped, offset)[0]
+    offset += 4
+    for _ in range(group_count):
+        if offset + 5 > len(remapped):
+            raise RuntimeError("fast relocation group is truncated")
+        flags = remapped[offset]
+        offset += 1
+        if flags & 0x80:
+            old_section = struct.unpack_from("<I", remapped, offset)[0]
+            try:
+                new_section = old_to_new_section[old_section]
+            except KeyError as exc:
+                raise RuntimeError(
+                    f"fast relocation references removed section index {old_section}"
+                ) from exc
+            struct.pack_into("<I", remapped, offset, new_section)
+            offset += 8
+        else:
+            offset += 4
+
+        if offset + 4 > len(remapped):
+            raise RuntimeError("fast relocation offset list is truncated")
+        relocation_count = struct.unpack_from("<I", remapped, offset)[0]
+        offset += 4 + relocation_count * 3
+
+    if offset != len(remapped):
+        raise RuntimeError("fast relocation section has trailing bytes")
+    return bytes(remapped)
+
+
+def _remap_fast_relocation_sections(
+    objcopy: str,
+    readelf: str,
+    fap_path: Path,
+    original_section_indices: dict[int, str],
+) -> None:
+    final_section_indices = read_elf_section_indices(readelf, fap_path)
+    final_index_by_name = {name: index for index, name in final_section_indices.items()}
+    old_to_new_section = {
+        old_index: final_index_by_name[name]
+        for old_index, name in original_section_indices.items()
+        if name in final_index_by_name
+    }
+    fast_relocations = [
+        section.name
+        for section in read_elf_sections(readelf, fap_path)
+        if section.name.startswith(".fast.rel.")
+    ]
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        for section_name in fast_relocations:
+            dumped = temp_path / f"{section_name.removeprefix('.')}.bin"
+            subprocess.run(
+                [objcopy, f"--dump-section={section_name}={dumped}", str(fap_path)],
+                check=True,
+            )
+            dumped.write_bytes(
+                _remap_fast_relocation_data(dumped.read_bytes(), old_to_new_section)
+            )
+            subprocess.run(
+                [objcopy, f"--update-section={section_name}={dumped}", str(fap_path)],
+                check=True,
+            )
+
+
 def optimize_fap_exports(objcopy: str, readelf: str, fap_path: Path) -> None:
     sections = read_elf_sections(readelf, fap_path)
+    original_section_indices = read_elf_section_indices(readelf, fap_path)
     has_fast_relocations = any(section.name.startswith(".fast.rel.") for section in sections)
     has_standard_relocations = any(
         section.name.startswith(".rel.") or section.name.startswith(".rela.") for section in sections
@@ -223,7 +331,12 @@ def optimize_fap_exports(objcopy: str, readelf: str, fap_path: Path) -> None:
 
     if has_standard_relocations and not has_fast_relocations:
         raise RuntimeError("refusing to strip relocations before fastfap has produced .fast.rel.*")
+    if has_fast_relocations and not has_standard_relocations:
+        raise RuntimeError("refusing to package fast-only FAP without standard relocations")
 
+    # Fast relocation payloads encode section indexes produced before post-build
+    # stripping. Remap them after removing standard relocations so the compact
+    # fast-only FAP still points at the final section table.
     subprocess.run(
         [
             objcopy,
@@ -237,6 +350,7 @@ def optimize_fap_exports(objcopy: str, readelf: str, fap_path: Path) -> None:
         ],
         check=True,
     )
+    _remap_fast_relocation_sections(objcopy, readelf, fap_path, original_section_indices)
 
 
 def package_optimized_fap(objcopy: str, readelf: str, source_path: Path, output_path: Path) -> None:
