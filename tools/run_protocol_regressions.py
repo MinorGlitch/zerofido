@@ -14,10 +14,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 NATIVE_SOURCE = ROOT / "tests" / "native" / "protocol" / "runner.c"
 NATIVE_TRANSPORT_SOURCE = ROOT / "tests" / "native" / "transport_u2f" / "runner.c"
+NATIVE_CRYPTO_SOURCE = ROOT / "tests" / "native" / "crypto" / "runner.c"
 NATIVE_INCLUDE = ROOT / "tests" / "native" / "include"
 NATIVE_BINARY = ROOT / ".tmp" / "native_protocol_regressions"
 NATIVE_PACKED_OFF_BINARY = ROOT / ".tmp" / "native_protocol_regressions_packed_off"
 NATIVE_TRANSPORT_BINARY = ROOT / ".tmp" / "native_transport_u2f_regressions"
+NATIVE_CRYPTO_BINARY = ROOT / ".tmp" / "native_crypto_regressions"
 POLICY_SOURCE = ROOT / "src" / "ctap" / "policy.c"
 
 
@@ -38,6 +40,24 @@ def main() -> None:
         raise SystemExit("policy is missing allowList semantics helper")
 
     NATIVE_BINARY.parent.mkdir(parents=True, exist_ok=True)
+    run(
+        [
+            compiler,
+            "-std=c11",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-I",
+            str(NATIVE_INCLUDE),
+            "-I",
+            str(ROOT / "src" / "crypto"),
+            str(NATIVE_CRYPTO_SOURCE),
+            str(ROOT / "src" / "crypto" / "aes256.c"),
+            "-o",
+            str(NATIVE_CRYPTO_BINARY),
+        ]
+    )
+    run([str(NATIVE_CRYPTO_BINARY)])
     run(
         [
             compiler,
