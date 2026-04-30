@@ -14,13 +14,15 @@ typedef enum {
 } FS_Error;
 
 typedef enum {
-    FSAM_READ = 0,
-    FSAM_WRITE = 1,
+    FSAM_READ = (1 << 0),
+    FSAM_WRITE = (1 << 1),
 } FS_AccessMode;
 
 typedef enum {
-    FSOM_OPEN_EXISTING = 0,
-    FSOM_CREATE_ALWAYS = 1,
+    FSOM_OPEN_EXISTING = 1,
+    FSOM_OPEN_ALWAYS = 2,
+    FSOM_OPEN_APPEND = 4,
+    FSOM_CREATE_ALWAYS = 16,
 } FS_OpenMode;
 
 bool file_info_is_dir(const FileInfo *info);

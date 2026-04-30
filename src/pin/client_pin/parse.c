@@ -143,25 +143,3 @@ uint8_t zf_client_pin_parse_request(const uint8_t *data, size_t size, ZfClientPi
 
     return ZF_CTAP_SUCCESS;
 }
-
-#if ZF_RELEASE_DIAGNOSTICS
-/* Short diagnostic labels keep host conformance output compact and searchable. */
-const char *zerofido_pin_subcommand_tag(uint64_t subcommand) {
-    switch (subcommand) {
-    case ZF_CLIENT_PIN_SUBCMD_GET_RETRIES:
-        return "CP-RT";
-    case ZF_CLIENT_PIN_SUBCMD_GET_KEY_AGREEMENT:
-        return "CP-GA";
-    case ZF_CLIENT_PIN_SUBCMD_SET_PIN:
-        return "CP-SP";
-    case ZF_CLIENT_PIN_SUBCMD_CHANGE_PIN:
-        return "CP-CH";
-    case ZF_CLIENT_PIN_SUBCMD_GET_PIN_TOKEN:
-        return "CP-TK";
-    case ZF_CLIENT_PIN_SUBCMD_GET_PIN_UV_AUTH_TOKEN_USING_PIN_WITH_PERMISSIONS:
-        return "CP-PT";
-    default:
-        return "CP-UK";
-    }
-}
-#endif

@@ -48,6 +48,8 @@ static void test_furi_log_i(const char *tag, const char *fmt, ...);
 typedef int FuriStatus;
 typedef struct ZerofidoApp ZerofidoApp;
 static bool test_transport_auto_accept_enabled(const ZerofidoApp *app);
+static size_t test_nfc_requeue_during_ctap2(ZerofidoApp *app, uint8_t *response,
+                                            size_t response_capacity);
 
 struct Storage {
     int unused;
@@ -196,6 +198,8 @@ static size_t g_log_i_count = 0;
 static bool g_bit_buffer_scrub_on_reset = false;
 static bool g_ctap2_saw_transport_auto_accept = false;
 static bool g_ctap2_request_response_overlap = false;
+static bool g_ctap2_requeue_during_handle = false;
+static bool g_ctap2_requeued_arena_corrupted = false;
 static size_t g_ctap2_large_response_len = 0U;
 static bool g_get_info_builder_called = false;
 static bool g_get_info_builder_saw_nfc_transport = false;
@@ -325,6 +329,8 @@ static void test_reset(void) {
     g_bit_buffer_scrub_on_reset = false;
     g_ctap2_saw_transport_auto_accept = false;
     g_ctap2_request_response_overlap = false;
+    g_ctap2_requeue_during_handle = false;
+    g_ctap2_requeued_arena_corrupted = false;
     g_ctap2_large_response_len = 0U;
     g_get_info_builder_called = false;
     g_get_info_builder_saw_nfc_transport = false;
@@ -1049,8 +1055,10 @@ bool storage_file_open(File *file, const char *path, FS_AccessMode access_mode,
         return false;
     }
 
-    slot =
-        test_storage_file_slot(path, access_mode == FSAM_WRITE && open_mode == FSOM_CREATE_ALWAYS);
+    slot = test_storage_file_slot(path,
+                                  access_mode == FSAM_WRITE &&
+                                      (open_mode == FSOM_CREATE_ALWAYS ||
+                                       open_mode == FSOM_OPEN_APPEND));
     if (!slot) {
         return false;
     }
@@ -1062,11 +1070,14 @@ bool storage_file_open(File *file, const char *path, FS_AccessMode access_mode,
         slot->exists = true;
         memset(slot->data, 0, sizeof(slot->data));
     }
+    if (access_mode == FSAM_WRITE && open_mode == FSOM_OPEN_APPEND) {
+        slot->exists = true;
+    }
 
     strncpy(file->path, path, sizeof(file->path) - 1);
     file->path[sizeof(file->path) - 1] = '\0';
     file->access_mode = access_mode;
-    file->offset = 0;
+    file->offset = (access_mode == FSAM_WRITE && open_mode == FSOM_OPEN_APPEND) ? slot->size : 0U;
     file->open = true;
     return true;
 }
@@ -1458,6 +1469,9 @@ size_t zerofido_handle_ctap2(ZerofidoApp *app, uint32_t cid, const uint8_t *requ
     }
 
     g_ctap2_request_response_overlap = request == response;
+    if (g_ctap2_requeue_during_handle) {
+        return test_nfc_requeue_during_ctap2(app, response, response_capacity);
+    }
     if (request[0] == ZfCtapeCmdGetInfo) {
         response[0] = ZF_CTAP_SUCCESS;
         response[1] = 0xA0;
@@ -1835,6 +1849,39 @@ void mbedtls_sha256_finish(mbedtls_sha256_context *ctx, unsigned char output[32]
 #include "../../../src/transport/nfc_engine.c"
 #include "../../../src/transport/nfc_worker.c"
 
+static size_t test_nfc_requeue_during_ctap2(ZerofidoApp *app, uint8_t *response,
+                                            size_t response_capacity) {
+    static const uint8_t queued_request[] = {ZfCtapeCmdGetAssertion};
+    ZfNfcTransportState *state = &app->transport_nfc_state_storage;
+    uint8_t *queued_arena = NULL;
+
+    g_ctap2_requeue_during_handle = false;
+    if (!response || response_capacity < 2U) {
+        return 0U;
+    }
+
+    furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
+    zf_transport_nfc_reset_exchange_locked(state);
+    expect(zf_transport_nfc_queue_request_locked(app, state, ZfNfcRequestKindCtap2, queued_request,
+                                                 sizeof(queued_request)),
+           "CTAP handler requeue should install a fresh NFC request");
+    queued_arena = app->transport_arena;
+    furi_mutex_release(app->ui_mutex);
+
+    response[0] = ZF_CTAP_SUCCESS;
+    response[1] = 0xA5;
+
+    furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
+    expect(app->transport_arena == queued_arena && app->transport_arena != NULL,
+           "requeued NFC request should keep its transport arena");
+    g_ctap2_requeued_arena_corrupted =
+        app->transport_arena[0] != queued_request[0] ||
+        app->transport_nfc_state_storage.request_len != sizeof(queued_request);
+    furi_mutex_release(app->ui_mutex);
+
+    return 2U;
+}
+
 static bool test_transport_auto_accept_enabled(const ZerofidoApp *app) {
     return app && app->transport_auto_accept_transaction;
 }
@@ -1947,6 +1994,7 @@ int main(void) {
     test_nfc_ctap2_get_info_rejects_invalid_p1_p2();
     test_nfc_locked_ctap2_get_info_does_not_reenter_ui_mutex();
     test_nfc_stale_worker_completion_preserves_new_request();
+    test_nfc_worker_response_buffer_survives_requeued_request();
     test_nfc_ctap_control_end_clears_selected_applet();
     test_nfc_u2f_version_returns_immediately();
     test_nfc_u2f_version_fallback_selects_fido_surface();

@@ -75,13 +75,17 @@ class PackageReleaseTests(unittest.TestCase):
     def test_release_payload_gate_rejects_diagnostics_markers(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             release_fap = Path(temp_dir) / "zerofido-release.fap"
-            release_fap.write_bytes(b"header\x00ZeroFIDO:CTAP\x00cmd=CP-GA status=OK")
+            release_fap.write_bytes(
+                b"header\x00ZeroFIDO:CTAP\x00cmd=CP-GA status=OK\x00usb_diag.log"
+                b"\x00gi caps\x00mc flags\x00empty-pin-auth\x00pin auth"
+            )
 
             violations = package_release.validate_release_payload(release_fap)
 
         self.assertTrue(any("CTAP diagnostics" in item for item in violations))
         self.assertTrue(any("diagnostic command" in item for item in violations))
         self.assertTrue(any("ClientPIN diagnostic" in item for item in violations))
+        self.assertTrue(any("USB diagnostics" in item for item in violations))
 
     def test_run_ufbt_forces_release_safe_flags(self) -> None:
         with (
@@ -89,6 +93,7 @@ class PackageReleaseTests(unittest.TestCase):
                 package_release.os.environ,
                 {
                     "ZEROFIDO_RELEASE_DIAGNOSTICS": "1",
+                    "ZEROFIDO_USB_DIAGNOSTICS": "1",
                     "ZEROFIDO_AUTO_ACCEPT_REQUESTS": "1",
                     "ZEROFIDO_DEV_SCREENSHOT": "1",
                     "ZEROFIDO_DEV_FIDO2_1": "1",
@@ -99,8 +104,10 @@ class PackageReleaseTests(unittest.TestCase):
         ):
             package_release.run_ufbt()
 
-        run.assert_called_once()
-        kwargs = run.call_args.kwargs
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_args_list[0].args[0][-1], "-c")
+        self.assertEqual(run.call_args_list[1].args[0][-2:], ["-m", "ufbt"])
+        kwargs = run.call_args_list[1].kwargs
         for name in package_release.RELEASE_SAFE_BUILD_FLAGS:
             if name == "ZEROFIDO_PACKED_ATTESTATION":
                 self.assertEqual(kwargs["env"][name], "1")

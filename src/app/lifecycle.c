@@ -35,6 +35,7 @@
 #include "../zerofido_telemetry.h"
 #include "../zerofido_ui.h"
 #include "../zerofido_ui_i.h"
+#include "../zerofido_usb_diagnostics.h"
 
 typedef enum {
     ZfStorageInitOk = 0,
@@ -98,6 +99,10 @@ static ZfStorageInitStatus zf_app_lifecycle_init_storage(ZerofidoApp *app) {
     uint8_t *store_io = NULL;
 
     zf_attestation_reset_consistency_cache();
+#if ZF_USB_DIAGNOSTICS
+    zf_usb_diag_reset(app->storage);
+    zf_usb_diag_log(app->storage, "startup");
+#endif
     zerofido_ui_set_status(app, "Key");
     if (!zf_crypto_ensure_store_key()) {
         return ZfStorageInitFailed;

@@ -482,11 +482,15 @@ bool storage_file_open(File *file, const char *path, FS_AccessMode access_mode,
         *size = 0;
         *exists = true;
     }
+    if (access_mode == FSAM_WRITE && open_mode == FSOM_OPEN_APPEND) {
+        *exists = true;
+    }
 
     memset(file, 0, sizeof(*file));
     strncpy(file->path, path, sizeof(file->path) - 1);
     file->path[sizeof(file->path) - 1] = '\0';
     file->access_mode = access_mode;
+    file->offset = (access_mode == FSAM_WRITE && open_mode == FSOM_OPEN_APPEND) ? *size : 0U;
     file->open = true;
     return true;
 }

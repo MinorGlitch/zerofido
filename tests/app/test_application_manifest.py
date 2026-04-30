@@ -37,11 +37,13 @@ class ManifestProfileTests(unittest.TestCase):
 
         self.assertIn("ZF_NFC_ONLY", app["cdefines"])
         self.assertIn("ZF_RELEASE_DIAGNOSTICS=0", app["cdefines"])
+        self.assertIn("ZF_USB_DIAGNOSTICS=0", app["cdefines"])
         self.assertIn("ZF_AUTO_ACCEPT_REQUESTS=0", app["cdefines"])
         self.assertIn("ZF_DEV_SCREENSHOT=0", app["cdefines"])
         self.assertIn("ZF_DEV_FIDO2_1=0", app["cdefines"])
         self.assertIn("ZF_PACKED_ATTESTATION=1", app["cdefines"])
         self.assertIn("!nfc_trace.c", app["sources"])
+        self.assertIn("!zerofido_usb_diagnostics.c", app["sources"])
         self.assertIn("!.tmp", app["sources"])
         self.assertIn("!.venv", app["sources"])
         self.assertIn("!*_debug.c", app["sources"])
@@ -53,6 +55,7 @@ class ManifestProfileTests(unittest.TestCase):
             {
                 "ZEROFIDO_PROFILE": "usb",
                 "ZEROFIDO_RELEASE_DIAGNOSTICS": "1",
+                "ZEROFIDO_USB_DIAGNOSTICS": "true",
                 "ZEROFIDO_AUTO_ACCEPT_REQUESTS": "on",
                 "ZEROFIDO_DEV_SCREENSHOT": "yes",
                 "ZEROFIDO_DEV_FIDO2_1": "1",
@@ -62,11 +65,13 @@ class ManifestProfileTests(unittest.TestCase):
 
         self.assertIn("ZF_USB_ONLY", app["cdefines"])
         self.assertIn("ZF_RELEASE_DIAGNOSTICS=1", app["cdefines"])
+        self.assertIn("ZF_USB_DIAGNOSTICS=1", app["cdefines"])
         self.assertIn("ZF_AUTO_ACCEPT_REQUESTS=1", app["cdefines"])
         self.assertIn("ZF_DEV_SCREENSHOT=1", app["cdefines"])
         self.assertIn("ZF_DEV_FIDO2_1=1", app["cdefines"])
         self.assertIn("ZF_PACKED_ATTESTATION=0", app["cdefines"])
         self.assertNotIn("!nfc_trace.c", app["sources"])
+        self.assertNotIn("!zerofido_usb_diagnostics.c", app["sources"])
 
     def test_invalid_boolean_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "ZEROFIDO_RELEASE_DIAGNOSTICS"):

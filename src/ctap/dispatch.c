@@ -36,6 +36,7 @@
 #include "../zerofido_notify.h"
 #include "../zerofido_pin.h"
 #include "../zerofido_store.h"
+#include "../zerofido_usb_diagnostics.h"
 
 #if defined(ZF_RELEASE_DIAGNOSTICS) && ZF_RELEASE_DIAGNOSTICS
 #define ZF_CTAP_ROUTE_DIAG(text) FURI_LOG_I("ZeroFIDO:CTAP", "route %s", (text))
@@ -79,13 +80,25 @@ uint8_t zf_ctap_dispatch_command(ZerofidoApp *app, const ZfResolvedCapabilities 
 
     switch (cmd) {
     case ZfCtapeCmdGetInfo: {
+        bool pin_is_set = false;
+
         status = zf_ctap_require_empty_payload(request_body_len + 1U);
         if (status != ZF_CTAP_SUCCESS) {
             break;
         }
-        status =
-            zf_ctap_build_get_info_response(capabilities, zf_ctap_pin_is_set(app), response_body,
-                                            response_body_capacity, response_body_len);
+        pin_is_set = zf_ctap_pin_is_set(app);
+#if ZF_USB_DIAGNOSTICS
+        zf_usb_diag_logf(app->storage,
+                         "gi caps pin=%u token=%u proto2=%u f21=%u mcuvnr=%u u2f=%u",
+                         pin_is_set ? 1U : 0U,
+                         capabilities->pin_uv_auth_token_enabled ? 1U : 0U,
+                         capabilities->pin_uv_auth_protocol_2_enabled ? 1U : 0U,
+                         capabilities->advertise_fido_2_1 ? 1U : 0U,
+                         capabilities->make_cred_uv_not_required ? 1U : 0U,
+                         capabilities->advertise_u2f_v2 ? 1U : 0U);
+#endif
+        status = zf_ctap_build_get_info_response(capabilities, pin_is_set, response_body,
+                                                 response_body_capacity, response_body_len);
         break;
     }
     case ZfCtapeCmdClientPin:

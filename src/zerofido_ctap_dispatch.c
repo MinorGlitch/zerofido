@@ -22,10 +22,10 @@
 #include "zerofido_app_i.h"
 #include "zerofido_runtime_config.h"
 #include "zerofido_telemetry.h"
+#include "zerofido_usb_diagnostics.h"
 
-#if ZF_RELEASE_DIAGNOSTICS
+#if ZF_RELEASE_DIAGNOSTICS || ZF_USB_DIAGNOSTICS
 #define ZF_CTAP_LOG_TAG "ZeroFIDO:CTAP"
-#define ZF_CTAP_DIAG(...) FURI_LOG_I(ZF_CTAP_LOG_TAG, __VA_ARGS__)
 
 static const char *zf_ctap_command_name(uint8_t cmd) {
     switch (cmd) {
@@ -111,6 +111,10 @@ static const char *zf_ctap_status_name(uint8_t status) {
         return "UNK";
     }
 }
+#endif
+
+#if ZF_RELEASE_DIAGNOSTICS
+#define ZF_CTAP_DIAG(...) FURI_LOG_I(ZF_CTAP_LOG_TAG, __VA_ARGS__)
 
 static void zf_ctap_note_result(ZerofidoApp *app, uint8_t cmd, uint8_t status, size_t body_len) {
     if (!app) {
@@ -139,6 +143,17 @@ static void zf_ctap_note_result(ZerofidoApp *app, uint8_t cmd, uint8_t status, s
 }
 #endif
 
+#if ZF_USB_DIAGNOSTICS
+static void zf_ctap_usb_note_result(ZerofidoApp *app, uint8_t cmd, uint8_t status,
+                                    size_t body_len) {
+    if (!app || app->transport_auto_accept_transaction) {
+        return;
+    }
+    zf_usb_diag_logf(app->storage, "ctap cmd=%s status=%s body=%u", zf_ctap_command_name(cmd),
+                     zf_ctap_status_name(status), (unsigned)body_len);
+}
+#endif
+
 /*
  * CTAP2 transport entry point. The incoming buffer is the CTAP command byte
  * followed by the command-specific CBOR body; the outgoing buffer always starts
@@ -163,10 +178,19 @@ size_t zerofido_handle_ctap2(ZerofidoApp *app, ZfTransportSessionId session_id,
 
     cmd = request[0];
     ZF_CTAP_DIAG("start cmd=%s len=%u", zf_ctap_command_name(cmd), (unsigned)request_len);
+#if ZF_USB_DIAGNOSTICS
+    if (app && !app->transport_auto_accept_transaction) {
+        zf_usb_diag_logf(app->storage, "ctap start cmd=%s len=%u", zf_ctap_command_name(cmd),
+                         (unsigned)request_len);
+    }
+#endif
     zf_runtime_get_effective_capabilities(app, &capabilities);
     if (!zf_runtime_ctap_command_enabled(app, cmd)) {
         response[0] = ZF_CTAP_ERR_INVALID_COMMAND;
         zf_ctap_note_result(app, cmd, ZF_CTAP_ERR_INVALID_COMMAND, 0U);
+#if ZF_USB_DIAGNOSTICS
+        zf_ctap_usb_note_result(app, cmd, ZF_CTAP_ERR_INVALID_COMMAND, 0U);
+#endif
         return 1;
     }
 
@@ -182,6 +206,9 @@ size_t zerofido_handle_ctap2(ZerofidoApp *app, ZfTransportSessionId session_id,
 
     response[0] = status;
     zf_ctap_note_result(app, cmd, status, body_len);
+#if ZF_USB_DIAGNOSTICS
+    zf_ctap_usb_note_result(app, cmd, status, body_len);
+#endif
     ZF_CTAP_DIAG("done cmd=%s status=%s body=%u", zf_ctap_command_name(cmd),
                  zf_ctap_status_name(status), (unsigned)body_len);
     return body_len + 1;

@@ -30,6 +30,10 @@
 #define ZF_RELEASE_DIAGNOSTICS 0
 #endif
 
+#ifndef ZF_USB_DIAGNOSTICS
+#define ZF_USB_DIAGNOSTICS 0
+#endif
+
 #ifndef ZF_AUTO_ACCEPT_REQUESTS
 #define ZF_AUTO_ACCEPT_REQUESTS 0
 #endif

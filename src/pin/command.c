@@ -18,6 +18,7 @@
 #include "../zerofido_pin.h"
 
 #include "../zerofido_app_i.h"
+#include "../zerofido_usb_diagnostics.h"
 #include "client_pin/internal.h"
 
 static ZfClientPinCommandScratch *zf_pin_command_scratch(ZerofidoApp *app) {
@@ -54,7 +55,7 @@ static void zf_pin_publish_state(ZerofidoApp *app, const ZfClientPinState *state
     zf_pin_unlock_if_present(app, locked);
 }
 
-#if ZF_RELEASE_DIAGNOSTICS
+#if ZF_RELEASE_DIAGNOSTICS || ZF_USB_DIAGNOSTICS
 static const char *zf_pin_status_name(uint8_t status) {
     switch (status) {
     case ZF_CTAP_SUCCESS:
@@ -87,7 +88,9 @@ static const char *zf_pin_status_name(uint8_t status) {
         return "UNK";
     }
 }
+#endif
 
+#if ZF_RELEASE_DIAGNOSTICS
 static void zf_pin_log_result(const char *tag, uint8_t status) {
     FURI_LOG_I("ZeroFIDO:CTAP", "cmd=%s status=%s", tag ? tag : "CP", zf_pin_status_name(status));
 }
@@ -99,6 +102,38 @@ static void zf_pin_log_result(const char *tag, uint8_t status) {
 
 #if ZF_RELEASE_DIAGNOSTICS
 #define ZF_PIN_DIAG(...) FURI_LOG_I("ZeroFIDO:CTAP", __VA_ARGS__)
+#endif
+
+#if ZF_USB_DIAGNOSTICS
+static void zf_pin_usb_log_result(ZerofidoApp *app, const char *tag, uint8_t status) {
+    if (!app || app->transport_auto_accept_transaction) {
+        return;
+    }
+    zf_usb_diag_logf(app->storage, "ctap cmd=%s status=%s", tag ? tag : "CP",
+                     zf_pin_status_name(status));
+}
+#endif
+
+#if ZF_RELEASE_DIAGNOSTICS || ZF_USB_DIAGNOSTICS
+/* Short diagnostic labels keep host conformance output compact and searchable. */
+static const char *zf_pin_subcommand_tag(uint64_t subcommand) {
+    switch (subcommand) {
+    case ZF_CLIENT_PIN_SUBCMD_GET_RETRIES:
+        return "CP-RT";
+    case ZF_CLIENT_PIN_SUBCMD_GET_KEY_AGREEMENT:
+        return "CP-GA";
+    case ZF_CLIENT_PIN_SUBCMD_SET_PIN:
+        return "CP-SP";
+    case ZF_CLIENT_PIN_SUBCMD_CHANGE_PIN:
+        return "CP-CH";
+    case ZF_CLIENT_PIN_SUBCMD_GET_PIN_TOKEN:
+        return "CP-TK";
+    case ZF_CLIENT_PIN_SUBCMD_GET_PIN_UV_AUTH_TOKEN_USING_PIN_WITH_PERMISSIONS:
+        return "CP-PT";
+    default:
+        return "CP-UK";
+    }
+}
 #endif
 
 /*
@@ -115,7 +150,7 @@ uint8_t zerofido_pin_handle_command_with_session(ZerofidoApp *app, ZfTransportSe
     ZfResolvedCapabilities capabilities;
     ZfClientPinRequest *parsed = NULL;
     ZfClientPinState *state = NULL;
-#if ZF_RELEASE_DIAGNOSTICS
+#if ZF_RELEASE_DIAGNOSTICS || ZF_USB_DIAGNOSTICS
     const char *diagnostic_tag = "CP-PARSE";
 #endif
     bool pin_set_before = false;
@@ -133,8 +168,10 @@ uint8_t zerofido_pin_handle_command_with_session(ZerofidoApp *app, ZfTransportSe
     if (status != ZF_CTAP_SUCCESS) {
         goto cleanup;
     }
+#if ZF_RELEASE_DIAGNOSTICS || ZF_USB_DIAGNOSTICS
+    diagnostic_tag = zf_pin_subcommand_tag(parsed->subcommand);
+#endif
 #if ZF_RELEASE_DIAGNOSTICS
-    diagnostic_tag = zerofido_pin_subcommand_tag(parsed->subcommand);
     ZF_PIN_DIAG("cmd=%s parsed", diagnostic_tag);
 #endif
     zf_pin_snapshot_state(app, state);
@@ -187,6 +224,9 @@ uint8_t zerofido_pin_handle_command_with_session(ZerofidoApp *app, ZfTransportSe
 cleanup:
 #if ZF_RELEASE_DIAGNOSTICS
     zf_pin_log_result(diagnostic_tag, status);
+#endif
+#if ZF_USB_DIAGNOSTICS
+    zf_pin_usb_log_result(app, diagnostic_tag, status);
 #endif
     zf_crypto_secure_zero(scratch, sizeof(*scratch));
     zf_app_command_scratch_release(app);

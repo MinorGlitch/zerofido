@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 RELEASE_SAFE_BUILD_FLAGS = {
     "ZEROFIDO_RELEASE_DIAGNOSTICS": "0",
+    "ZEROFIDO_USB_DIAGNOSTICS": "0",
     "ZEROFIDO_AUTO_ACCEPT_REQUESTS": "0",
     "ZEROFIDO_DEV_SCREENSHOT": "0",
     "ZEROFIDO_DEV_FIDO2_1": "0",
@@ -30,6 +31,11 @@ FORBIDDEN_RELEASE_PATTERNS = {
     b"ZeroFIDO:CTAP": "CTAP diagnostics log tag",
     b"ZeroFIDO:MEM": "memory telemetry log tag",
     b"ZeroFIDO:NFC": "NFC diagnostics log tag",
+    b"usb_diag.log": "USB diagnostics log path",
+    b"gi caps": "USB diagnostics getInfo text",
+    b"mc flags": "USB diagnostics makeCredential text",
+    b"empty-pin-auth": "USB diagnostics makeCredential text",
+    b"pin auth": "USB diagnostics pinAuth text",
     b"cmd=": "diagnostic command log text",
     b"trace dropped": "NFC trace buffer log text",
     b"idle heartbeat": "idle telemetry log text",
@@ -85,10 +91,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def run_ufbt(*, packed_attestation: bool = True) -> None:
-    """Run the normal UFBT build in the repository root."""
+    """Run a clean UFBT build in the repository root."""
     env = os.environ.copy()
     env.update(RELEASE_SAFE_BUILD_FLAGS)
     env["ZEROFIDO_PACKED_ATTESTATION"] = "1" if packed_attestation else "0"
+    subprocess.run([sys.executable, "-m", "ufbt", "-c"], cwd=ROOT, check=True, env=env)
     subprocess.run([sys.executable, "-m", "ufbt"], cwd=ROOT, check=True, env=env)
 
 
