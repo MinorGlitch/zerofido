@@ -68,6 +68,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="package the existing --fap without running UFBT first",
     )
+    parser.add_argument(
+        "--allow-prebuilt-input",
+        action="store_true",
+        help="allow --skip-build to package a prebuilt FAP for inspection",
+    )
     return parser.parse_args(argv)
 
 
@@ -88,8 +93,16 @@ def validate_release_payload(fap: Path) -> list[str]:
     ]
 
 
-def package_release(fap: Path, output_fap: Path, *, skip_build: bool) -> int:
+def package_release(
+    fap: Path, output_fap: Path, *, skip_build: bool, allow_prebuilt_input: bool = False
+) -> int:
     """Build if requested, then enforce release FAP symbol and payload gates."""
+    if skip_build and not allow_prebuilt_input:
+        print(
+            "--skip-build requires --allow-prebuilt-input because prebuilt FAPs may carry dev flags",
+            file=sys.stderr,
+        )
+        return 2
     if not skip_build:
         run_ufbt()
 
@@ -115,7 +128,12 @@ def package_release(fap: Path, output_fap: Path, *, skip_build: bool) -> int:
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point used by tests and manual packaging."""
     args = parse_args(sys.argv[1:] if argv is None else argv)
-    return package_release(args.fap, args.output_fap, skip_build=args.skip_build)
+    return package_release(
+        args.fap,
+        args.output_fap,
+        skip_build=args.skip_build,
+        allow_prebuilt_input=args.allow_prebuilt_input,
+    )
 
 
 if __name__ == "__main__":

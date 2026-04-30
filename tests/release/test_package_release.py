@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 from pathlib import Path
 import sys
 import tempfile
@@ -37,7 +38,26 @@ class PackageReleaseTests(unittest.TestCase):
         )
         validate.assert_called_once_with(ROOT / "dist/zerofido-release.fap")
 
-    def test_skip_build_only_packages_existing_fap(self) -> None:
+    def test_skip_build_requires_explicit_prebuilt_allowance(self) -> None:
+        stderr = io.StringIO()
+
+        with (
+            mock.patch.object(package_release.sys, "stderr", stderr),
+            mock.patch.object(package_release, "run_ufbt") as run_ufbt,
+            mock.patch.object(
+                package_release.check_symbol_gate, "check_fap_symbol_budget", return_value=0
+            ) as check_fap,
+            mock.patch.object(package_release, "validate_release_payload") as validate,
+        ):
+            status = package_release.main(["--skip-build"])
+
+        self.assertEqual(status, 2)
+        self.assertIn("--allow-prebuilt-input", stderr.getvalue())
+        run_ufbt.assert_not_called()
+        check_fap.assert_not_called()
+        validate.assert_not_called()
+
+    def test_skip_build_with_prebuilt_allowance_only_packages_existing_fap(self) -> None:
         with (
             mock.patch.object(package_release, "run_ufbt") as run_ufbt,
             mock.patch.object(
@@ -45,7 +65,7 @@ class PackageReleaseTests(unittest.TestCase):
             ) as check_fap,
             mock.patch.object(package_release, "validate_release_payload", return_value=[]) as validate,
         ):
-            status = package_release.main(["--skip-build"])
+            status = package_release.main(["--skip-build", "--allow-prebuilt-input"])
 
         self.assertEqual(status, 0)
         run_ufbt.assert_not_called()
