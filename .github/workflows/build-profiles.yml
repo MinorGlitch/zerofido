@@ -34,6 +34,7 @@ jobs:
       ZEROFIDO_DEV_ATTESTATION: "0"
       ZEROFIDO_AUTO_ACCEPT_REQUESTS: "0"
       ZEROFIDO_DEV_SCREENSHOT: "0"
+      ZEROFIDO_DEV_FIDO2_1: "0"
 
     steps:
       - name: Check out repository

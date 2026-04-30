@@ -68,6 +68,15 @@ static bool zf_fido2_profile_is_valid(uint8_t profile) {
     return profile == ZfFido2ProfileCtap2_0 || profile == ZfFido2ProfileCtap2_1Experimental;
 }
 
+static ZfFido2Profile zf_fido2_profile_for_build(ZfFido2Profile profile) {
+#if ZF_DEV_FIDO2_1
+    return profile;
+#else
+    (void)profile;
+    return ZfFido2ProfileCtap2_0;
+#endif
+}
+
 static bool zf_attestation_mode_is_valid(uint8_t mode) {
     return mode == ZfAttestationModePacked || mode == ZfAttestationModeNone;
 }
@@ -148,6 +157,7 @@ void zf_runtime_config_load(Storage *storage, ZfRuntimeConfig *config) {
         return;
     }
 
+    config->fido2_profile = zf_fido2_profile_for_build(config->fido2_profile);
 #if ZF_AUTO_ACCEPT_REQUESTS
     config->auto_accept_requests =
         (record.flags & ZF_RUNTIME_CONFIG_FLAG_AUTO_ACCEPT_REQUESTS) != 0;
@@ -169,7 +179,8 @@ bool zf_runtime_config_persist(Storage *storage, const ZfRuntimeConfig *config) 
                      : 0U,
         .transport_mode = config ? (uint8_t)config->transport_mode
                                  : (uint8_t)zf_runtime_config_default_transport_mode(),
-        .fido2_profile = config ? (uint8_t)config->fido2_profile : (uint8_t)ZfFido2ProfileCtap2_0,
+        .fido2_profile = config ? (uint8_t)zf_fido2_profile_for_build(config->fido2_profile) :
+                                  (uint8_t)ZfFido2ProfileCtap2_0,
         .attestation_mode =
             config ? (uint8_t)config->attestation_mode : (uint8_t)ZfAttestationModeNone,
     };
@@ -197,6 +208,7 @@ static void zf_runtime_config_resolve_app_capabilities(ZerofidoApp *app,
 #if !ZF_AUTO_ACCEPT_REQUESTS
     effective_config.auto_accept_requests = false;
 #endif
+    effective_config.fido2_profile = zf_fido2_profile_for_build(effective_config.fido2_profile);
     if (effective_config.fido2_profile == ZfFido2ProfileCtap2_1Experimental &&
         !zerofido_pin_is_set(&app->pin_state)) {
         effective_config.fido2_profile = ZfFido2ProfileCtap2_0;
@@ -208,8 +220,9 @@ static void zf_runtime_config_resolve_app_capabilities(ZerofidoApp *app,
 
 /*
  * Applies the persisted/user-requested config, then resolves runtime
- * capabilities against the current PIN state. CTAP 2.1 experimental remains the
- * requested profile, but is advertised only while a PIN exists.
+ * capabilities against compile-time feature flags and the current PIN state.
+ * CTAP 2.1 experimental is honored only in developer builds and only while a
+ * PIN exists.
  */
 void zf_runtime_config_apply(ZerofidoApp *app, const ZfRuntimeConfig *config) {
     if (!app || !config) {
@@ -220,6 +233,8 @@ void zf_runtime_config_apply(ZerofidoApp *app, const ZfRuntimeConfig *config) {
 #if !ZF_AUTO_ACCEPT_REQUESTS
     app->runtime_config.auto_accept_requests = false;
 #endif
+    app->runtime_config.fido2_profile =
+        zf_fido2_profile_for_build(app->runtime_config.fido2_profile);
     zf_runtime_config_resolve_app_capabilities(app, &app->runtime_config);
 }
 
@@ -278,6 +293,11 @@ bool zf_runtime_config_set_fido2_profile(ZerofidoApp *app, Storage *storage,
     if (!app || !zf_fido2_profile_is_valid((uint8_t)profile)) {
         return false;
     }
+#if !ZF_DEV_FIDO2_1
+    if (profile == ZfFido2ProfileCtap2_1Experimental) {
+        return false;
+    }
+#endif
     if (profile == ZfFido2ProfileCtap2_1Experimental && !zerofido_pin_is_set(&app->pin_state)) {
         return false;
     }
@@ -362,8 +382,12 @@ void zf_runtime_config_resolve_capabilities(const ZfRuntimeConfig *config,
     capabilities->transport_keepalive_enabled = usb_hid_enabled;
     capabilities->transport_cancel_enabled = usb_hid_enabled;
     capabilities->transport_wink_enabled = usb_hid_enabled && config->u2f_enabled;
-    capabilities->fido2_profile = config->fido2_profile;
-    capabilities->advertise_fido_2_1 = config->fido2_profile == ZfFido2ProfileCtap2_1Experimental;
+    capabilities->fido2_profile = zf_fido2_profile_for_build(config->fido2_profile);
+    capabilities->advertise_fido_2_1 =
+        capabilities->fido2_profile == ZfFido2ProfileCtap2_1Experimental;
+#if !ZF_DEV_FIDO2_1
+    capabilities->advertise_fido_2_1 = false;
+#endif
     capabilities->advertise_fido_2_0 = true;
     capabilities->advertise_u2f_v2 = config->u2f_enabled;
     capabilities->pin_uv_auth_token_enabled = capabilities->advertise_fido_2_1;

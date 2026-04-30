@@ -40,6 +40,7 @@ class ManifestProfileTests(unittest.TestCase):
         self.assertIn("ZF_DEV_ATTESTATION=0", app["cdefines"])
         self.assertIn("ZF_AUTO_ACCEPT_REQUESTS=0", app["cdefines"])
         self.assertIn("ZF_DEV_SCREENSHOT=0", app["cdefines"])
+        self.assertIn("ZF_DEV_FIDO2_1=0", app["cdefines"])
         self.assertIn("!nfc_trace.c", app["sources"])
         self.assertIn("!.tmp", app["sources"])
         self.assertIn("!.venv", app["sources"])
@@ -47,7 +48,7 @@ class ManifestProfileTests(unittest.TestCase):
         self.assertIn("!debug_*.c", app["sources"])
         self.assertIn("!*_test.c", app["sources"])
 
-    def test_diagnostics_and_dev_attestation_are_explicit_opt_in(self) -> None:
+    def test_development_flags_are_explicit_opt_in(self) -> None:
         app = self.load_manifest(
             {
                 "ZEROFIDO_PROFILE": "usb",
@@ -55,6 +56,7 @@ class ManifestProfileTests(unittest.TestCase):
                 "ZEROFIDO_DEV_ATTESTATION": "true",
                 "ZEROFIDO_AUTO_ACCEPT_REQUESTS": "on",
                 "ZEROFIDO_DEV_SCREENSHOT": "yes",
+                "ZEROFIDO_DEV_FIDO2_1": "1",
             }
         )
 
@@ -63,6 +65,7 @@ class ManifestProfileTests(unittest.TestCase):
         self.assertIn("ZF_DEV_ATTESTATION=1", app["cdefines"])
         self.assertIn("ZF_AUTO_ACCEPT_REQUESTS=1", app["cdefines"])
         self.assertIn("ZF_DEV_SCREENSHOT=1", app["cdefines"])
+        self.assertIn("ZF_DEV_FIDO2_1=1", app["cdefines"])
         self.assertNotIn("!nfc_trace.c", app["sources"])
 
     def test_invalid_boolean_rejected(self) -> None:

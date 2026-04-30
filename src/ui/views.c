@@ -42,8 +42,10 @@
 #define ZF_SETTINGS_FIRST_ITEM ZfSettingsItemTransport
 #elif ZF_AUTO_ACCEPT_REQUESTS
 #define ZF_SETTINGS_FIRST_ITEM ZfSettingsItemAutoAcceptRequests
-#else
+#elif ZF_DEV_FIDO2_1
 #define ZF_SETTINGS_FIRST_ITEM ZfSettingsItemFido2Profile
+#else
+#define ZF_SETTINGS_FIRST_ITEM ZfSettingsItemAttestation
 #endif
 
 #define ZF_IDLE_TELEMETRY_INTERVAL_MS 30000U
@@ -389,7 +391,9 @@ static void zerofido_refresh_settings_menu(ZerofidoApp *app) {
 #if ZF_AUTO_ACCEPT_REQUESTS
     char auto_accept_label[40];
 #endif
+#if ZF_DEV_FIDO2_1
     char fido2_profile_label[32];
+#endif
     char attestation_label[28];
     ZfRuntimeConfig runtime_config;
     bool startup_reset_available = false;
@@ -420,10 +424,12 @@ static void zerofido_refresh_settings_menu(ZerofidoApp *app) {
     submenu_add_item(app->settings_menu, auto_accept_label, ZfSettingsItemAutoAcceptRequests,
                      zerofido_settings_menu_callback, app);
 #endif
+#if ZF_DEV_FIDO2_1
     snprintf(fido2_profile_label, sizeof(fido2_profile_label), "FIDO2: %s",
              zf_fido2_profile_name(runtime_config.fido2_profile));
     submenu_add_item(app->settings_menu, fido2_profile_label, ZfSettingsItemFido2Profile,
                      zerofido_settings_menu_callback, app);
+#endif
     snprintf(attestation_label, sizeof(attestation_label), "Attest: %s",
              zf_attestation_mode_name(runtime_config.attestation_mode));
     submenu_add_item(app->settings_menu, attestation_label, ZfSettingsItemAttestation,
@@ -790,6 +796,7 @@ static void zerofido_settings_menu_callback(void *context, uint32_t index) {
         break;
     }
 #endif
+#if ZF_DEV_FIDO2_1
     case ZfSettingsItemFido2Profile: {
         ZfFido2Profile profile = runtime_config.fido2_profile == ZfFido2ProfileCtap2_1Experimental
                                      ? ZfFido2ProfileCtap2_0
@@ -809,6 +816,7 @@ static void zerofido_settings_menu_callback(void *context, uint32_t index) {
         zerofido_ui_refresh_status_line(app);
         break;
     }
+#endif
     case ZfSettingsItemAttestation: {
         ZfAttestationMode mode = runtime_config.attestation_mode == ZfAttestationModePacked
                                      ? ZfAttestationModeNone

@@ -6,6 +6,7 @@
 #include <string.h>
 
 #define ZF_AUTO_ACCEPT_REQUESTS 1
+#define ZF_DEV_FIDO2_1 1
 
 #include "furi.h"
 #include "flipper_format/flipper_format.h"
