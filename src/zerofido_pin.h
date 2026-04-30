@@ -42,7 +42,7 @@ typedef struct {
     bool pin_token_permissions_scoped;
     bool pin_token_permissions_managed;
     bool pin_token_permissions_rp_id_set;
-    char pin_token_permissions_rp_id[ZF_MAX_RP_ID_LEN];
+    uint8_t pin_token_permissions_rp_id_hash[32];
     uint8_t pin_retries;
     uint8_t pin_consecutive_mismatches;
     bool pin_auth_blocked;

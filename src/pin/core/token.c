@@ -23,6 +23,15 @@
 #include "../../zerofido_app_i.h"
 #include "../internal.h"
 
+static bool zf_pin_hash_rp_id(const char *rp_id, uint8_t out[32]) {
+    if (!rp_id || rp_id[0] == '\0') {
+        return false;
+    }
+
+    zf_crypto_sha256((const uint8_t *)rp_id, strlen(rp_id), out);
+    return true;
+}
+
 void zf_pin_refresh_pin_token(uint8_t pin_token[ZF_PIN_TOKEN_LEN]) {
     furi_hal_random_fill_buf(pin_token, ZF_PIN_TOKEN_LEN);
 }
@@ -34,8 +43,8 @@ void zf_pin_reset_token_metadata(ZfClientPinState *state) {
     state->pin_token_permissions_scoped = false;
     state->pin_token_permissions_managed = false;
     state->pin_token_permissions_rp_id_set = false;
-    zf_crypto_secure_zero(state->pin_token_permissions_rp_id,
-                          sizeof(state->pin_token_permissions_rp_id));
+    zf_crypto_secure_zero(state->pin_token_permissions_rp_id_hash,
+                          sizeof(state->pin_token_permissions_rp_id_hash));
 }
 
 void zf_pin_invalidate_token_state(ZfClientPinState *state) {
@@ -54,14 +63,30 @@ void zf_pin_set_token_permissions(ZfClientPinState *state, uint64_t permissions,
     state->pin_token_permissions = permissions;
     state->pin_token_permissions_scoped = permission_scoped;
     state->pin_token_permissions_managed = permission_managed;
-    state->pin_token_permissions_rp_id_set = rp_id && rp_id[0] != '\0';
-    if (state->pin_token_permissions_rp_id_set) {
-        strncpy(state->pin_token_permissions_rp_id, rp_id,
-                sizeof(state->pin_token_permissions_rp_id) - 1);
-        state->pin_token_permissions_rp_id[sizeof(state->pin_token_permissions_rp_id) - 1] = '\0';
-    } else {
-        state->pin_token_permissions_rp_id[0] = '\0';
+    state->pin_token_permissions_rp_id_set =
+        zf_pin_hash_rp_id(rp_id, state->pin_token_permissions_rp_id_hash);
+    if (!state->pin_token_permissions_rp_id_set) {
+        zf_crypto_secure_zero(state->pin_token_permissions_rp_id_hash,
+                              sizeof(state->pin_token_permissions_rp_id_hash));
     }
+}
+
+static bool zf_pin_token_rp_id_matches(const ZfClientPinState *state, const char *rp_id) {
+    uint8_t rp_id_hash[32];
+    bool matches = false;
+
+    if (!zf_pin_hash_rp_id(rp_id, rp_id_hash)) {
+        return false;
+    }
+    if (state->pin_token_permissions_rp_id_set) {
+        matches = zf_crypto_constant_time_equal(
+            state->pin_token_permissions_rp_id_hash, rp_id_hash,
+            sizeof(state->pin_token_permissions_rp_id_hash));
+    } else {
+        matches = true;
+    }
+    zf_crypto_secure_zero(rp_id_hash, sizeof(rp_id_hash));
+    return matches;
 }
 
 bool zf_pin_token_is_expired(const ZfClientPinState *state) {
@@ -86,8 +111,8 @@ static void zf_pin_consume_up_tested_permissions(ZfClientPinState *state,
         state->pin_token_permissions_scoped = false;
         state->pin_token_permissions_managed = false;
         state->pin_token_permissions_rp_id_set = false;
-        zf_crypto_secure_zero(state->pin_token_permissions_rp_id,
-                              sizeof(state->pin_token_permissions_rp_id));
+        zf_crypto_secure_zero(state->pin_token_permissions_rp_id_hash,
+                              sizeof(state->pin_token_permissions_rp_id_hash));
     }
 }
 
@@ -149,12 +174,11 @@ uint8_t zerofido_pin_require_auth(Storage *storage, ZfClientPinState *state, boo
                 zf_crypto_secure_zero(expected, sizeof(expected));
                 return ZF_CTAP_ERR_PIN_AUTH_INVALID;
             }
-            if (state->pin_token_permissions_rp_id_set) {
-                if (strcmp(state->pin_token_permissions_rp_id, rp_id) != 0) {
-                    zf_crypto_secure_zero(expected, sizeof(expected));
-                    return ZF_CTAP_ERR_PIN_AUTH_INVALID;
-                }
-            } else {
+            if (!zf_pin_token_rp_id_matches(state, rp_id)) {
+                zf_crypto_secure_zero(expected, sizeof(expected));
+                return ZF_CTAP_ERR_PIN_AUTH_INVALID;
+            }
+            if (!state->pin_token_permissions_rp_id_set) {
                 zf_pin_set_token_permissions(state, state->pin_token_permissions,
                                              state->pin_token_permissions_scoped,
                                              state->pin_token_permissions_managed, rp_id);
