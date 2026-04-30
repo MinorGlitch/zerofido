@@ -136,12 +136,16 @@ static ZfStorageInitStatus zf_app_lifecycle_init_storage(ZerofidoApp *app) {
         return ZfStorageInitFailed;
     }
     zf_runtime_config_refresh_capabilities(app);
-
-    zerofido_ui_set_status(app, "Attest");
-    if (!zf_attestation_ensure_ready()) {
-        zf_telemetry_log("attestation prewarm failed");
-    }
     zf_runtime_get_effective_capabilities(app, &capabilities);
+
+#if ZF_PACKED_ATTESTATION
+    if (capabilities.attestation_mode == ZfAttestationModePacked) {
+        zerofido_ui_set_status(app, "Attest");
+        if (!zf_attestation_ensure_ready()) {
+            zf_telemetry_log("attestation prewarm failed");
+        }
+    }
+#endif
     if (capabilities.u2f_enabled) {
         zerofido_ui_set_status(app, "U2F keys");
         if (!zf_u2f_adapter_init(app)) {

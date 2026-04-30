@@ -347,6 +347,7 @@ cleanup:
     return status;
 }
 
+#if ZF_PACKED_ATTESTATION
 uint8_t zf_ctap_build_packed_make_credential_response_with_scratch(
     ZfMakeCredentialResponseScratch *scratch, const char *rp_id, const ZfCredentialRecord *record,
     const uint8_t client_data_hash[ZF_CLIENT_DATA_HASH_LEN], bool user_verified,
@@ -426,6 +427,7 @@ cleanup:
     zf_crypto_secure_zero(scratch, sizeof(*scratch));
     return status;
 }
+#endif
 
 /*
  * Assertion signatures cover SHA256(authenticatorData || clientDataHash). The

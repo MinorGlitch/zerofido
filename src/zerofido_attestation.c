@@ -17,10 +17,13 @@
 
 #include "zerofido_attestation.h"
 
+#if ZF_PACKED_ATTESTATION
 #include "attestation/local.h"
 #include "zerofido_crypto.h"
 #include "zerofido_telemetry.h"
+#endif
 
+#if ZF_PACKED_ATTESTATION
 #define ZF_ATTESTATION_DATA_DIR ZF_APP_DATA_DIR "/fido2"
 #define ZF_ATTESTATION_ASSETS_DIR ZF_ATTESTATION_DATA_DIR "/attestation"
 #define ZF_ATTESTATION_CERT_FILE ZF_ATTESTATION_ASSETS_DIR "/cert.der"
@@ -29,12 +32,14 @@
 #define ZF_ATTESTATION_CERT_KEY_FILE_TMP ZF_ATTESTATION_ASSETS_DIR "/cert_key.fido2.tmp"
 
 #define ZF_ATTESTATION_CERT_KEY_FILE_TYPE "ZeroFIDO FIDO2 Attestation Key File"
+#endif
 
 static const uint8_t zf_attestation_aaguid[ZF_AAGUID_LEN] = {
     0xb5, 0x1a, 0x97, 0x6a, 0x0b, 0x02, 0x40, 0xaa, 0x9d, 0x8a, 0x36, 0xc8, 0xb9, 0x1b, 0xbd, 0x1a,
 };
 static const char zf_attestation_aaguid_string[] = "b51a976a-0b02-40aa-9d8a-36c8b91bbd1a";
 static int8_t zf_attestation_consistency_cache = -1;
+#if ZF_PACKED_ATTESTATION
 static size_t zf_attestation_leaf_cert_len_cache = 0;
 
 static const uint8_t zf_attestation_local_subject[] = {
@@ -71,6 +76,7 @@ static const ZfLocalAttestationProfile zf_attestation_local_profile = {
     .identity = zf_attestation_aaguid,
     .identity_len = sizeof(zf_attestation_aaguid),
 };
+#endif
 
 const uint8_t *zf_attestation_get_aaguid(void) {
     return zf_attestation_aaguid;
@@ -80,6 +86,7 @@ const char *zf_attestation_get_aaguid_string(void) {
     return zf_attestation_aaguid_string;
 }
 
+#if ZF_PACKED_ATTESTATION
 bool zf_attestation_get_leaf_cert_der_len(size_t *out_len) {
     size_t cert_len = 0;
 
@@ -173,6 +180,54 @@ bool zf_attestation_sign_parts(const uint8_t *first, size_t first_len, const uin
     zf_telemetry_log(ok ? "attestation sign after ok" : "attestation sign after failed");
     return ok;
 }
+#else
+bool zf_attestation_get_leaf_cert_der_len(size_t *out_len) {
+    if (out_len) {
+        *out_len = 0;
+    }
+    return false;
+}
+
+bool zf_attestation_ensure_ready(void) {
+    return false;
+}
+
+bool zf_attestation_load_leaf_cert_der(uint8_t *out, size_t out_capacity, size_t *out_len) {
+    (void)out;
+    (void)out_capacity;
+    if (out_len) {
+        *out_len = 0;
+    }
+    return false;
+}
+
+bool zf_attestation_sign_input(const uint8_t *input, size_t input_len, uint8_t *out,
+                               size_t out_capacity, size_t *out_len) {
+    (void)input;
+    (void)input_len;
+    (void)out;
+    (void)out_capacity;
+    if (out_len) {
+        *out_len = 0;
+    }
+    return false;
+}
+
+bool zf_attestation_sign_parts(const uint8_t *first, size_t first_len, const uint8_t *second,
+                               size_t second_len, uint8_t *out, size_t out_capacity,
+                               size_t *out_len) {
+    (void)first;
+    (void)first_len;
+    (void)second;
+    (void)second_len;
+    (void)out;
+    (void)out_capacity;
+    if (out_len) {
+        *out_len = 0;
+    }
+    return false;
+}
+#endif
 
 bool zf_attestation_validate_consistency(void) {
     if (zf_attestation_consistency_cache >= 0) {
@@ -187,5 +242,7 @@ bool zf_attestation_validate_consistency(void) {
 
 void zf_attestation_reset_consistency_cache(void) {
     zf_attestation_consistency_cache = -1;
+#if ZF_PACKED_ATTESTATION
     zf_attestation_leaf_cert_len_cache = 0;
+#endif
 }

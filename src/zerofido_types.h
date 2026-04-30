@@ -42,6 +42,10 @@
 #define ZF_DEV_FIDO2_1 0
 #endif
 
+#ifndef ZF_PACKED_ATTESTATION
+#define ZF_PACKED_ATTESTATION 0
+#endif
+
 #ifndef ZF_HAS_SETTINGS_UI
 #define ZF_HAS_SETTINGS_UI 1
 #endif

@@ -23,6 +23,7 @@ RELEASE_SAFE_BUILD_FLAGS = {
     "ZEROFIDO_AUTO_ACCEPT_REQUESTS": "0",
     "ZEROFIDO_DEV_SCREENSHOT": "0",
     "ZEROFIDO_DEV_FIDO2_1": "0",
+    "ZEROFIDO_PACKED_ATTESTATION": "1",
 }
 
 FORBIDDEN_RELEASE_PATTERNS = {
@@ -73,13 +74,21 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="allow --skip-build to package a prebuilt FAP for inspection",
     )
+    parser.add_argument(
+        "--no-packed-attestation",
+        action="store_false",
+        dest="packed_attestation",
+        default=True,
+        help="build the release FAP without packed FIDO2 attestation support",
+    )
     return parser.parse_args(argv)
 
 
-def run_ufbt() -> None:
+def run_ufbt(*, packed_attestation: bool = True) -> None:
     """Run the normal UFBT build in the repository root."""
     env = os.environ.copy()
     env.update(RELEASE_SAFE_BUILD_FLAGS)
+    env["ZEROFIDO_PACKED_ATTESTATION"] = "1" if packed_attestation else "0"
     subprocess.run([sys.executable, "-m", "ufbt"], cwd=ROOT, check=True, env=env)
 
 
@@ -94,7 +103,8 @@ def validate_release_payload(fap: Path) -> list[str]:
 
 
 def package_release(
-    fap: Path, output_fap: Path, *, skip_build: bool, allow_prebuilt_input: bool = False
+    fap: Path, output_fap: Path, *, skip_build: bool, allow_prebuilt_input: bool = False,
+    packed_attestation: bool = False
 ) -> int:
     """Build if requested, then enforce release FAP symbol and payload gates."""
     if skip_build and not allow_prebuilt_input:
@@ -104,7 +114,7 @@ def package_release(
         )
         return 2
     if not skip_build:
-        run_ufbt()
+        run_ufbt(packed_attestation=packed_attestation)
 
     output = _root_relative(output_fap)
     status = check_symbol_gate.check_fap_symbol_budget(
@@ -133,6 +143,7 @@ def main(argv: list[str] | None = None) -> int:
         args.output_fap,
         skip_build=args.skip_build,
         allow_prebuilt_input=args.allow_prebuilt_input,
+        packed_attestation=args.packed_attestation,
     )
 
 

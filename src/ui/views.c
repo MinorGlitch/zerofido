@@ -38,14 +38,28 @@
 #define ZF_HAS_TRANSPORT_SETTING 0
 #endif
 
+#if ZF_PACKED_ATTESTATION
+#define ZF_HAS_ATTESTATION_SETTING 1
+#else
+#define ZF_HAS_ATTESTATION_SETTING 0
+#endif
+
 #if ZF_HAS_TRANSPORT_SETTING
 #define ZF_SETTINGS_FIRST_ITEM ZfSettingsItemTransport
 #elif ZF_AUTO_ACCEPT_REQUESTS
 #define ZF_SETTINGS_FIRST_ITEM ZfSettingsItemAutoAcceptRequests
 #elif ZF_DEV_FIDO2_1
 #define ZF_SETTINGS_FIRST_ITEM ZfSettingsItemFido2Profile
-#else
+#elif ZF_HAS_ATTESTATION_SETTING
 #define ZF_SETTINGS_FIRST_ITEM ZfSettingsItemAttestation
+#else
+#define ZF_SETTINGS_FIRST_ITEM ZfSettingsItemPin
+#endif
+
+#if ZF_HAS_TRANSPORT_SETTING || ZF_AUTO_ACCEPT_REQUESTS || ZF_DEV_FIDO2_1 || ZF_HAS_ATTESTATION_SETTING
+#define ZF_SETTINGS_USES_RUNTIME_CONFIG 1
+#else
+#define ZF_SETTINGS_USES_RUNTIME_CONFIG 0
 #endif
 
 #define ZF_IDLE_TELEMETRY_INTERVAL_MS 30000U
@@ -394,8 +408,12 @@ static void zerofido_refresh_settings_menu(ZerofidoApp *app) {
 #if ZF_DEV_FIDO2_1
     char fido2_profile_label[32];
 #endif
+#if ZF_HAS_ATTESTATION_SETTING
     char attestation_label[28];
+#endif
+#if ZF_SETTINGS_USES_RUNTIME_CONFIG
     ZfRuntimeConfig runtime_config;
+#endif
     bool startup_reset_available = false;
     uint32_t min_index = ZF_SETTINGS_FIRST_ITEM;
     uint32_t max_index = ZfSettingsItemPin;
@@ -404,10 +422,16 @@ static void zerofido_refresh_settings_menu(ZerofidoApp *app) {
         return;
     }
 
+#if ZF_SETTINGS_USES_RUNTIME_CONFIG
     furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
     startup_reset_available = app->startup_reset_available;
     runtime_config = app->runtime_config;
     furi_mutex_release(app->ui_mutex);
+#else
+    furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
+    startup_reset_available = app->startup_reset_available;
+    furi_mutex_release(app->ui_mutex);
+#endif
 
     submenu_reset(app->settings_menu);
     submenu_set_header(app->settings_menu, "Settings");
@@ -430,10 +454,12 @@ static void zerofido_refresh_settings_menu(ZerofidoApp *app) {
     submenu_add_item(app->settings_menu, fido2_profile_label, ZfSettingsItemFido2Profile,
                      zerofido_settings_menu_callback, app);
 #endif
+#if ZF_HAS_ATTESTATION_SETTING
     snprintf(attestation_label, sizeof(attestation_label), "Attest: %s",
              zf_attestation_mode_name(runtime_config.attestation_mode));
     submenu_add_item(app->settings_menu, attestation_label, ZfSettingsItemAttestation,
                      zerofido_settings_menu_callback, app);
+#endif
     submenu_add_item(app->settings_menu, "PIN", ZfSettingsItemPin, zerofido_settings_menu_callback,
                      app);
     if (startup_reset_available) {
@@ -749,7 +775,9 @@ static void zerofido_credentials_menu_callback(void *context, uint32_t index) {
 
 static void zerofido_settings_menu_callback(void *context, uint32_t index) {
     ZerofidoApp *app = context;
+#if ZF_SETTINGS_USES_RUNTIME_CONFIG
     ZfRuntimeConfig runtime_config;
+#endif
     furi_assert(app);
 
     if (!zerofido_settings_available(app)) {
@@ -759,9 +787,11 @@ static void zerofido_settings_menu_callback(void *context, uint32_t index) {
     }
 
     app->settings_selected_index = index;
+#if ZF_SETTINGS_USES_RUNTIME_CONFIG
     furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
     runtime_config = app->runtime_config;
     furi_mutex_release(app->ui_mutex);
+#endif
 
     switch (index) {
 #if ZF_HAS_TRANSPORT_SETTING
@@ -816,6 +846,7 @@ static void zerofido_settings_menu_callback(void *context, uint32_t index) {
         break;
     }
 #endif
+#if ZF_HAS_ATTESTATION_SETTING
     case ZfSettingsItemAttestation: {
         ZfAttestationMode mode = runtime_config.attestation_mode == ZfAttestationModePacked
                                      ? ZfAttestationModeNone
@@ -831,6 +862,7 @@ static void zerofido_settings_menu_callback(void *context, uint32_t index) {
         zerofido_ui_refresh_status_line(app);
         break;
     }
+#endif
     case ZfSettingsItemPin:
         zerofido_refresh_pin_menu(app);
         zerofido_ui_switch_to_view(app, ZfViewPinMenu);

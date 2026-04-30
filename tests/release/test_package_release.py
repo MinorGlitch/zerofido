@@ -30,7 +30,7 @@ class PackageReleaseTests(unittest.TestCase):
             status = package_release.main([])
 
         self.assertEqual(status, 0)
-        run_ufbt.assert_called_once_with()
+        run_ufbt.assert_called_once_with(packed_attestation=True)
         check_fap.assert_called_once_with(
             ROOT / "dist/zerofido.fap",
             fix=False,
@@ -92,6 +92,7 @@ class PackageReleaseTests(unittest.TestCase):
                     "ZEROFIDO_AUTO_ACCEPT_REQUESTS": "1",
                     "ZEROFIDO_DEV_SCREENSHOT": "1",
                     "ZEROFIDO_DEV_FIDO2_1": "1",
+                    "ZEROFIDO_PACKED_ATTESTATION": "1",
                 },
             ),
             mock.patch.object(package_release.subprocess, "run") as run,
@@ -101,7 +102,21 @@ class PackageReleaseTests(unittest.TestCase):
         run.assert_called_once()
         kwargs = run.call_args.kwargs
         for name in package_release.RELEASE_SAFE_BUILD_FLAGS:
+            if name == "ZEROFIDO_PACKED_ATTESTATION":
+                self.assertEqual(kwargs["env"][name], "1")
+                continue
             self.assertEqual(kwargs["env"][name], "0")
+
+    def test_no_packed_attestation_flag_disables_release_build_support(self) -> None:
+        with (
+            mock.patch.object(package_release, "run_ufbt") as run_ufbt,
+            mock.patch.object(package_release.check_symbol_gate, "check_fap_symbol_budget", return_value=0),
+            mock.patch.object(package_release, "validate_release_payload", return_value=[]),
+        ):
+            status = package_release.main(["--no-packed-attestation"])
+
+        self.assertEqual(status, 0)
+        run_ufbt.assert_called_once_with(packed_attestation=False)
 
 
 if __name__ == "__main__":

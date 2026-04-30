@@ -233,9 +233,11 @@ static uint8_t zf_parse_make_credential_attestation_formats(ZfCborCursor *cursor
         if (format_size == 4U && memcmp(format, "none", 4U) == 0) {
             request->preferred_attestation_mode = ZfAttestationModeNone;
             request->has_attestation_format_preference = true;
+#if ZF_PACKED_ATTESTATION
         } else if (format_size == 6U && memcmp(format, "packed", 6U) == 0) {
             request->preferred_attestation_mode = ZfAttestationModePacked;
             request->has_attestation_format_preference = true;
+#endif
         }
     }
 
