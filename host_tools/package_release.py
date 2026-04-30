@@ -8,6 +8,7 @@ the same policy.
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -48,7 +49,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def run_ufbt() -> None:
     """Run the normal UFBT build in the repository root."""
-    subprocess.run([sys.executable, "-m", "ufbt"], cwd=ROOT, check=True)
+    env = os.environ.copy()
+    env["ZEROFIDO_DEV_ATTESTATION"] = "0"
+    env["ZEROFIDO_RELEASE_DIAGNOSTICS"] = "0"
+    subprocess.run([sys.executable, "-m", "ufbt"], cwd=ROOT, check=True, env=env)
 
 
 def package_release(fap: Path, output_fap: Path, *, skip_build: bool) -> int:
