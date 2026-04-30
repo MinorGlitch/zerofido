@@ -28,4 +28,6 @@
  * a credential record: primary, temp, backup, counter floor, and temp floor.
  */
 void zf_store_recovery_cleanup_temp_files(Storage *storage);
+void zf_store_recovery_cleanup_temp_files_with_buffer(Storage *storage, uint8_t *buffer,
+                                                      size_t buffer_size);
 bool zf_store_recovery_remove_record_paths(Storage *storage, const char *file_name);

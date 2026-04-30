@@ -19,12 +19,31 @@
 
 #include <string.h>
 
+#include "../zerofido_crypto.h"
 #include "../zerofido_storage.h"
 #include "internal.h"
+#include "record_format.h"
 
 typedef struct {
     Storage *storage;
+    uint8_t *buffer;
+    size_t buffer_size;
 } ZfStoreRecoveryCleanupContext;
+
+static bool zf_store_recovery_primary_is_valid(ZfStoreRecoveryCleanupContext *context,
+                                               const char *file_name) {
+    ZfCredentialRecord record;
+    bool valid = false;
+
+    if (!context || !context->buffer || context->buffer_size == 0U || !file_name) {
+        return false;
+    }
+    memset(&record, 0, sizeof(record));
+    valid = zf_store_record_format_load_record_for_display_with_buffer(
+        context->storage, file_name, &record, context->buffer, context->buffer_size);
+    zf_crypto_secure_zero(&record, sizeof(record));
+    return valid;
+}
 
 static bool zf_store_recovery_cleanup_visitor(const char *name, const FileInfo *info,
                                               void *context) {
@@ -53,9 +72,11 @@ static bool zf_store_recovery_cleanup_visitor(const char *name, const FileInfo *
                                          sizeof(record_path))) {
             return false;
         }
-        if (storage_file_exists(cleanup_context->storage, record_path)) {
+        if (storage_file_exists(cleanup_context->storage, record_path) &&
+            zf_store_recovery_primary_is_valid(cleanup_context, file_name)) {
             return zf_storage_remove_optional(cleanup_context->storage, backup_path);
         }
+        zf_storage_remove_optional(cleanup_context->storage, record_path);
         storage_common_rename(cleanup_context->storage, backup_path, record_path);
     }
 
@@ -64,17 +85,29 @@ static bool zf_store_recovery_cleanup_visitor(const char *name, const FileInfo *
 
 /*
  * Startup recovery is conservative: temp files are discarded, while backup
- * files are restored only if the primary record is missing.
+ * files are restored if the primary record is missing or cannot be decoded.
  */
-void zf_store_recovery_cleanup_temp_files(Storage *storage) {
+void zf_store_recovery_cleanup_temp_files_with_buffer(Storage *storage, uint8_t *buffer,
+                                                      size_t buffer_size) {
     char name[96];
     char path[128];
-    ZfStoreRecoveryCleanupContext context = {.storage = storage};
+    ZfStoreRecoveryCleanupContext context = {
+        .storage = storage,
+        .buffer = buffer,
+        .buffer_size = buffer_size,
+    };
 
     zf_storage_remove_dir_entries_with_suffix(storage, ZF_APP_DATA_DIR, ".tmp", name, sizeof(name),
                                               path, sizeof(path));
     zf_storage_for_each_dir_entry(storage, ZF_APP_DATA_DIR, name, sizeof(name),
                                   zf_store_recovery_cleanup_visitor, &context);
+}
+
+void zf_store_recovery_cleanup_temp_files(Storage *storage) {
+    uint8_t buffer[ZF_STORE_RECORD_MAX_SIZE];
+
+    zf_store_recovery_cleanup_temp_files_with_buffer(storage, buffer, sizeof(buffer));
+    zf_crypto_secure_zero(buffer, sizeof(buffer));
 }
 
 bool zf_store_recovery_remove_record_paths(Storage *storage, const char *file_name) {

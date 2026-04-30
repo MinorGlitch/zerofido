@@ -1629,6 +1629,7 @@ int main(void) {
     test_selection_touch_rejects_default_ctap2_0_profile();
     test_selection_touch_auto_accept_bypasses_approval_prompt();
     test_store_cleanup_restores_backup_when_primary_is_missing();
+    test_store_cleanup_restores_backup_when_primary_is_corrupt();
     test_store_remove_record_paths_deletes_atomic_backups();
     test_atomic_file_write_overwrites_primary_without_predelete();
     test_atomic_file_write_failure_keeps_primary();

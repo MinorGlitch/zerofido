@@ -28,6 +28,47 @@ static void test_store_cleanup_restores_backup_when_primary_is_missing(void) {
     expect(!backup->exists, "cleanup should remove the restored backup file");
 }
 
+static void test_store_cleanup_restores_backup_when_primary_is_corrupt(void) {
+    Storage storage = {0};
+    ZfCredentialStore store = {0};
+    ZfCredentialIndexEntry records[ZF_MAX_CREDENTIALS] = {0};
+    uint8_t buffer[ZF_STORE_RECORD_MAX_SIZE];
+    size_t size = 0;
+    TestStorageFile *primary = NULL;
+    TestStorageFile *backup = NULL;
+    char primary_path[160];
+    char backup_path[160];
+
+    test_storage_reset();
+    store.records = records;
+    store.capacity = ZF_MAX_CREDENTIALS;
+    size = encode_complete_record(buffer, sizeof(buffer));
+    snprintf(primary_path, sizeof(primary_path), "%s/%s", ZF_APP_DATA_DIR,
+             k_repeated_credential_file_name);
+    snprintf(backup_path, sizeof(backup_path), "%s/%s.bak", ZF_APP_DATA_DIR,
+             k_repeated_credential_file_name);
+
+    primary = test_storage_file_slot(primary_path, true);
+    backup = test_storage_file_slot(backup_path, true);
+    expect(primary && backup, "allocate storage slots for corrupt-primary cleanup recovery");
+    memcpy(primary->data, "bad", 3U);
+    primary->size = 3U;
+    primary->exists = true;
+    memcpy(backup->data, buffer, size);
+    backup->size = size;
+    backup->exists = true;
+
+    expect(test_zf_store_init(&storage, &store),
+           "store bootstrap should recover from a valid backup");
+
+    expect(primary->exists, "cleanup should restore the valid backup over a corrupt primary");
+    expect(primary->size == size, "restored primary should use the backup record size");
+    expect(memcmp(primary->data, buffer, size) == 0,
+           "restored primary should use the backup record contents");
+    expect(!backup->exists, "cleanup should remove the consumed backup file");
+    expect(store.count == 1, "bootstrap should index the recovered credential");
+}
+
 static void test_store_remove_record_paths_deletes_atomic_backups(void) {
     Storage storage = {0};
     TestStorageFile *record = NULL;

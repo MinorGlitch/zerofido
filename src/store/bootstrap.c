@@ -87,7 +87,7 @@ bool zf_store_bootstrap_init_with_buffer(Storage *storage, ZfCredentialStore *st
         goto cleanup;
     }
 
-    zf_store_recovery_cleanup_temp_files(storage);
+    zf_store_recovery_cleanup_temp_files_with_buffer(storage, buffer, buffer_size);
     if (!zf_storage_for_each_dir_entry(storage, ZF_APP_DATA_DIR, name, sizeof(name),
                                        zf_store_bootstrap_index_visitor, &context)) {
         goto cleanup;
