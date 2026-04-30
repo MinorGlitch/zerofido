@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import sys
 import tempfile
 import unittest
+import unittest.mock
 from base64 import b64encode
 from datetime import datetime, timedelta, timezone
 from hashlib import sha1
@@ -21,6 +23,7 @@ from host_tools.export_certification_metadata import (
     MDS3_LEGAL_HEADER,
     build_certification_metadata,
     load_or_create_statement,
+    main,
 )
 
 
@@ -130,7 +133,14 @@ class ExportCertificationMetadataTests(unittest.TestCase):
         exported = build_certification_metadata(statement)
 
         self.assertEqual(exported["legalHeader"], MDS3_LEGAL_HEADER)
+        self.assertEqual(exported["description"], "ZeroFIDO")
+        self.assertEqual(exported["authenticatorVersion"], 10000)
+        self.assertEqual(exported["protocolFamily"], "fido2")
+        self.assertEqual(exported["schema"], 3)
         self.assertEqual(exported["upv"], [{"major": 1, "minor": 0}])
+        self.assertEqual(exported["publicKeyAlgAndEncodings"], ["cose"])
+        self.assertEqual(exported["keyProtection"], ["software"])
+        self.assertEqual(exported["tcDisplay"], [])
         self.assertNotIn("FIDO_2_1", exported["authenticatorGetInfo"]["versions"])
         self.assertFalse(exported["authenticatorGetInfo"]["options"]["clientPin"])
         self.assertEqual(exported["attestationTypes"], ["basic_full"])
@@ -359,6 +369,25 @@ class ExportCertificationMetadataTests(unittest.TestCase):
 
             self.assertEqual(statement, DEFAULT_CANONICAL_STATEMENT)
             self.assertEqual(json.loads(statement_path.read_text()), DEFAULT_CANONICAL_STATEMENT)
+
+    def test_main_reports_missing_fido2_attestation_certificate_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            statement_path = Path(tmpdir) / "metadata" / "statement.json"
+            missing_cert_path = Path(tmpdir) / "metadata" / "fido2-attestation.der"
+            argv = [
+                "export_certification_metadata.py",
+                "--statement",
+                str(statement_path),
+                "--profile",
+                "fido2-2.0",
+                "--fido2-attestation-cert",
+                str(missing_cert_path),
+            ]
+
+            with unittest.mock.patch.object(sys, "argv", argv), self.assertRaises(SystemExit) as ctx:
+                main()
+
+        self.assertIn("attestation certificate not found", str(ctx.exception))
 
 
 if __name__ == "__main__":

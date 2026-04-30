@@ -98,6 +98,20 @@ class CtaphidProbeTests(unittest.TestCase):
         self.assertEqual(decoded[8], b"")
         self.assertEqual(leftover, trailing)
 
+    def test_build_make_credential_request_can_prefer_packed_attestation(self) -> None:
+        payload = ctaphid_probe.build_make_credential_request(
+            "zerofido.local",
+            empty_pin_auth=False,
+            omit_client_data_hash=False,
+            resident_key=False,
+            attestation_formats=["packed"],
+        )
+
+        decoded = cbor2.loads(payload)
+
+        self.assertEqual(decoded[7]["rk"], False)
+        self.assertEqual(decoded[11], ["packed"])
+
     def test_build_frames_fragments_long_payload(self) -> None:
         payload = bytes(range(80))
 

@@ -710,6 +710,8 @@ def run_make_credential(device: hid.device, timeout_ms: int, verbose: bool, args
         empty_pin_auth=args.empty_pin_auth,
         omit_client_data_hash=args.omit_client_data_hash,
         trailing_bytes=trailing_bytes,
+        resident_key=not args.fido2_cert_out,
+        attestation_formats=["packed"] if args.fido2_cert_out else None,
     )
     response_cid, response_cmd, response_payload = transact(
         device, cid, CBOR, request, timeout_ms, verbose
@@ -1301,6 +1303,7 @@ def build_make_credential_request(
     resident_key: bool = True,
     user_suffix: str = "01",
     exclude_credential_ids: list[bytes] | None = None,
+    attestation_formats: list[str] | None = None,
     pin_auth: bytes | None = None,
     pin_protocol: int | None = None,
 ) -> bytes:
@@ -1332,6 +1335,8 @@ def build_make_credential_request(
         request[1] = hashlib.sha256(challenge_label).digest()
     if exclude_credential_ids:
         request[5] = [{"type": "public-key", "id": credential_id} for credential_id in exclude_credential_ids]
+    if attestation_formats:
+        request[11] = attestation_formats
     if pin_auth is not None:
         request[8] = pin_auth
         request[9] = pin_protocol or 1

@@ -40,10 +40,12 @@ DEFAULT_CANONICAL_STATEMENT: dict[str, Any] = {
     "legalHeader": "https://fidoalliance.org/metadata/metadata-statement-legal-header/",
     "description": "ZeroFIDO",
     "authenticatorVersion": 10000,
+    "protocolFamily": "fido2",
     "schema": 3,
     "aaguid": "b51a976a-0b02-40aa-9d8a-36c8b91bbd1a",
     "upv": [{"major": 1, "minor": 0}],
     "authenticationAlgorithms": ["secp256r1_ecdsa_sha256_raw"],
+    "publicKeyAlgAndEncodings": ["cose"],
     "keyProtection": ["software"],
     "authenticatorGetInfo": {
         "versions": ["FIDO_2_0", "U2F_V2"],
@@ -59,6 +61,7 @@ DEFAULT_CANONICAL_STATEMENT: dict[str, Any] = {
             {"userVerificationMethod": "presence_internal"},
         ]
     ],
+    "tcDisplay": [],
 }
 
 
@@ -160,6 +163,21 @@ def normalize_upv(value: Any, profile: str) -> list[dict[str, int]]:
     return versions
 
 
+def normalize_string_sequence_with_required(value: Any, required: list[str]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    if isinstance(value, list):
+        for item in value:
+            if not isinstance(item, str) or item in seen:
+                continue
+            seen.add(item)
+            normalized.append(item)
+    for item in required:
+        if item not in seen:
+            normalized.append(item)
+    return normalized
+
+
 def normalize_statement_get_info(get_info: Any, profile: str) -> dict[str, Any]:
     normalized = copy.deepcopy(get_info) if isinstance(get_info, dict) else {}
     versions = normalized.get("versions")
@@ -211,7 +229,13 @@ def normalize_statement_get_info(get_info: Any, profile: str) -> dict[str, Any]:
 
 
 def load_certificate_der(path: Path) -> bytes:
-    data = path.read_bytes()
+    try:
+        data = path.read_bytes()
+    except FileNotFoundError as exc:
+        raise ValueError(
+            f"attestation certificate not found: {path}. Run ctaphid_probe.py first and make "
+            "sure it succeeds before exporting certification metadata."
+        ) from exc
     if data.startswith(b"-----BEGIN CERTIFICATE-----"):
         return x509.load_pem_x509_certificate(data).public_bytes(serialization.Encoding.DER)
     x509.load_der_x509_certificate(data)
@@ -317,6 +341,12 @@ def build_certification_metadata(
 
     exported = copy.deepcopy(statement)
     exported["legalHeader"] = MDS3_LEGAL_HEADER
+    exported["description"] = exported.get("description") or DEFAULT_CANONICAL_STATEMENT["description"]
+    exported["authenticatorVersion"] = (
+        exported.get("authenticatorVersion") or DEFAULT_CANONICAL_STATEMENT["authenticatorVersion"]
+    )
+    exported["protocolFamily"] = "fido2"
+    exported["schema"] = 3
     exported["upv"] = normalize_upv(exported.get("upv"), profile)
     if "aaguid" in exported and isinstance(exported["aaguid"], str):
         exported["aaguid"] = normalize_aaguid(exported["aaguid"])
@@ -329,7 +359,16 @@ def build_certification_metadata(
     exported.pop("operatingEnv", None)
     exported.pop("isSecondFactorOnly", None)
     exported.pop("attestationCertificateKeyIdentifiers", None)
+    exported["publicKeyAlgAndEncodings"] = normalize_string_sequence_with_required(
+        exported.get("publicKeyAlgAndEncodings"),
+        ["cose"],
+    )
+    exported["keyProtection"] = normalize_string_sequence_with_required(
+        exported.get("keyProtection"),
+        DEFAULT_CANONICAL_STATEMENT["keyProtection"],
+    )
     exported["matcherProtection"] = ["software"]
+    exported["tcDisplay"] = []
     exported["icon"] = ICON_DATA_URL
     if "attestationTypes" not in exported:
         exported["attestationTypes"] = ["basic_surrogate"]
@@ -414,11 +453,17 @@ def main() -> int:
     if args.u2f_attestation_cert:
         if args.profile != "u2f":
             raise SystemExit("--u2f-attestation-cert is only valid with --profile u2f")
-        u2f_cert_der = load_certificate_der(Path(args.u2f_attestation_cert))
+        try:
+            u2f_cert_der = load_certificate_der(Path(args.u2f_attestation_cert))
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
     if args.fido2_attestation_cert:
         if args.profile == "u2f":
             raise SystemExit("--fido2-attestation-cert is only valid with FIDO2 profiles")
-        fido2_cert_der = load_certificate_der(Path(args.fido2_attestation_cert))
+        try:
+            fido2_cert_der = load_certificate_der(Path(args.fido2_attestation_cert))
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
     if args.profile == "u2f" and u2f_cert_der is None:
         raise SystemExit(
             "--profile u2f requires --u2f-attestation-cert. "
