@@ -30,19 +30,47 @@ typedef struct {
     size_t buffer_size;
 } ZfStoreRecoveryCleanupContext;
 
-static bool zf_store_recovery_primary_is_valid(ZfStoreRecoveryCleanupContext *context,
-                                               const char *file_name) {
-    ZfCredentialRecord record;
+static bool zf_store_recovery_record_primary_is_valid(ZfStoreRecoveryCleanupContext *context,
+                                                      const char *file_name) {
+    ZfCredentialIndexEntry entry;
     bool valid = false;
 
     if (!context || !context->buffer || context->buffer_size == 0U || !file_name) {
         return false;
     }
-    memset(&record, 0, sizeof(record));
-    valid = zf_store_record_format_load_record_for_display_with_buffer(
-        context->storage, file_name, &record, context->buffer, context->buffer_size);
-    zf_crypto_secure_zero(&record, sizeof(record));
+    memset(&entry, 0, sizeof(entry));
+    valid = zf_store_record_format_load_index_with_buffer(context->storage, file_name, &entry,
+                                                          context->buffer, context->buffer_size);
+    zf_crypto_secure_zero(&entry, sizeof(entry));
     return valid;
+}
+
+static bool zf_store_recovery_recover_record_backup(ZfStoreRecoveryCleanupContext *context,
+                                                    const char *file_name,
+                                                    const char *backup_path) {
+    char record_path[128];
+
+    if (!zf_storage_build_child_path(ZF_APP_DATA_DIR, file_name, record_path,
+                                     sizeof(record_path))) {
+        return false;
+    }
+    if (storage_file_exists(context->storage, record_path) &&
+        zf_store_recovery_record_primary_is_valid(context, file_name)) {
+        return zf_storage_remove_optional(context->storage, backup_path);
+    }
+    if (!zf_storage_remove_optional(context->storage, record_path)) {
+        return false;
+    }
+    return storage_common_rename(context->storage, backup_path, record_path) == FSE_OK;
+}
+
+static bool zf_store_recovery_recover_counter_backup(Storage *storage, const char *file_name) {
+    char counter_path[128];
+    char counter_temp_path[128];
+
+    zf_store_build_counter_floor_path(file_name, counter_path, sizeof(counter_path));
+    zf_store_build_counter_floor_temp_path(file_name, counter_temp_path, sizeof(counter_temp_path));
+    return zf_storage_recover_atomic_file(storage, counter_path, counter_temp_path);
 }
 
 static bool zf_store_recovery_cleanup_visitor(const char *name, const FileInfo *info,
@@ -59,7 +87,6 @@ static bool zf_store_recovery_cleanup_visitor(const char *name, const FileInfo *
     if (zf_store_has_suffix(name, ".bak")) {
         char file_name[96];
         char backup_path[128];
-        char record_path[128];
         size_t base_len = strlen(name) - 4;
 
         if (base_len == 0U || base_len >= sizeof(file_name)) {
@@ -67,17 +94,23 @@ static bool zf_store_recovery_cleanup_visitor(const char *name, const FileInfo *
         }
         memcpy(file_name, name, base_len);
         file_name[base_len] = '\0';
-        if (!zf_storage_build_child_path(ZF_APP_DATA_DIR, name, backup_path, sizeof(backup_path)) ||
-            !zf_storage_build_child_path(ZF_APP_DATA_DIR, file_name, record_path,
-                                         sizeof(record_path))) {
+        if (!zf_storage_build_child_path(ZF_APP_DATA_DIR, name, backup_path, sizeof(backup_path))) {
             return false;
         }
-        if (storage_file_exists(cleanup_context->storage, record_path) &&
-            zf_store_recovery_primary_is_valid(cleanup_context, file_name)) {
-            return zf_storage_remove_optional(cleanup_context->storage, backup_path);
+        if (zf_store_record_format_is_record_name(file_name)) {
+            return zf_store_recovery_recover_record_backup(cleanup_context, file_name, backup_path);
         }
-        zf_storage_remove_optional(cleanup_context->storage, record_path);
-        storage_common_rename(cleanup_context->storage, backup_path, record_path);
+        if (zf_store_has_suffix(file_name, ".counter")) {
+            size_t record_name_len = strlen(file_name) - strlen(".counter");
+
+            if (record_name_len > 0U && record_name_len < sizeof(file_name)) {
+                file_name[record_name_len] = '\0';
+                if (zf_store_record_format_is_record_name(file_name)) {
+                    return zf_store_recovery_recover_counter_backup(cleanup_context->storage,
+                                                                    file_name);
+                }
+            }
+        }
     }
 
     return true;

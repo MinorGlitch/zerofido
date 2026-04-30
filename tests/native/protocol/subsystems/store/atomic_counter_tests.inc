@@ -69,6 +69,40 @@ static void test_store_cleanup_restores_backup_when_primary_is_corrupt(void) {
     expect(store.count == 1, "bootstrap should index the recovered credential");
 }
 
+static void test_store_cleanup_keeps_current_counter_when_backup_exists(void) {
+    static const uint8_t current_counter[] = {0x10, 0x11, 0x12, 0x13};
+    static const uint8_t stale_counter[] = {0x01, 0x02, 0x03, 0x04};
+    Storage storage = {0};
+    TestStorageFile *counter = NULL;
+    TestStorageFile *backup = NULL;
+    char counter_path[128];
+    char backup_path[128];
+
+    test_storage_reset();
+    zf_store_build_counter_floor_path(k_repeated_credential_file_name, counter_path,
+                                      sizeof(counter_path));
+    snprintf(backup_path, sizeof(backup_path), "%s.bak", counter_path);
+
+    counter = test_storage_file_slot(counter_path, true);
+    backup = test_storage_file_slot(backup_path, true);
+    expect(counter && backup, "allocate slots for counter backup cleanup");
+    memcpy(counter->data, current_counter, sizeof(current_counter));
+    counter->size = sizeof(current_counter);
+    counter->exists = true;
+    memcpy(backup->data, stale_counter, sizeof(stale_counter));
+    backup->size = sizeof(stale_counter);
+    backup->exists = true;
+
+    zf_store_recovery_cleanup_temp_files(&storage);
+
+    expect(counter->exists, "cleanup should keep the current counter floor primary");
+    expect(counter->size == sizeof(current_counter),
+           "cleanup should keep the current counter floor size");
+    expect(memcmp(counter->data, current_counter, sizeof(current_counter)) == 0,
+           "cleanup should not restore stale counter backup over the current primary");
+    expect(!backup->exists, "cleanup should remove the stale counter backup");
+}
+
 static void test_store_remove_record_paths_deletes_atomic_backups(void) {
     Storage storage = {0};
     TestStorageFile *record = NULL;
