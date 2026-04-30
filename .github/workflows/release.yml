@@ -88,10 +88,9 @@ jobs:
           for profile in nfc usb full; do
             echo "Building ${profile}"
             ZEROFIDO_PROFILE="${profile}" uv run python -m ufbt
-            cp dist/zerofido.fap "release/zerofido-${profile}.fap"
             uv run python host_tools/package_release.py \
               --skip-build \
-              --fap "release/zerofido-${profile}.fap" \
+              --fap dist/zerofido.fap \
               --output-fap "release/zerofido-${profile}-release.fap"
           done
 

@@ -65,8 +65,6 @@ jobs:
       - name: Upload FAP artifacts
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: zerofido-${{ matrix.profile }}
+          name: zerofido-${{ matrix.profile }}-release
           if-no-files-found: error
-          path: |
-            dist/zerofido.fap
-            dist/zerofido-${{ matrix.profile }}-release.fap
+          path: dist/zerofido-${{ matrix.profile }}-release.fap
