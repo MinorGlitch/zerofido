@@ -408,7 +408,8 @@ static bool zf_store_load_record_internal_with_buffer(Storage *storage,
     memset(out_record, 0, sizeof(*out_record));
     out_record->in_use = entry->in_use;
     out_record->resident_key = entry->resident_key;
-    memcpy(out_record->file_name, file_name, sizeof(out_record->file_name));
+    strncpy(out_record->file_name, file_name, sizeof(out_record->file_name) - 1);
+    out_record->file_name[sizeof(out_record->file_name) - 1] = '\0';
     memcpy(out_record->credential_id, entry->credential_id, sizeof(out_record->credential_id));
     out_record->credential_id_len = entry->credential_id_len;
     memcpy(out_record->rp_id, entry->rp_id, sizeof(out_record->rp_id));
