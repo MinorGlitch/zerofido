@@ -18,6 +18,13 @@ import check_symbol_gate
 
 ROOT = Path(__file__).resolve().parents[1]
 
+RELEASE_SAFE_BUILD_FLAGS = {
+    "ZEROFIDO_RELEASE_DIAGNOSTICS": "0",
+    "ZEROFIDO_AUTO_ACCEPT_REQUESTS": "0",
+    "ZEROFIDO_DEV_SCREENSHOT": "0",
+    "ZEROFIDO_DEV_FIDO2_1": "0",
+}
+
 FORBIDDEN_RELEASE_PATTERNS = {
     b"ZeroFIDO:CTAP": "CTAP diagnostics log tag",
     b"ZeroFIDO:MEM": "memory telemetry log tag",
@@ -67,7 +74,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def run_ufbt() -> None:
     """Run the normal UFBT build in the repository root."""
     env = os.environ.copy()
-    env["ZEROFIDO_RELEASE_DIAGNOSTICS"] = "0"
+    env.update(RELEASE_SAFE_BUILD_FLAGS)
     subprocess.run([sys.executable, "-m", "ufbt"], cwd=ROOT, check=True, env=env)
 
 

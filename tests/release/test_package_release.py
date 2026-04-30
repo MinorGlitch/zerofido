@@ -64,12 +64,24 @@ class PackageReleaseTests(unittest.TestCase):
         self.assertTrue(any("ClientPIN diagnostic" in item for item in violations))
 
     def test_run_ufbt_forces_release_safe_flags(self) -> None:
-        with mock.patch.object(package_release.subprocess, "run") as run:
+        with (
+            mock.patch.dict(
+                package_release.os.environ,
+                {
+                    "ZEROFIDO_RELEASE_DIAGNOSTICS": "1",
+                    "ZEROFIDO_AUTO_ACCEPT_REQUESTS": "1",
+                    "ZEROFIDO_DEV_SCREENSHOT": "1",
+                    "ZEROFIDO_DEV_FIDO2_1": "1",
+                },
+            ),
+            mock.patch.object(package_release.subprocess, "run") as run,
+        ):
             package_release.run_ufbt()
 
         run.assert_called_once()
         kwargs = run.call_args.kwargs
-        self.assertEqual(kwargs["env"]["ZEROFIDO_RELEASE_DIAGNOSTICS"], "0")
+        for name in package_release.RELEASE_SAFE_BUILD_FLAGS:
+            self.assertEqual(kwargs["env"][name], "0")
 
 
 if __name__ == "__main__":
