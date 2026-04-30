@@ -341,6 +341,40 @@ static void test_u2f_adapter_auto_accept_bypasses_approval_prompt(void) {
     zf_u2f_adapter_deinit(&app);
 }
 
+static void test_u2f_adapter_short_register_approval_uses_payload_app_id(void) {
+    ZerofidoApp app = {0};
+    uint8_t request[5 + U2F_CHALLENGE_SIZE + U2F_APP_ID_SIZE] = {0};
+    uint8_t response[512] = {0};
+    size_t response_len = 0;
+
+    test_reset();
+    zf_runtime_config_load_defaults(&app.runtime_config);
+    zf_runtime_config_resolve_capabilities(&app.runtime_config, &app.capabilities);
+    app.capabilities_resolved = true;
+
+    expect(zf_u2f_adapter_init(&app), "U2F init should succeed before approval register");
+    request[0] = 0x00;
+    request[1] = U2F_CMD_REGISTER;
+    request[2] = 0x00;
+    request[3] = 0x00;
+    request[4] = U2F_CHALLENGE_SIZE + U2F_APP_ID_SIZE;
+    memset(request + 5, 0xA5, U2F_CHALLENGE_SIZE);
+    memset(request + 5 + U2F_CHALLENGE_SIZE, 0x5A, U2F_APP_ID_SIZE);
+
+    response_len = zf_u2f_adapter_handle_msg(&app, 0x01020304U, request, sizeof(request), response,
+                                             sizeof(response));
+
+    expect(response_len > 2, "approved short U2F register should return a full response");
+    expect(response[response_len - 2] == 0x90 && response[response_len - 1] == 0x00,
+           "approved short U2F register should succeed");
+    expect(g_approval_request_count == 1,
+           "short U2F register should request approval when auto-accept is off");
+    expect(strcmp(g_last_approval_rp_id, "app 5a5a5a5a5a5a5a5a...") == 0,
+           "short U2F register approval should show appId from the APDU payload");
+
+    zf_u2f_adapter_deinit(&app);
+}
+
 static void test_u2f_adapter_invalid_cla_returns_cla_not_supported(void) {
     ZerofidoApp app = {0};
     uint8_t request[5] = {0};

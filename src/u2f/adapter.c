@@ -21,6 +21,7 @@
 #include <string.h>
 
 #include "apdu.h"
+#include "apdu_internal.h"
 #include "session.h"
 #include "persistence.h"
 #include "status.h"
@@ -30,13 +31,9 @@
 #include "../zerofido_runtime_config.h"
 #include "../zerofido_ui.h"
 
-#define ZF_U2F_REGISTER_REQ_LEN 71
-#define ZF_U2F_APP_ID_OFFSET 39
-#define ZF_U2F_APP_ID_SIZE 32
 #define ZF_U2F_VERSION_RESPONSE_LEN 8U
 
-static const uint8_t zf_u2f_adapter_version_response[] = {'U', '2', 'F', '_',
-                                                          'V', '2', 0x90, 0x00};
+static const uint8_t zf_u2f_adapter_version_response[] = {'U', '2', 'F', '_', 'V', '2', 0x90, 0x00};
 
 static uint16_t zf_u2f_adapter_reply_version(uint8_t *response, size_t response_capacity) {
     if (response_capacity < ZF_U2F_VERSION_RESPONSE_LEN) {
@@ -67,17 +64,20 @@ bool zf_u2f_adapter_ensure_attestation_assets(void) {
 
 static void zf_u2f_format_app_id(const uint8_t *request, size_t request_len, char *out,
                                  size_t out_len) {
-    if (request_len < ZF_U2F_APP_ID_OFFSET + ZF_U2F_APP_ID_SIZE || out_len < 3) {
+    U2fParsedApdu apdu = {0};
+    const uint8_t *app_id = NULL;
+
+    if (out_len < 3 || request_len > UINT16_MAX ||
+        !u2f_parse_apdu_header(request, (uint16_t)request_len, false, &apdu) || !apdu.data ||
+        apdu.lc < (U2F_CHALLENGE_SIZE + U2F_APP_ID_SIZE)) {
         strncpy(out, "U2F", out_len - 1);
         out[out_len - 1] = '\0';
         return;
     }
+    app_id = apdu.data + U2F_CHALLENGE_SIZE;
 
-    snprintf(out, out_len, "app %02x%02x%02x%02x%02x%02x%02x%02x...",
-             request[ZF_U2F_APP_ID_OFFSET + 0], request[ZF_U2F_APP_ID_OFFSET + 1],
-             request[ZF_U2F_APP_ID_OFFSET + 2], request[ZF_U2F_APP_ID_OFFSET + 3],
-             request[ZF_U2F_APP_ID_OFFSET + 4], request[ZF_U2F_APP_ID_OFFSET + 5],
-             request[ZF_U2F_APP_ID_OFFSET + 6], request[ZF_U2F_APP_ID_OFFSET + 7]);
+    snprintf(out, out_len, "app %02x%02x%02x%02x%02x%02x%02x%02x...", app_id[0], app_id[1],
+             app_id[2], app_id[3], app_id[4], app_id[5], app_id[6], app_id[7]);
 }
 
 /*

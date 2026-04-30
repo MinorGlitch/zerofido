@@ -173,6 +173,7 @@ static size_t g_semaphore_result_index = 0;
 static size_t g_cancel_pending_interaction_count = 0;
 static bool g_cancel_pending_interaction_result = false;
 static size_t g_approval_request_count = 0;
+static char g_last_approval_rp_id[64];
 static bool g_auto_accept_requests = false;
 static size_t g_transport_connected_set_count = 0;
 static size_t g_transport_connected_true_count = 0;
@@ -301,6 +302,7 @@ static void test_reset(void) {
     g_cancel_pending_interaction_count = 0;
     g_cancel_pending_interaction_result = false;
     g_approval_request_count = 0;
+    memset(g_last_approval_rp_id, 0, sizeof(g_last_approval_rp_id));
     g_auto_accept_requests = false;
     g_transport_connected_set_count = 0;
     g_transport_connected_true_count = 0;
@@ -1340,7 +1342,6 @@ bool zerofido_ui_request_approval(ZerofidoApp *app, ZfUiProtocol protocol, const
                                   bool *approved) {
     UNUSED(protocol);
     UNUSED(operation);
-    UNUSED(rp_id);
     UNUSED(user_text);
     UNUSED(cid);
     if (g_auto_accept_requests || test_transport_auto_accept_enabled(app)) {
@@ -1350,6 +1351,10 @@ bool zerofido_ui_request_approval(ZerofidoApp *app, ZfUiProtocol protocol, const
         return true;
     }
     g_approval_request_count++;
+    if (rp_id) {
+        strncpy(g_last_approval_rp_id, rp_id, sizeof(g_last_approval_rp_id) - 1);
+        g_last_approval_rp_id[sizeof(g_last_approval_rp_id) - 1] = '\0';
+    }
     if (approved) {
         *approved = true;
     }
@@ -1973,6 +1978,7 @@ int main(void) {
     test_zf_u2f_adapter_init_creates_missing_device_key_and_counter();
     test_zf_u2f_adapter_init_allows_invalid_attestation_assets();
     test_u2f_adapter_auto_accept_bypasses_approval_prompt();
+    test_u2f_adapter_short_register_approval_uses_payload_app_id();
     test_u2f_adapter_invalid_cla_returns_cla_not_supported();
     test_u2f_adapter_invalid_cla_returns_cla_not_supported_without_live_backend();
     test_u2f_adapter_version_returns_u2f_v2_without_live_backend();
