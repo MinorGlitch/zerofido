@@ -152,7 +152,9 @@ typedef struct ZerofidoApp {
     FuriThread *startup_thread;
     FuriThread *worker_thread;
     FuriMutex *ui_mutex;
+#if !defined(ZF_USB_ONLY) && !defined(ZF_NFC_ONLY)
     const ZfTransportAdapterOps *transport_adapter;
+#endif
 #ifndef ZF_NFC_ONLY
     FuriHalUsbInterface *previous_usb;
 #endif

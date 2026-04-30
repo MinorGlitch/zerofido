@@ -17,14 +17,17 @@
 
 #include "adapter.h"
 
-#if !defined(ZF_USB_ONLY)
+#if defined(ZF_USB_ONLY)
+#include "usb_hid_worker.h"
+#elif defined(ZF_NFC_ONLY)
 #include "nfc_worker.h"
-#endif
-#ifndef ZF_NFC_ONLY
-#include "usb_hid_session.h"
+#else
+#include "nfc_worker.h"
 #include "usb_hid_worker.h"
 #endif
 #include "../zerofido_app_i.h"
+
+#if !defined(ZF_USB_ONLY) && !defined(ZF_NFC_ONLY)
 
 static const ZfTransportAdapterOps *zf_transport_get_adapter(const ZerofidoApp *app) {
     if (!app) {
@@ -106,3 +109,53 @@ uint8_t zf_transport_poll_cbor_control(ZerofidoApp *app, ZfTransportSessionId cu
 
     return adapter->poll_cbor_control(app, current_session_id);
 }
+
+#elif defined(ZF_USB_ONLY)
+
+void zf_transport_stop(ZerofidoApp *app) {
+    zf_transport_usb_hid_stop(app);
+}
+
+void zf_transport_send_dispatch_result(ZerofidoApp *app, const ZfProtocolDispatchRequest *request,
+                                       const ZfProtocolDispatchResult *result) {
+    zf_transport_usb_hid_send_dispatch_result(app, request, result);
+}
+
+bool zf_transport_wait_for_interaction(ZerofidoApp *app, ZfTransportSessionId current_session_id,
+                                       bool *approved) {
+    return zf_transport_usb_hid_wait_for_interaction(app, current_session_id, approved);
+}
+
+void zf_transport_notify_interaction_changed(ZerofidoApp *app) {
+    zf_transport_usb_hid_notify_interaction_changed(app);
+}
+
+uint8_t zf_transport_poll_cbor_control(ZerofidoApp *app, ZfTransportSessionId current_session_id) {
+    return zf_transport_usb_hid_poll_cbor_control(app, current_session_id);
+}
+
+#elif defined(ZF_NFC_ONLY)
+
+void zf_transport_stop(ZerofidoApp *app) {
+    zf_transport_nfc_stop(app);
+}
+
+void zf_transport_send_dispatch_result(ZerofidoApp *app, const ZfProtocolDispatchRequest *request,
+                                       const ZfProtocolDispatchResult *result) {
+    zf_transport_nfc_send_dispatch_result(app, request, result);
+}
+
+bool zf_transport_wait_for_interaction(ZerofidoApp *app, ZfTransportSessionId current_session_id,
+                                       bool *approved) {
+    return zf_transport_nfc_wait_for_interaction(app, current_session_id, approved);
+}
+
+void zf_transport_notify_interaction_changed(ZerofidoApp *app) {
+    zf_transport_nfc_notify_interaction_changed(app);
+}
+
+uint8_t zf_transport_poll_cbor_control(ZerofidoApp *app, ZfTransportSessionId current_session_id) {
+    return zf_transport_nfc_poll_cbor_control(app, current_session_id);
+}
+
+#endif

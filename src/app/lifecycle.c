@@ -20,6 +20,11 @@
 #include <string.h>
 
 #include "../transport/adapter.h"
+#if defined(ZF_USB_ONLY)
+#include "../transport/usb_hid_worker.h"
+#elif defined(ZF_NFC_ONLY)
+#include "../transport/nfc_worker.h"
+#endif
 #include "../u2f/adapter.h"
 #include "../zerofido_attestation.h"
 #include "../zerofido_crypto.h"
@@ -147,15 +152,8 @@ static ZfStorageInitStatus zf_app_lifecycle_init_storage(ZerofidoApp *app) {
     return ZfStorageInitOk;
 }
 
+#if !defined(ZF_USB_ONLY) && !defined(ZF_NFC_ONLY)
 static const ZfTransportAdapterOps *zf_app_lifecycle_adapter_for_mode(ZfTransportMode mode) {
-#ifdef ZF_USB_ONLY
-    UNUSED(mode);
-    return &zf_transport_usb_hid_adapter;
-#else
-#ifdef ZF_NFC_ONLY
-    UNUSED(mode);
-    return &zf_transport_nfc_adapter;
-#else
     switch (mode) {
     case ZfTransportModeNfc:
         return &zf_transport_nfc_adapter;
@@ -163,16 +161,17 @@ static const ZfTransportAdapterOps *zf_app_lifecycle_adapter_for_mode(ZfTranspor
     default:
         return &zf_transport_usb_hid_adapter;
     }
-#endif
-#endif
 }
+#endif
 
 static void zf_app_lifecycle_load_runtime_config(ZerofidoApp *app) {
     ZfRuntimeConfig runtime_config;
 
     zf_runtime_config_load(app->storage, &runtime_config);
     zf_runtime_config_apply(app, &runtime_config);
+#if !defined(ZF_USB_ONLY) && !defined(ZF_NFC_ONLY)
     app->transport_adapter = zf_app_lifecycle_adapter_for_mode(app->runtime_config.transport_mode);
+#endif
 }
 
 static const char *zf_app_lifecycle_backend_status(const ZerofidoApp *app,
@@ -199,9 +198,24 @@ static bool zf_app_lifecycle_start_worker(ZerofidoApp *app) {
     FuriThread *thread = NULL;
     size_t worker_stack_size = 8 * 1024;
 
-    if (!app || !app->transport_adapter || !app->transport_adapter->worker) {
+    if (!app) {
         return false;
     }
+
+#if defined(ZF_USB_ONLY)
+    int32_t (*worker)(void *) = zf_transport_usb_hid_worker;
+    worker_stack_size = 6 * 1024;
+#elif defined(ZF_NFC_ONLY)
+    int32_t (*worker)(void *) = zf_transport_nfc_worker;
+    worker_stack_size = 4 * 1024;
+#else
+    if (!app->transport_adapter || !app->transport_adapter->worker) {
+        return false;
+    }
+    if (app->transport_adapter->worker_stack_size > 0) {
+        worker_stack_size = app->transport_adapter->worker_stack_size;
+    }
+#endif
 
     furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
     if (app->worker_thread) {
@@ -210,12 +224,12 @@ static bool zf_app_lifecycle_start_worker(ZerofidoApp *app) {
     }
     furi_mutex_release(app->ui_mutex);
 
-    if (app->transport_adapter->worker_stack_size > 0) {
-        worker_stack_size = app->transport_adapter->worker_stack_size;
-    }
-
+#if defined(ZF_USB_ONLY) || defined(ZF_NFC_ONLY)
+    thread = furi_thread_alloc_ex("ZeroFIDOWorker", worker_stack_size, worker, app);
+#else
     thread = furi_thread_alloc_ex("ZeroFIDOWorker", worker_stack_size,
                                   app->transport_adapter->worker, app);
+#endif
     if (!thread) {
         zf_telemetry_log_oom("worker thread alloc", worker_stack_size);
         return false;
@@ -270,7 +284,9 @@ ZerofidoApp *zf_app_lifecycle_alloc(void) {
     app->running = true;
     app->ui_events_enabled = true;
     zf_runtime_config_load_defaults(&app->runtime_config);
+#if !defined(ZF_USB_ONLY) && !defined(ZF_NFC_ONLY)
     app->transport_adapter = zf_app_lifecycle_adapter_for_mode(app->runtime_config.transport_mode);
+#endif
     zf_runtime_config_apply(app, &app->runtime_config);
     return app;
 }
@@ -434,7 +450,9 @@ bool zf_app_lifecycle_restart_transport(ZerofidoApp *app) {
     }
 
     zf_app_lifecycle_stop_worker(app);
+#if !defined(ZF_USB_ONLY) && !defined(ZF_NFC_ONLY)
     app->transport_adapter = zf_app_lifecycle_adapter_for_mode(app->runtime_config.transport_mode);
+#endif
     if (!(app->capabilities.fido2_enabled || app->capabilities.u2f_enabled)) {
         return true;
     }

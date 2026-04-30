@@ -41,10 +41,10 @@ typedef struct {
  * NFC. Each adapter owns its worker loop, response publication, keepalive/cancel
  * polling, and local user-interaction waiting semantics.
  */
-#ifndef ZF_NFC_ONLY
+#if !defined(ZF_NFC_ONLY) && !defined(ZF_USB_ONLY)
 extern const ZfTransportAdapterOps zf_transport_usb_hid_adapter;
 #endif
-#if !defined(ZF_USB_ONLY)
+#if !defined(ZF_USB_ONLY) && !defined(ZF_NFC_ONLY)
 extern const ZfTransportAdapterOps zf_transport_nfc_adapter;
 #endif
 
