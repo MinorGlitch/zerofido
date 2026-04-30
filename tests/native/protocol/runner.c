@@ -1574,11 +1574,17 @@ int main(void) {
     test_make_credential_2_1_make_cred_uv_not_required_rejects_resident_without_pin_auth();
     test_make_credential_auto_accept_bypasses_approval_prompt();
     test_make_credential_unknown_option_succeeds();
+    #if ZF_PACKED_ATTESTATION
     test_make_credential_returns_packed_attestation();
+    #else
+    test_make_credential_packed_off_returns_none_attestation();
+    #endif
     test_make_credential_runtime_none_returns_none_attestation();
     test_make_credential_attestation_preference_overrides_runtime_default();
+    #if ZF_PACKED_ATTESTATION
     test_make_credential_attestation_preference_uses_lowest_supported_index();
     test_make_credential_response_does_not_downgrade_required_packed();
+    #endif
     test_make_credential_nfc_auto_accept_keeps_uv_clear();
     test_make_credential_nfc_auto_accept_rejects_uv_option_without_pin();
     test_get_assertion_pin_auth_takes_precedence_over_uv();

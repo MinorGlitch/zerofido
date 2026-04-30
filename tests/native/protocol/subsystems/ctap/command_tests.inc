@@ -850,6 +850,7 @@ static void test_make_credential_unknown_option_succeeds(void) {
     expect(response[0] == ZF_CTAP_SUCCESS, "makeCredential should ignore unknown true options");
 }
 
+#if ZF_PACKED_ATTESTATION
 static void test_make_credential_returns_packed_attestation(void) {
     Storage storage = {0};
     ZerofidoApp app = {0};
@@ -877,6 +878,36 @@ static void test_make_credential_returns_packed_attestation(void) {
     expect(parse_make_credential_packed_attestation(response + 1, response_len - 1),
            "MakeCredential should return packed attestation with one leaf certificate");
 }
+#endif
+
+#if !ZF_PACKED_ATTESTATION
+static void test_make_credential_packed_off_returns_none_attestation(void) {
+    Storage storage = {0};
+    ZerofidoApp app = {0};
+    ZfCredentialIndexEntry app_store_records[ZF_MAX_CREDENTIALS] = {0};
+    app.store.records = app_store_records;
+    FuriMutex ui_mutex = {0};
+    uint8_t request[256];
+    uint8_t response[512];
+    size_t response_len = 0;
+
+    test_storage_reset();
+    app.storage = &storage;
+    app.ui_mutex = &ui_mutex;
+    test_enable_auto_accept_requests(&app);
+
+    response_len =
+        zerofido_handle_ctap2(&app, 0x01020304, request,
+                              encode_make_credential_ctap_request_with_attestation_formats(
+                                  request, sizeof(request), "packed", NULL),
+                              response, sizeof(response));
+
+    expect(response_len > 1, "packed-off makeCredential should return a CTAP response body");
+    expect(response[0] == ZF_CTAP_SUCCESS, "packed-off makeCredential should return success");
+    expect(parse_make_credential_none_attestation(response + 1, response_len - 1),
+           "packed-off build should return fmt none even for a packed-only preference");
+}
+#endif
 
 static void test_make_credential_runtime_none_returns_none_attestation(void) {
     Storage storage = {0};
@@ -932,6 +963,7 @@ static void test_make_credential_attestation_preference_overrides_runtime_defaul
            "single none attestation preference should omit packed attestation");
 }
 
+#if ZF_PACKED_ATTESTATION
 static void test_make_credential_attestation_preference_uses_lowest_supported_index(void) {
     Storage storage = {0};
     ZerofidoApp app = {0};
@@ -960,7 +992,9 @@ static void test_make_credential_attestation_preference_uses_lowest_supported_in
     expect(parse_make_credential_packed_attestation(response + 1, response_len - 1),
            "packed should win when it is the lowest-index supported preference");
 }
+#endif
 
+#if ZF_PACKED_ATTESTATION
 static void test_make_credential_response_does_not_downgrade_required_packed(void) {
     ZfMakeCredentialResponseScratch scratch;
     ZfCredentialRecord record = {0};
@@ -989,6 +1023,7 @@ static void test_make_credential_response_does_not_downgrade_required_packed(voi
     expect(parse_make_credential_none_attestation(response, response_len),
            "explicit none attestation should encode fmt none with empty attStmt");
 }
+#endif
 
 static void test_make_credential_nfc_auto_accept_keeps_uv_clear(void) {
     Storage storage = {0};

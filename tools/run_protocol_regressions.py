@@ -16,6 +16,7 @@ NATIVE_SOURCE = ROOT / "tests" / "native" / "protocol" / "runner.c"
 NATIVE_TRANSPORT_SOURCE = ROOT / "tests" / "native" / "transport_u2f" / "runner.c"
 NATIVE_INCLUDE = ROOT / "tests" / "native" / "include"
 NATIVE_BINARY = ROOT / ".tmp" / "native_protocol_regressions"
+NATIVE_PACKED_OFF_BINARY = ROOT / ".tmp" / "native_protocol_regressions_packed_off"
 NATIVE_TRANSPORT_BINARY = ROOT / ".tmp" / "native_transport_u2f_regressions"
 POLICY_SOURCE = ROOT / "src" / "ctap" / "policy.c"
 
@@ -56,6 +57,26 @@ def main() -> None:
         ]
     )
     run([str(NATIVE_BINARY)])
+    run(
+        [
+            compiler,
+            "-std=c11",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-DZF_HOST_TEST",
+            "-DZF_RELEASE_DIAGNOSTICS=1",
+            "-DZF_PACKED_ATTESTATION=0",
+            "-I",
+            str(NATIVE_INCLUDE),
+            "-I",
+            str(ROOT / "src"),
+            str(NATIVE_SOURCE),
+            "-o",
+            str(NATIVE_PACKED_OFF_BINARY),
+        ]
+    )
+    run([str(NATIVE_PACKED_OFF_BINARY)])
     run(
         [
             compiler,

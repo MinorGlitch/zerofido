@@ -633,6 +633,7 @@ static bool parse_make_credential_auth_flags(const uint8_t *buffer, size_t size,
     return false;
 }
 
+#if ZF_PACKED_ATTESTATION
 static bool parse_make_credential_packed_attestation(const uint8_t *buffer, size_t size) {
     ZfCborCursor cursor;
     size_t pairs = 0;
@@ -689,6 +690,7 @@ static bool parse_make_credential_packed_attestation(const uint8_t *buffer, size
 
     return saw_fmt && saw_x5c && cursor.ptr == cursor.end;
 }
+#endif
 
 static bool parse_make_credential_none_attestation(const uint8_t *buffer, size_t size) {
     ZfCborCursor cursor;
