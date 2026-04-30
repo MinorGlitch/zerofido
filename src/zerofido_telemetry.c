@@ -42,16 +42,9 @@ void zf_telemetry_log_oom(const char *event, size_t requested_size) {
 size_t zf_telemetry_heap_max_free_block(void) {
     return memmgr_heap_get_max_free_block();
 }
-#elif !defined(ZF_HOST_TEST)
-void zf_telemetry_log(const char *event) {
-    (void)event;
-}
+#endif
 
-void zf_telemetry_log_oom(const char *event, size_t requested_size) {
-    (void)event;
-    (void)requested_size;
-}
-
+#if !defined(ZF_HOST_TEST) && !ZF_RELEASE_DIAGNOSTICS
 size_t zf_telemetry_heap_max_free_block(void) {
     return memmgr_heap_get_max_free_block();
 }
