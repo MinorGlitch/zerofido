@@ -347,12 +347,21 @@ bool zf_store_update_record_with_buffer(Storage *storage, ZfCredentialStore *sto
                    record->credential_id_len) != 0) {
             continue;
         }
+        uint32_t counter_high_water = store->records[i].counter_high_water;
+        if (record->sign_count < store->records[i].sign_count) {
+            return false;
+        }
+        if (record->sign_count > counter_high_water &&
+            !zf_store_record_format_reserve_counter(storage, record, &counter_high_water)) {
+            return false;
+        }
         if (!zf_store_record_format_write_record_with_buffer(storage, record, buffer,
                                                              buffer_size)) {
             return false;
         }
 
         zf_store_index_entry_from_record(record, &store->records[i]);
+        store->records[i].counter_high_water = counter_high_water;
         return true;
     }
 

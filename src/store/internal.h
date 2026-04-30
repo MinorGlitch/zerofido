@@ -23,7 +23,7 @@
 
 #include "../zerofido_types.h"
 
-#define ZF_STORE_RECORD_MAX_SIZE 768
+#define ZF_STORE_RECORD_MAX_SIZE 800
 
 /*
  * Shared record-path builders keep primary, temp, backup, and counter-floor
