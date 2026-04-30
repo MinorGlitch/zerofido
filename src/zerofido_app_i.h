@@ -188,7 +188,7 @@ typedef struct ZerofidoApp {
     char status_text[64];
     uint8_t *transport_arena;
     size_t transport_arena_size;
-    ZfCommandScratchArena command_scratch;
+    ZfCommandScratchArena *command_scratch;
     size_t command_scratch_size;
     bool command_scratch_in_use;
     ZfUiScratchArena *ui_scratch;
@@ -277,27 +277,37 @@ static inline void zf_app_transport_arena_release(ZerofidoApp *app) {
     app->transport_arena_size = 0U;
 }
 
-/* Command scratch is single-owner per operation and always zeroed before reuse. */
+/* Command scratch is single-owner per operation and allocated only while active. */
 static inline void *zf_app_command_scratch_acquire(ZerofidoApp *app, size_t size) {
-    if (!app || size > ZF_COMMAND_SCRATCH_SIZE || app->command_scratch_in_use) {
+    if (!app || size > ZF_COMMAND_SCRATCH_SIZE || app->command_scratch_in_use ||
+        app->command_scratch) {
         return NULL;
     }
 
+    app->command_scratch = malloc(sizeof(*app->command_scratch));
+    if (!app->command_scratch) {
+        app->command_scratch_size = 0U;
+        zf_telemetry_log_oom("command scratch", sizeof(*app->command_scratch));
+        return NULL;
+    }
+
+    memset(app->command_scratch, 0, sizeof(*app->command_scratch));
     app->command_scratch_size = size;
     app->command_scratch_in_use = true;
-    memset(app->command_scratch.bytes, 0, app->command_scratch_size);
-    return app->command_scratch.bytes;
+    return app->command_scratch->bytes;
 }
 
 static inline void zf_app_command_scratch_release(ZerofidoApp *app) {
-    if (!app || !app->command_scratch_in_use) {
+    if (!app || !app->command_scratch) {
         return;
     }
 
-    volatile uint8_t *bytes = app->command_scratch.bytes;
-    for (size_t i = 0; i < app->command_scratch_size; ++i) {
+    volatile uint8_t *bytes = app->command_scratch->bytes;
+    for (size_t i = 0; i < sizeof(app->command_scratch->bytes); ++i) {
         bytes[i] = 0;
     }
+    free(app->command_scratch);
+    app->command_scratch = NULL;
     app->command_scratch_in_use = false;
     app->command_scratch_size = 0;
 }
@@ -310,9 +320,13 @@ static inline void zf_app_command_scratch_destroy(ZerofidoApp *app) {
     if (app->command_scratch_in_use) {
         zf_app_command_scratch_release(app);
     }
-    volatile uint8_t *bytes = app->command_scratch.bytes;
-    for (size_t i = 0; i < sizeof(app->command_scratch.bytes); ++i) {
-        bytes[i] = 0;
+    if (app->command_scratch) {
+        volatile uint8_t *bytes = app->command_scratch->bytes;
+        for (size_t i = 0; i < sizeof(app->command_scratch->bytes); ++i) {
+            bytes[i] = 0;
+        }
+        free(app->command_scratch);
+        app->command_scratch = NULL;
     }
     app->command_scratch_size = 0;
     app->command_scratch_in_use = false;
