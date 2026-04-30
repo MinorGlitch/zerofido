@@ -21,6 +21,7 @@
 #include <furi_hal.h>
 #include <string.h>
 
+#include "../ctap/extensions/cred_protect.h"
 #include "../zerofido_cbor.h"
 #include "../zerofido_crypto.h"
 #include "../zerofido_storage.h"
@@ -391,8 +392,7 @@ bool zf_store_record_format_encode(const ZfCredentialRecord *record, uint8_t *ou
         !zf_cbor_encoder_init(&enc, out, ZF_STORE_RECORD_MAX_SIZE)) {
         return false;
     }
-    effective_cred_protect =
-        record->cred_protect == 0 ? ZF_CRED_PROTECT_UV_OPTIONAL : record->cred_protect;
+    effective_cred_protect = zf_ctap_cred_protect_effective(record->cred_protect);
 
     if (!zf_counter_floor_encode_fields(record->credential_id, record->created_at,
                                         record->sign_count, &counter_floor)) {
@@ -584,8 +584,7 @@ static bool zf_record_decode_field(ZfCborCursor *cursor, uint64_t key, ZfCredent
         return zf_cbor_read_bool(cursor, &record->resident_key);
     case ZfRecordKeyCredProtect: {
         uint64_t raw = 0;
-        if (!zf_cbor_read_uint(cursor, &raw) || raw < ZF_CRED_PROTECT_UV_OPTIONAL ||
-            raw > ZF_CRED_PROTECT_UV_REQUIRED) {
+        if (!zf_cbor_read_uint(cursor, &raw) || !zf_ctap_cred_protect_value_is_valid(raw)) {
             return false;
         }
         record->cred_protect = (uint8_t)raw;

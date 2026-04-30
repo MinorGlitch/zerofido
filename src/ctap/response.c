@@ -20,6 +20,7 @@
 #include <furi.h>
 #include <string.h>
 
+#include "extensions/cred_protect.h"
 #include "../zerofido_attestation.h"
 #include "../zerofido_cbor.h"
 #include "../zerofido_crypto.h"
@@ -66,7 +67,6 @@ static bool zf_encode_make_credential_extensions(uint8_t cred_protect, bool incl
                                                  uint8_t *out, size_t out_capacity,
                                                  size_t *out_len) {
     ZfCborEncoder enc;
-    uint8_t effective_cred_protect = cred_protect == 0 ? ZF_CRED_PROTECT_UV_OPTIONAL : cred_protect;
     size_t pairs = (include_cred_protect ? 1U : 0U) + (include_hmac_secret ? 1U : 0U);
 
     if (!zf_cbor_encoder_init(&enc, out, out_capacity)) {
@@ -75,8 +75,8 @@ static bool zf_encode_make_credential_extensions(uint8_t cred_protect, bool incl
     if (!zf_cbor_encode_map(&enc, pairs)) {
         return false;
     }
-    if (include_cred_protect && !(zf_cbor_encode_text(&enc, "credProtect") &&
-                                  zf_cbor_encode_uint(&enc, effective_cred_protect))) {
+    if (include_cred_protect &&
+        !zf_ctap_cred_protect_encode_make_credential_output(&enc, cred_protect)) {
         return false;
     }
     if (include_hmac_secret && !(zf_cbor_encode_text(&enc, "hmac-secret") &&

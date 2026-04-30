@@ -19,6 +19,7 @@
 
 #include <string.h>
 
+#include "../extensions/cred_protect.h"
 #include "../../zerofido_crypto.h"
 
 ZfCtapTextKey zf_ctap_classify_text_key(const uint8_t *ptr, size_t size) {
@@ -248,7 +249,7 @@ uint8_t zf_ctap_parse_make_credential_extensions_map(ZfCborCursor *cursor, bool 
             if (saw_cred_protect || !zf_cbor_read_uint(cursor, &raw)) {
                 return ZF_CTAP_ERR_INVALID_CBOR;
             }
-            if (raw < ZF_CRED_PROTECT_UV_OPTIONAL || raw > ZF_CRED_PROTECT_UV_REQUIRED) {
+            if (!zf_ctap_cred_protect_value_is_valid(raw)) {
                 return ZF_CTAP_ERR_INVALID_OPTION;
             }
 

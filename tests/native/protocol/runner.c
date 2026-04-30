@@ -1333,6 +1333,7 @@ bool zf_u2f_adapter_is_available(const ZerofidoApp *app) {
 #include "../../../src/ctap/parse/get_assertion.c"
 #include "../../../src/ctap/parse/make_credential.c"
 #include "../../../src/pin/protocol.c"
+#include "../../../src/ctap/extensions/cred_protect.c"
 #include "../../../src/ctap/extensions/hmac_secret.c"
 #include "../../../src/ctap/core/approval.c"
 #include "../../../src/ctap/core/assertion_queue.c"

@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ctap/extensions/cred_protect.h"
 #include "store/bootstrap.h"
 #include "store/record_format.h"
 #include "store/recovery.h"
@@ -203,8 +204,7 @@ void zf_store_index_entry_from_record(const ZfCredentialRecord *record,
     entry->sign_count = record->sign_count;
     entry->counter_high_water = record->sign_count;
     entry->created_at = record->created_at;
-    entry->cred_protect =
-        record->cred_protect == 0 ? ZF_CRED_PROTECT_UV_OPTIONAL : record->cred_protect;
+    entry->cred_protect = zf_ctap_cred_protect_effective(record->cred_protect);
 }
 
 bool zf_store_init_with_buffer(Storage *storage, ZfCredentialStore *store, uint8_t *buffer,

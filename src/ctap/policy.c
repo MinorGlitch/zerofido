@@ -19,6 +19,7 @@
 
 #include <string.h>
 
+#include "extensions/cred_protect.h"
 #include "parse.h"
 #include "../zerofido_app_i.h"
 #include "../zerofido_crypto.h"
@@ -129,17 +130,8 @@ static bool zf_ctap_credential_is_allowed_by_cred_protect(const ZfGetAssertionRe
         return false;
     }
 
-    switch (record->cred_protect) {
-    case 0:
-    case ZF_CRED_PROTECT_UV_OPTIONAL:
-        return true;
-    case ZF_CRED_PROTECT_UV_OPTIONAL_WITH_CRED_ID:
-        return uv_verified || zf_ctap_request_uses_allow_list(request);
-    case ZF_CRED_PROTECT_UV_REQUIRED:
-        return uv_verified;
-    default:
-        return false;
-    }
+    return zf_ctap_cred_protect_allows_assertion(record->cred_protect, uv_verified,
+                                                 zf_ctap_request_uses_allow_list(request));
 }
 
 /*
