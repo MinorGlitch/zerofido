@@ -1886,7 +1886,7 @@ static void test_get_assertion_multi_match_experimental_2_1_includes_user_select
     run_get_assertion_multi_match_uses_account_selection(true, true);
 }
 
-static void test_get_assertion_up_false_multi_match_stays_silent(void) {
+static void test_get_assertion_up_false_multi_match_reports_count_and_queues_next(void) {
     Storage storage = {0};
     ZerofidoApp app = {0};
     ZfCredentialIndexEntry app_store_records[ZF_MAX_CREDENTIALS] = {0};
@@ -1894,7 +1894,9 @@ static void test_get_assertion_up_false_multi_match_stays_silent(void) {
     FuriMutex ui_mutex = {0};
     uint8_t request[256];
     uint8_t response[512];
+    uint8_t next_response[512];
     size_t response_len = 0;
+    size_t next_response_len = 0;
     uint8_t flags = 0xFFU;
 
     test_storage_reset();
@@ -1920,7 +1922,20 @@ static void test_get_assertion_up_false_multi_match_stays_silent(void) {
     expect(parse_make_credential_auth_flags(response + 1, response_len - 1, &flags),
            "silent assertion response should contain authData flags");
     expect((flags & 0x01U) == 0, "silent assertion must not set the UP flag");
-    expect(!app.assertion_queue.active, "silent multi-match GetAssertion should not seed a queue");
+    expect(get_info_has_uint_field(response + 1, response_len - 1, 5, 3),
+           "silent multi-match GetAssertion should report numberOfCredentials");
+    expect(app.assertion_queue.active,
+           "silent multi-match GetAssertion should seed the GetNextAssertion queue");
+    expect(app.assertion_queue.count == 3, "silent multi-match queue should include all matches");
+    expect(app.assertion_queue.index == 1, "silent multi-match queue should start at next match");
+
+    next_response_len =
+        zerofido_handle_ctap2(&app, 0x01020304, (const uint8_t[]){ZfCtapeCmdGetNextAssertion}, 1,
+                              next_response, sizeof(next_response));
+
+    expect(next_response_len > 1, "silent queued GetNextAssertion should return an assertion");
+    expect(next_response[0] == ZF_CTAP_SUCCESS,
+           "silent queued GetNextAssertion should succeed on same channel");
 }
 
 static void test_get_assertion_multi_match_selection_denied_returns_operation_denied(void) {

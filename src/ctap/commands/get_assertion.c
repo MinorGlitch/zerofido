@@ -164,10 +164,11 @@ static bool zf_ctap_load_assertion_record(ZerofidoApp *app, size_t record_index,
     return true;
 }
 
-static uint8_t zf_ctap_publish_assertion_counter(ZerofidoApp *app,
-                                                 const ZfCredentialIndexEntry *entry,
-                                                 ZfCredentialRecord *record, size_t record_index,
-                                                 uint32_t next_sign_count) {
+static uint8_t zf_ctap_publish_assertion_counter(
+    ZerofidoApp *app, const ZfCredentialIndexEntry *entry, ZfCredentialRecord *record,
+    size_t record_index, uint32_t next_sign_count, ZfTransportSessionId session_id,
+    const ZfGetAssertionRequest *request, bool uv_verified, const uint16_t *match_indices,
+    size_t match_count, bool seed_assertion_queue) {
     uint32_t prepared_counter_high_water = 0;
 
     record->sign_count = next_sign_count;
@@ -186,6 +187,10 @@ static uint8_t zf_ctap_publish_assertion_counter(ZerofidoApp *app,
         return ZF_CTAP_ERR_OTHER;
     }
     zf_ctap_assertion_queue_clear(app);
+    if (seed_assertion_queue) {
+        zf_ctap_assertion_queue_seed(app, session_id, request, uv_verified, match_indices,
+                                     match_count);
+    }
     furi_mutex_release(app->ui_mutex);
     zerofido_notify_success(app);
     return ZF_CTAP_SUCCESS;
@@ -218,6 +223,9 @@ static uint8_t zf_ctap_finish_assertion(ZerofidoApp *app, ZfTransportSessionId s
     uint32_t next_sign_count = 0;
     ZfCredentialIndexEntry selected_entry = {0};
     uint8_t status = ZF_CTAP_ERR_OTHER;
+    size_t match_count = 1U;
+    bool include_count = false;
+    bool seed_assertion_queue = false;
 
     if (!zf_ctap_begin_maintenance(app)) {
         return ZF_CTAP_ERR_NOT_ALLOWED;
@@ -225,19 +233,22 @@ static uint8_t zf_ctap_finish_assertion(ZerofidoApp *app, ZfTransportSessionId s
     *maintenance_acquired = true;
 
     if (resolve_match) {
-        size_t match_count =
+        match_count =
             zf_ctap_resolve_assertion_matches_snapshot(app, request, uv_verified, scratch->matches);
         if (match_count == 0) {
             return ZF_CTAP_ERR_NO_CREDENTIALS;
         }
         record_index = scratch->matches[0];
     }
+    include_count = request->has_up && !request->up && !zf_ctap_request_uses_allow_list(request) &&
+                    match_count > 1U;
+    seed_assertion_queue = include_count;
 
     memset(&scratch->selected_record, 0, sizeof(scratch->selected_record));
     status = zf_ctap_load_and_prepare_assertion(
         app, &request->assertion, &scratch->pin_state, record_index, user_present, uv_verified,
-        include_user_details, false, 1U, include_user_selected, include_user_selected,
-        &scratch->selected_record, &selected_entry, scratch->work.store_io,
+        include_user_details, include_count, match_count, include_user_selected,
+        include_user_selected, &scratch->selected_record, &selected_entry, scratch->work.store_io,
         sizeof(scratch->work.store_io), &scratch->work.response, &next_sign_count, out,
         out_capacity, out_len);
     if (status != ZF_CTAP_SUCCESS) {
@@ -251,13 +262,15 @@ static uint8_t zf_ctap_finish_assertion(ZerofidoApp *app, ZfTransportSessionId s
         }
     }
 
-    return zf_ctap_publish_assertion_counter(app, &selected_entry, &scratch->selected_record,
-                                             record_index, next_sign_count);
+    return zf_ctap_publish_assertion_counter(
+        app, &selected_entry, &scratch->selected_record, record_index, next_sign_count, session_id,
+        request, uv_verified, scratch->matches, match_count, seed_assertion_queue);
 }
 
 /*
  * Assertion handling has three security-relevant paths:
- * - up=false: no touch, no UP flag, first matching credential only.
+ * - up=false: no touch, no UP flag, queued continuation when multiple
+ *   discoverable credentials match.
  * - multiple discoverable credentials without allowList: UI selection chooses one.
  * - normal flow: touch approval, first match returned, optional continuation queue.
  *

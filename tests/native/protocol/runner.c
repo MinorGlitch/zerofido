@@ -1436,7 +1436,7 @@ int main(void) {
     test_get_assertion_invalid_allow_list_waits_for_approval_before_no_credentials();
     test_get_assertion_multi_match_uses_account_selection();
     test_get_assertion_multi_match_experimental_2_1_includes_user_selected();
-    test_get_assertion_up_false_multi_match_stays_silent();
+    test_get_assertion_up_false_multi_match_reports_count_and_queues_next();
     test_get_assertion_multi_match_selection_denied_returns_operation_denied();
     test_get_assertion_multi_match_selection_cancel_returns_keepalive_cancel();
     test_get_assertion_multi_match_selection_timeout_returns_operation_denied();
