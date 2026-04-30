@@ -50,7 +50,7 @@ jobs:
         run: uv sync --locked
 
       - name: Check release build defaults
-        run: uv run python -m unittest tests.test_application_manifest
+        run: uv run python -m unittest tests.app.test_application_manifest
 
       - name: Build profile
         run: uv run python -m ufbt

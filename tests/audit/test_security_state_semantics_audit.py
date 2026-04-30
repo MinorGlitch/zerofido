@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-import importlib.util
 import re
-import shutil
 import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
-from types import ModuleType
 
-ROOT = Path(__file__).resolve().parents[1]
+from tests.harness import ROOT, load_module, missing_fixture_paths, stage_temp_repo as stage_repo
+
 SCRIPT_PATH = ROOT / "tools" / "verify_security_state_semantics_audit.py"
 FIXTURE_PATHS = [
     "README.md",
@@ -46,32 +43,18 @@ FIXTURE_PATHS = [
     "src/ui/status.c",
     "src/ui/approval_state.c",
     "src/ui/views.c",
-    "tests/native_protocol_regressions.c",
-    "tests/test_conformance_suite.py",
+    "tests/native/protocol/runner.c",
+    "tests/host_tools/test_conformance_suite.py",
     "tools/run_protocol_regressions.py",
 ]
 
 
-def load_verifier_module() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("verify_security_state_semantics_audit", SCRIPT_PATH)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Failed to load verifier module from {SCRIPT_PATH}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+def load_verifier_module():
+    return load_module("verify_security_state_semantics_audit", SCRIPT_PATH)
 
 
-
-def stage_temp_repo() -> tuple[tempfile.TemporaryDirectory[str], Path]:
-    tempdir = tempfile.TemporaryDirectory()
-    root = Path(tempdir.name)
-    for relative_path in FIXTURE_PATHS:
-        source = ROOT / relative_path
-        destination = root / relative_path
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, destination)
-    return tempdir, root
+def stage_temp_repo():
+    return stage_repo(FIXTURE_PATHS)
 
 
 
@@ -93,6 +76,9 @@ def remove_entry(text: str, identifier: str, kind: str = "Finding") -> str:
 class SecurityStateSemanticsAuditTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        missing = missing_fixture_paths(FIXTURE_PATHS)
+        if missing:
+            raise unittest.SkipTest(f"missing audit fixture paths: {', '.join(missing)}")
         cls.verifier = load_verifier_module()
 
     def run_verifier(self, *args: str, root: Path | None = None) -> subprocess.CompletedProcess[str]:

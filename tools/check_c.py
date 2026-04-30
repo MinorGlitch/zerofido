@@ -25,7 +25,7 @@ UFBT_ROOT = Path.home() / ".ufbt"
 SDK_HEADERS_ROOT = UFBT_ROOT / "current" / "sdk_headers" / "f7_sdk"
 TOOLCHAIN_ROOT = UFBT_ROOT / "toolchain"
 FORMAT_GLOBS = ("src/*.c", "src/**/*.c", "src/*.h", "src/**/*.h", "*.h",
-                "tests/native_protocol_regressions.c", "tests/native/include/**/*.h")
+                "tests/native/**/*.c", "tests/native/**/*.h", "tests/native/**/*.inc")
 CLANG_TIDY_GLOBS = ("src/*.c", "src/**/*.c")
 CPP_SOURCE_GLOBS = ("src/*.c", "src/**/*.c")
 COMPILE_COMMAND_INPUT_GLOBS = ("application.fam", "src/*.c", "src/**/*.c", "src/*.h", "src/**/*.h")

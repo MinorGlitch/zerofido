@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import runpy
 import unittest
-from pathlib import Path
 from unittest import mock
 
+from tests.harness import ROOT
 
-ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "application.fam"
 
 

@@ -162,11 +162,7 @@ The normal build output is `dist/zerofido.fap`.
 Run the maintained Python tests:
 
 ```bash
-uv run python -m unittest \
-  tests.test_ctaphid_probe \
-  tests.test_export_certification_metadata \
-  tests.test_conformance_suite \
-  tests.test_symbol_gate
+uv run python -m unittest discover -s tests -t . -p 'test_*.py'
 ```
 
 Run native protocol regressions:

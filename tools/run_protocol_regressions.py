@@ -12,8 +12,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-NATIVE_SOURCE = ROOT / "tests" / "native_protocol_regressions.c"
-NATIVE_TRANSPORT_SOURCE = ROOT / "tests" / "native_transport_u2f_regressions.c"
+NATIVE_SOURCE = ROOT / "tests" / "native" / "protocol" / "runner.c"
+NATIVE_TRANSPORT_SOURCE = ROOT / "tests" / "native" / "transport_u2f" / "runner.c"
 NATIVE_INCLUDE = ROOT / "tests" / "native" / "include"
 NATIVE_BINARY = ROOT / ".tmp" / "native_protocol_regressions"
 NATIVE_TRANSPORT_BINARY = ROOT / ".tmp" / "native_transport_u2f_regressions"

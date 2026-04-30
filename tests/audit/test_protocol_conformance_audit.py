@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-import importlib.util
 import re
-import shutil
 import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
-from types import ModuleType
 
-ROOT = Path(__file__).resolve().parents[1]
+from tests.harness import ROOT, load_module, missing_fixture_paths, stage_temp_repo as stage_repo
+
 SCRIPT_PATH = ROOT / "tools" / "verify_protocol_conformance_audit.py"
 FIXTURE_PATHS = [
     "docs/10-release-criteria.md",
@@ -26,26 +23,12 @@ FIXTURE_PATHS = [
 ]
 
 
-def load_verifier_module() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("verify_protocol_conformance_audit", SCRIPT_PATH)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Failed to load verifier module from {SCRIPT_PATH}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+def load_verifier_module():
+    return load_module("verify_protocol_conformance_audit", SCRIPT_PATH)
 
 
-
-def stage_temp_repo() -> tuple[tempfile.TemporaryDirectory[str], Path]:
-    tempdir = tempfile.TemporaryDirectory()
-    root = Path(tempdir.name)
-    for relative_path in FIXTURE_PATHS:
-        source = ROOT / relative_path
-        destination = root / relative_path
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, destination)
-    return tempdir, root
+def stage_temp_repo():
+    return stage_repo(FIXTURE_PATHS)
 
 
 
@@ -67,6 +50,9 @@ def remove_entry(text: str, identifier: str, kind: str = "Finding") -> str:
 class ProtocolConformanceAuditTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        missing = missing_fixture_paths(FIXTURE_PATHS)
+        if missing:
+            raise unittest.SkipTest(f"missing audit fixture paths: {', '.join(missing)}")
         cls.verifier = load_verifier_module()
 
     def run_verifier(self, *args: str, root: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -205,7 +191,7 @@ class ProtocolConformanceAuditTests(unittest.TestCase):
         original = ledger_path.read_text(encoding="utf-8")
         mutated = replace_once(
             original,
-            "- Current code/test evidence: `src/transport/usb_hid_session.c` reserves `0xffffffff` and `0x00000000`, allocates fresh CIDs through `zf_transport_allocate_cid()`, rejects direct `INIT` on unallocated non-broadcast CIDs, special-cases same-CID resync both in `zf_transport_handle_processing_control()` and in the `transport->processing` path of `zf_handle_packet()`, and reclaims the least-recently-used inactive slot when `ZF_MAX_ALLOCATED_CIDS` (8) is full. Fresh local evidence in this slice is limited to `uv run python -m unittest tests/test_ctaphid_probe.py`, plus `uv run python tools/run_protocol_regressions.py`, which keeps the native transport regressions current; the attached-device `transport_exhaust_cids` / `transport_resync` probes were not rerun.",
+            "- Current code/test evidence: `src/transport/usb_hid_session.c` reserves `0xffffffff` and `0x00000000`, allocates fresh CIDs through `zf_transport_allocate_cid()`, rejects direct `INIT` on unallocated non-broadcast CIDs, special-cases same-CID resync both in `zf_transport_handle_processing_control()` and in the `transport->processing` path of `zf_handle_packet()`, and reclaims the least-recently-used inactive slot when `ZF_MAX_ALLOCATED_CIDS` (8) is full. Fresh local evidence in this slice is limited to `uv run python -m unittest tests.host_tools.test_ctaphid_probe`, plus `uv run python tools/run_protocol_regressions.py`, which keeps the native transport regressions current; the attached-device `transport_exhaust_cids` / `transport_resync` probes were not rerun.",
             "- Current code/test evidence:",
         )
         ledger_path.write_text(mutated, encoding="utf-8")

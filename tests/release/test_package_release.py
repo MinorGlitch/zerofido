@@ -2,25 +2,17 @@
 
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
 import sys
 import unittest
 from unittest import mock
 
+from tests.harness import ROOT, load_module
 
-ROOT = Path(__file__).resolve().parents[1]
 HOST_TOOLS = ROOT / "host_tools"
 if str(HOST_TOOLS) not in sys.path:
     sys.path.insert(0, str(HOST_TOOLS))
 
-SPEC = importlib.util.spec_from_file_location(
-    "package_release", HOST_TOOLS / "package_release.py"
-)
-assert SPEC and SPEC.loader
-package_release = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = package_release
-SPEC.loader.exec_module(package_release)
+package_release = load_module("package_release", HOST_TOOLS / "package_release.py")
 
 
 class PackageReleaseTests(unittest.TestCase):
@@ -53,6 +45,15 @@ class PackageReleaseTests(unittest.TestCase):
         self.assertEqual(status, 0)
         run_ufbt.assert_not_called()
         check_fap.assert_called_once()
+
+    def test_run_ufbt_forces_release_safe_flags(self) -> None:
+        with mock.patch.object(package_release.subprocess, "run") as run:
+            package_release.run_ufbt()
+
+        run.assert_called_once()
+        kwargs = run.call_args.kwargs
+        self.assertEqual(kwargs["env"]["ZEROFIDO_DEV_ATTESTATION"], "0")
+        self.assertEqual(kwargs["env"]["ZEROFIDO_RELEASE_DIAGNOSTICS"], "0")
 
 
 if __name__ == "__main__":

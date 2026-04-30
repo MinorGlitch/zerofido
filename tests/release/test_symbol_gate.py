@@ -2,22 +2,14 @@
 
 from __future__ import annotations
 
-import importlib.util
 from pathlib import Path
-import sys
 import tempfile
 import unittest
 from unittest import mock
 
+from tests.harness import ROOT, load_module
 
-ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location(
-    "check_symbol_gate", ROOT / "host_tools" / "check_symbol_gate.py"
-)
-assert SPEC and SPEC.loader
-symbol_gate = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = symbol_gate
-SPEC.loader.exec_module(symbol_gate)
+symbol_gate = load_module("check_symbol_gate", ROOT / "host_tools" / "check_symbol_gate.py")
 
 
 RAW_FAP_SECTIONS = """
