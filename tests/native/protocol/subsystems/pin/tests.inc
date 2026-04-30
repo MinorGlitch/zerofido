@@ -242,7 +242,6 @@ static void test_ui_format_fido2_credential_detail_uses_user_facing_text(void) {
     memset(record.credential_id, 0xab, sizeof(record.credential_id));
     strncpy(record.rp_id, "example.com", sizeof(record.rp_id) - 1);
     strncpy(record.user_name, "alice", sizeof(record.user_name) - 1);
-    record.sign_count = 9;
     record.created_at = 42;
 
     zf_ui_format_fido2_credential_detail(&record, out, sizeof(out));
@@ -252,8 +251,8 @@ static void test_ui_format_fido2_credential_detail_uses_user_facing_text(void) {
            "passkey detail should show the account");
     expect(contains_text((const uint8_t *)out, strlen(out), "Type: Saved passkey"),
            "passkey detail should use user-facing type text");
-    expect(contains_text((const uint8_t *)out, strlen(out), "Used: 9 times"),
-           "passkey detail should show the use count");
+    expect(!contains_text((const uint8_t *)out, strlen(out), "Used:"),
+           "passkey detail should not expose the CTAP signature counter as a use count");
 }
 
 static void test_ui_hex_encode_truncated_limits_output(void) {

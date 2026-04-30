@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define ZF_AUTO_ACCEPT_REQUESTS 1
+
 #include "furi.h"
 #include "furi_hal.h"
 #include "furi_hal_random.h"

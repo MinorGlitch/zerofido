@@ -17,6 +17,7 @@
 
 #include "../zerofido_ui.h"
 
+#include <furi/core/string.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -28,6 +29,7 @@
 #include "status.h"
 
 #define ZF_HOME_VISIBLE_ITEMS 2U
+#define ZF_HOME_TEXT_SCROLL_TICK_DIVISOR 500U
 
 typedef struct {
     bool resident_key;
@@ -59,23 +61,6 @@ typedef struct {
 
 _Static_assert(sizeof(ZfStatusCredentialScratch) <= ZF_UI_SCRATCH_SIZE,
                "status credential scratch exceeds UI arena");
-
-static void zf_status_trim_line(char *text, size_t max_chars) {
-    size_t len = 0;
-
-    if (!text || max_chars < 3) {
-        return;
-    }
-
-    len = strlen(text);
-    if (len <= max_chars) {
-        return;
-    }
-
-    text[max_chars - 2] = '.';
-    text[max_chars - 1] = '.';
-    text[max_chars] = '\0';
-}
 
 static bool zf_status_text_is_error(const char *text) {
     return text && (strstr(text, "failed") || strstr(text, "Failed") || strstr(text, "error") ||
@@ -230,8 +215,6 @@ static bool zf_status_refresh_model(ZerofidoApp *app, bool redraw, bool reload_c
                                                 sizeof(snapshot.items[i].subtitle));
         }
 
-        zf_status_trim_line(snapshot.items[i].title, 22);
-        zf_status_trim_line(snapshot.items[i].subtitle, 26);
     }
     zf_app_ui_scratch_release(app);
 
@@ -239,9 +222,21 @@ static bool zf_status_refresh_model(ZerofidoApp *app, bool redraw, bool reload_c
     return true;
 }
 
+static void zf_status_draw_scrollable_line(Canvas *canvas, FuriString *line, int32_t x, int32_t y,
+                                           size_t width, const char *text, bool scroll) {
+    if (!line) return;
+
+    furi_string_set(line, text ? text : "");
+    elements_scrollable_text_line(canvas, x, y, width, line,
+                                  scroll ? (furi_get_tick() / ZF_HOME_TEXT_SCROLL_TICK_DIVISOR) :
+                                           0U,
+                                  !scroll);
+}
+
 static void zf_status_draw_callback(Canvas *canvas, void *model) {
     ZfStatusModel *status = model;
     const char *transport_title = NULL;
+    FuriString *scroll_line = NULL;
 
     furi_assert(status);
     if (!status) {
@@ -263,6 +258,7 @@ static void zf_status_draw_callback(Canvas *canvas, void *model) {
         canvas_draw_str(canvas, 14, 30, "No passkeys saved");
         canvas_draw_str(canvas, 14, 42, "Create one in a browser");
     } else {
+        scroll_line = furi_string_alloc();
         for (size_t row = 0; row < status->visible_count; ++row) {
             size_t item_index = status->visible_start + row;
             int32_t y = 16 + (int32_t)(row * 18U);
@@ -274,15 +270,20 @@ static void zf_status_draw_callback(Canvas *canvas, void *model) {
                 canvas_draw_line(canvas, 2, y + 1, 2, y + 14);
             }
             canvas_set_font(canvas, FontPrimary);
-            canvas_draw_str(canvas, 5, y + 7, status->items[row].title);
+            zf_status_draw_scrollable_line(
+                canvas, scroll_line, 5, y + 7, status->items[row].resident_key ? 108U : 118U,
+                status->items[row].title, item_index == status->selected_item);
             if (status->items[row].resident_key) {
-                canvas_draw_line(canvas, 119, y + 4, 119, y + 11);
-                canvas_draw_line(canvas, 120, y + 4, 120, y + 11);
+                canvas_set_font(canvas, FontSecondary);
+                canvas_draw_str(canvas, 112, y + 8, "RK");
             }
             canvas_set_font(canvas, FontSecondary);
-            canvas_draw_str(canvas, 5, y + 16, status->items[row].subtitle);
+            zf_status_draw_scrollable_line(canvas, scroll_line, 5, y + 16, 118U,
+                                           status->items[row].subtitle,
+                                           item_index == status->selected_item);
             canvas_set_color(canvas, ColorBlack);
         }
+        furi_string_free(scroll_line);
         if (status->item_count > ZF_HOME_VISIBLE_ITEMS) {
             elements_scrollbar_pos(canvas, 127, 15, 37, status->selected_item, status->item_count);
         }
@@ -296,6 +297,14 @@ void zerofido_ui_status_bind_view(ZerofidoApp *app) {
     view_set_context(app->status_view, app);
     view_set_draw_callback(app->status_view, zf_status_draw_callback);
     zf_status_refresh_model(app, false, true);
+}
+
+void zerofido_ui_status_redraw(ZerofidoApp *app) {
+    if (!app || !app->status_view) {
+        return;
+    }
+
+    with_view_model(app->status_view, ZfStatusModel * model, { UNUSED(model); }, true);
 }
 
 static void zerofido_ui_refresh_status_internal(ZerofidoApp *app, bool credentials_dirty) {

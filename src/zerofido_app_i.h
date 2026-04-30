@@ -18,6 +18,9 @@
 #pragma once
 
 #include <furi.h>
+#if ZF_DEV_SCREENSHOT
+#include <furi/core/pubsub.h>
+#endif
 #include <furi_hal.h>
 #include <gui/gui.h>
 #include <gui/modules/dialog_ex.h>
@@ -63,6 +66,9 @@ typedef enum {
     ZfEventActivity,
     ZfEventApprovalTimeout,
     ZfEventNotificationTimeout,
+#if ZF_DEV_SCREENSHOT
+    ZfEventDevScreenshot,
+#endif
 } ZfCustomEvent;
 
 typedef enum {
@@ -144,7 +150,7 @@ typedef struct ZerofidoApp {
     Submenu *pin_menu;
     TextInput *pin_input_view;
     DialogEx *pin_confirm_view;
-    DialogEx *credential_detail_view;
+    View *credential_detail_view;
     DialogEx *approval_view;
     Storage *storage;
     NotificationApp *notifications;
@@ -183,6 +189,15 @@ typedef struct ZerofidoApp {
     bool status_credentials_dirty;
 #if ZF_RELEASE_DIAGNOSTICS
     uint32_t telemetry_next_idle_tick;
+#endif
+#if ZF_DEV_SCREENSHOT
+    FuriPubSub *dev_screenshot_input_events;
+    FuriPubSubSubscription *dev_screenshot_input_subscription;
+    uint8_t dev_screenshot_frame[1024];
+    size_t dev_screenshot_frame_size;
+    uint32_t dev_screenshot_counter;
+    bool dev_screenshot_frame_valid;
+    bool dev_screenshot_framebuffer_registered;
 #endif
     uint32_t ui_registered_views;
     ZfViewId active_view;

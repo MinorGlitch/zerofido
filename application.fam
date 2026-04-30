@@ -19,10 +19,14 @@ def env_flag(name, default=False):
 
 release_diagnostics = env_flag("ZEROFIDO_RELEASE_DIAGNOSTICS", False)
 dev_attestation = env_flag("ZEROFIDO_DEV_ATTESTATION", False)
+auto_accept_requests = env_flag("ZEROFIDO_AUTO_ACCEPT_REQUESTS", False)
+dev_screenshot = env_flag("ZEROFIDO_DEV_SCREENSHOT", False)
 
 cdefines = [
     f"ZF_RELEASE_DIAGNOSTICS={1 if release_diagnostics else 0}",
     f"ZF_DEV_ATTESTATION={1 if dev_attestation else 0}",
+    f"ZF_AUTO_ACCEPT_REQUESTS={1 if auto_accept_requests else 0}",
+    f"ZF_DEV_SCREENSHOT={1 if dev_screenshot else 0}",
 ]
 sources = [
     "*.c",

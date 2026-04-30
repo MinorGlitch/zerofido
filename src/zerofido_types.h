@@ -34,6 +34,14 @@
 #define ZF_DEV_ATTESTATION 0
 #endif
 
+#ifndef ZF_AUTO_ACCEPT_REQUESTS
+#define ZF_AUTO_ACCEPT_REQUESTS 0
+#endif
+
+#ifndef ZF_DEV_SCREENSHOT
+#define ZF_DEV_SCREENSHOT 0
+#endif
+
 #ifndef ZF_HAS_SETTINGS_UI
 #define ZF_HAS_SETTINGS_UI 1
 #endif

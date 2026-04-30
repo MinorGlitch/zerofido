@@ -38,6 +38,8 @@ class ManifestProfileTests(unittest.TestCase):
         self.assertIn("ZF_NFC_ONLY", app["cdefines"])
         self.assertIn("ZF_RELEASE_DIAGNOSTICS=0", app["cdefines"])
         self.assertIn("ZF_DEV_ATTESTATION=0", app["cdefines"])
+        self.assertIn("ZF_AUTO_ACCEPT_REQUESTS=0", app["cdefines"])
+        self.assertIn("ZF_DEV_SCREENSHOT=0", app["cdefines"])
         self.assertIn("!nfc_trace.c", app["sources"])
         self.assertIn("!.tmp", app["sources"])
         self.assertIn("!.venv", app["sources"])
@@ -51,12 +53,16 @@ class ManifestProfileTests(unittest.TestCase):
                 "ZEROFIDO_PROFILE": "usb",
                 "ZEROFIDO_RELEASE_DIAGNOSTICS": "1",
                 "ZEROFIDO_DEV_ATTESTATION": "true",
+                "ZEROFIDO_AUTO_ACCEPT_REQUESTS": "on",
+                "ZEROFIDO_DEV_SCREENSHOT": "yes",
             }
         )
 
         self.assertIn("ZF_USB_ONLY", app["cdefines"])
         self.assertIn("ZF_RELEASE_DIAGNOSTICS=1", app["cdefines"])
         self.assertIn("ZF_DEV_ATTESTATION=1", app["cdefines"])
+        self.assertIn("ZF_AUTO_ACCEPT_REQUESTS=1", app["cdefines"])
+        self.assertIn("ZF_DEV_SCREENSHOT=1", app["cdefines"])
         self.assertNotIn("!nfc_trace.c", app["sources"])
 
     def test_invalid_boolean_rejected(self) -> None:

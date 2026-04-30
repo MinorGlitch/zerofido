@@ -121,7 +121,9 @@ static bool zerofido_ui_wait_for_interaction_result(ZerofidoApp *app,
 bool zerofido_ui_request_approval(ZerofidoApp *app, ZfUiProtocol protocol, const char *operation,
                                   const char *target_id, const char *user_text,
                                   ZfTransportSessionId current_session_id, bool *approved) {
+#if ZF_AUTO_ACCEPT_REQUESTS
     ZfResolvedCapabilities capabilities;
+#endif
 
     furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
     if (!app->ui_events_enabled || !app->running || app->maintenance_busy) {
@@ -132,8 +134,12 @@ bool zerofido_ui_request_approval(ZerofidoApp *app, ZfUiProtocol protocol, const
         return false;
     }
 
+#if ZF_AUTO_ACCEPT_REQUESTS
     zf_runtime_get_effective_capabilities(app, &capabilities);
     if (capabilities.auto_accept_requests || app->transport_auto_accept_transaction) {
+#else
+    if (app->transport_auto_accept_transaction) {
+#endif
         furi_mutex_release(app->ui_mutex);
         if (approved) {
             *approved = true;

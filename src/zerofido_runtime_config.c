@@ -148,8 +148,12 @@ void zf_runtime_config_load(Storage *storage, ZfRuntimeConfig *config) {
         return;
     }
 
+#if ZF_AUTO_ACCEPT_REQUESTS
     config->auto_accept_requests =
         (record.flags & ZF_RUNTIME_CONFIG_FLAG_AUTO_ACCEPT_REQUESTS) != 0;
+#else
+    config->auto_accept_requests = false;
+#endif
     config->fido2_enabled = true;
 }
 
@@ -158,8 +162,9 @@ bool zf_runtime_config_persist(Storage *storage, const ZfRuntimeConfig *config) 
         .magic = ZF_RUNTIME_CONFIG_FILE_MAGIC,
         .version = ZF_RUNTIME_CONFIG_FILE_VERSION,
         .flags = config
-                     ? ((config->auto_accept_requests ? ZF_RUNTIME_CONFIG_FLAG_AUTO_ACCEPT_REQUESTS
-                                                      : 0U) |
+                     ? (((ZF_AUTO_ACCEPT_REQUESTS && config->auto_accept_requests)
+                             ? ZF_RUNTIME_CONFIG_FLAG_AUTO_ACCEPT_REQUESTS
+                             : 0U) |
                         ZF_RUNTIME_CONFIG_FLAG_FIDO2_ENABLED)
                      : 0U,
         .transport_mode = config ? (uint8_t)config->transport_mode
@@ -189,6 +194,9 @@ static void zf_runtime_config_resolve_app_capabilities(ZerofidoApp *app,
     }
 
     effective_config = *config;
+#if !ZF_AUTO_ACCEPT_REQUESTS
+    effective_config.auto_accept_requests = false;
+#endif
     if (effective_config.fido2_profile == ZfFido2ProfileCtap2_1Experimental &&
         !zerofido_pin_is_set(&app->pin_state)) {
         effective_config.fido2_profile = ZfFido2ProfileCtap2_0;
@@ -209,6 +217,9 @@ void zf_runtime_config_apply(ZerofidoApp *app, const ZfRuntimeConfig *config) {
     }
 
     app->runtime_config = *config;
+#if !ZF_AUTO_ACCEPT_REQUESTS
+    app->runtime_config.auto_accept_requests = false;
+#endif
     zf_runtime_config_resolve_app_capabilities(app, &app->runtime_config);
 }
 
@@ -226,6 +237,11 @@ bool zf_runtime_config_set_auto_accept_requests(ZerofidoApp *app, Storage *stora
     if (!app) {
         return false;
     }
+#if !ZF_AUTO_ACCEPT_REQUESTS
+    (void)storage;
+    (void)enabled;
+    return false;
+#endif
 
     next_config = app->runtime_config;
     next_config.auto_accept_requests = enabled;
@@ -358,7 +374,7 @@ void zf_runtime_config_resolve_capabilities(const ZfRuntimeConfig *config,
     capabilities->make_cred_uv_not_required = capabilities->advertise_fido_2_1;
     capabilities->advertise_usb_transport = usb_hid_enabled;
     capabilities->advertise_nfc_transport = nfc_enabled;
-    capabilities->auto_accept_requests = config->auto_accept_requests;
+    capabilities->auto_accept_requests = ZF_AUTO_ACCEPT_REQUESTS && config->auto_accept_requests;
     capabilities->attestation_mode = config->attestation_mode;
 }
 
