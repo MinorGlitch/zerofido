@@ -43,11 +43,15 @@ jobs:
 
       - name: Resolve release tag
         id: release
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_TAG: ${{ inputs.tag }}
+          DISPATCH_PRERELEASE: ${{ inputs.prerelease }}
         run: |
           set -euo pipefail
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            tag="${{ inputs.tag }}"
-            prerelease="${{ inputs.prerelease }}"
+          if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+            tag="${DISPATCH_TAG}"
+            prerelease="${DISPATCH_PRERELEASE}"
           else
             tag="${GITHUB_REF_NAME}"
             prerelease="false"
@@ -55,6 +59,10 @@ jobs:
 
           if [[ ! "${tag}" =~ ^v[0-9]+(\.[0-9]+){1,2}([-.][0-9A-Za-z.-]+)?$ ]]; then
             echo "::error::Release tag must look like v1.0.0 or v1.0.0-rc.1"
+            exit 1
+          fi
+          if [[ "${prerelease}" != "true" && "${prerelease}" != "false" ]]; then
+            echo "::error::Prerelease must be true or false"
             exit 1
           fi
 
@@ -65,8 +73,8 @@ jobs:
           }
           git checkout --detach "${tag}"
 
-          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
-          echo "prerelease=${prerelease}" >> "${GITHUB_OUTPUT}"
+          printf 'tag=%s\n' "${tag}" >> "${GITHUB_OUTPUT}"
+          printf 'prerelease=%s\n' "${prerelease}" >> "${GITHUB_OUTPUT}"
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v8.1.0
