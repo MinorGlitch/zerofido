@@ -168,11 +168,11 @@ static uint8_t zf_ctap_publish_assertion_counter(
     ZerofidoApp *app, const ZfCredentialIndexEntry *entry, ZfCredentialRecord *record,
     size_t record_index, uint32_t next_sign_count, ZfTransportSessionId session_id,
     const ZfGetAssertionRequest *request, bool uv_verified, const uint16_t *match_indices,
-    size_t match_count, bool seed_assertion_queue) {
+    size_t match_count, bool seed_assertion_queue, uint8_t *store_io, size_t store_io_size) {
     uint32_t prepared_counter_high_water = 0;
 
     record->sign_count = next_sign_count;
-    if (!zf_store_prepare_counter_advance(app->storage, entry, record,
+    if (!zf_store_prepare_counter_advance(app->storage, entry, record, store_io, store_io_size,
                                           &prepared_counter_high_water)) {
         return ZF_CTAP_ERR_OTHER;
     }
@@ -264,7 +264,8 @@ static uint8_t zf_ctap_finish_assertion(ZerofidoApp *app, ZfTransportSessionId s
 
     return zf_ctap_publish_assertion_counter(
         app, &selected_entry, &scratch->selected_record, record_index, next_sign_count, session_id,
-        request, uv_verified, scratch->matches, match_count, seed_assertion_queue);
+        request, uv_verified, scratch->matches, match_count, seed_assertion_queue,
+        scratch->work.store_io, sizeof(scratch->work.store_io));
 }
 
 /*

@@ -1645,6 +1645,7 @@ int main(void) {
     test_get_next_assertion_polls_control_without_holding_ui_mutex();
     test_store_add_record_failure_keeps_original_record();
     test_store_file_advances_record_rollback_to_counter_high_water();
+    test_store_file_preserves_reserved_floor_when_counter_file_is_missing();
     test_store_file_bootstraps_legacy_record_without_embedded_counter_floor();
     test_store_file_rejects_corrupt_embedded_counter_floor();
     test_store_file_external_counter_floor_wins_over_embedded_floor();

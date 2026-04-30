@@ -91,8 +91,8 @@ bool zf_store_load_record_by_index_for_rp_with_buffer(Storage *storage,
 bool zf_store_advance_counter(Storage *storage, ZfCredentialStore *store,
                               const ZfCredentialRecord *record);
 bool zf_store_prepare_counter_advance(Storage *storage, const ZfCredentialIndexEntry *entry,
-                                      const ZfCredentialRecord *record,
-                                      uint32_t *out_counter_high_water);
+                                      const ZfCredentialRecord *record, uint8_t *buffer,
+                                      size_t buffer_size, uint32_t *out_counter_high_water);
 bool zf_store_publish_counter_advance(ZfCredentialStore *store, const ZfCredentialRecord *record,
                                       uint32_t counter_high_water);
 

@@ -262,6 +262,7 @@ uint8_t zf_ctap_assertion_queue_handle_next(ZerofidoApp *app, ZfTransportSession
     }
     scratch->record.sign_count = next_sign_count;
     if (!zf_store_prepare_counter_advance(app->storage, &scratch->entry, &scratch->record,
+                                          scratch->work.store_io, sizeof(scratch->work.store_io),
                                           &prepared_counter_high_water)) {
         zf_ctap_assertion_queue_clear_if_current(app, session_id, queue_index, record_index,
                                                  match_count, scratch->request.rp_id);

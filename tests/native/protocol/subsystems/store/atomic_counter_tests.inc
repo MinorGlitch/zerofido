@@ -536,6 +536,41 @@ static void test_store_file_advances_record_rollback_to_counter_high_water(void)
            "rolled-back record sign count should advance to the counter high-water mark");
 }
 
+static void test_store_file_preserves_reserved_floor_when_counter_file_is_missing(void) {
+    Storage storage = {0};
+    ZfCredentialRecord record = {0};
+    ZfCredentialRecord loaded = {0};
+    TestStorageFile *counter_slot = NULL;
+    uint8_t buffer[ZF_STORE_RECORD_MAX_SIZE];
+    uint32_t high_water = 0;
+    char counter_path[128];
+
+    test_storage_reset();
+    expect(zf_store_prepare_credential(&record, "example.com", (const uint8_t *)"user-1", 6,
+                                       "alice", "Alice", true),
+           "prepare missing-counter rollback test credential");
+    record.sign_count = 3;
+    expect(test_zf_store_record_format_write_record(&storage, &record),
+           "write initial credential record for missing-counter rollback test");
+
+    record.sign_count = 9;
+    expect(zf_store_record_format_reserve_counter_with_buffer(&storage, &record, buffer,
+                                                              sizeof(buffer), &high_water),
+           "reserve counter high-water in record and companion files");
+
+    zf_store_build_counter_floor_path(record.file_name, counter_path, sizeof(counter_path));
+    counter_slot = test_storage_file_slot(counter_path, false);
+    expect(counter_slot != NULL && counter_slot->exists,
+           "counter reservation should publish the companion counter file before deletion");
+    counter_slot->exists = false;
+    counter_slot->size = 0;
+
+    expect(test_zf_store_record_format_load_record(&storage, record.file_name, &loaded),
+           "record should load from embedded high-water if companion counter file is missing");
+    expect(loaded.sign_count == high_water,
+           "missing companion counter file must not lower the reserved sign counter");
+}
+
 static void test_store_file_bootstraps_legacy_record_without_embedded_counter_floor(void) {
     Storage storage = {0};
     ZfCredentialRecord loaded = {0};
@@ -557,9 +592,9 @@ static void test_store_file_bootstraps_legacy_record_without_embedded_counter_fl
     record_slot->size = size;
     record_slot->exists = true;
 
-    expect(test_zf_store_record_format_load_record(&storage, k_repeated_credential_file_name,
-                                                   &loaded),
-           "legacy records without embedded counter floors should bootstrap");
+    expect(
+        test_zf_store_record_format_load_record(&storage, k_repeated_credential_file_name, &loaded),
+        "legacy records without embedded counter floors should bootstrap");
     counter_slot = test_storage_file_slot(counter_path, false);
     expect(counter_slot != NULL && counter_slot->exists,
            "legacy record bootstrap should publish a companion counter floor");

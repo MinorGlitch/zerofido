@@ -46,6 +46,10 @@ bool zf_store_record_format_load_record_for_display_with_buffer(Storage *storage
  * It is intentionally narrower than a full record rewrite so response
  * publication can be fail-closed around monotonic counters.
  */
+bool zf_store_record_format_reserve_counter_with_buffer(Storage *storage,
+                                                        const ZfCredentialRecord *record,
+                                                        uint8_t *buffer, size_t buffer_size,
+                                                        uint32_t *out_high_water);
 bool zf_store_record_format_reserve_counter(Storage *storage, const ZfCredentialRecord *record,
                                             uint32_t *out_high_water);
 bool zf_store_record_format_write_record_with_buffer(Storage *storage,

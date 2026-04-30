@@ -334,6 +334,8 @@ bool zf_store_publish_added_record(ZfCredentialStore *store, const ZfCredentialR
 bool zf_store_update_record_with_buffer(Storage *storage, ZfCredentialStore *store,
                                         const ZfCredentialRecord *record, uint8_t *buffer,
                                         size_t buffer_size) {
+    ZfCredentialRecord record_to_write;
+
     if (!store || !store->records || !record || !buffer || buffer_size < ZF_STORE_RECORD_IO_SIZE) {
         return false;
     }
@@ -352,13 +354,20 @@ bool zf_store_update_record_with_buffer(Storage *storage, ZfCredentialStore *sto
             return false;
         }
         if (record->sign_count > counter_high_water &&
-            !zf_store_record_format_reserve_counter(storage, record, &counter_high_water)) {
+            !zf_store_record_format_reserve_counter_with_buffer(storage, record, buffer,
+                                                                buffer_size, &counter_high_water)) {
             return false;
         }
-        if (!zf_store_record_format_write_record_with_buffer(storage, record, buffer,
+        record_to_write = *record;
+        if (counter_high_water > record_to_write.sign_count) {
+            record_to_write.sign_count = counter_high_water;
+        }
+        if (!zf_store_record_format_write_record_with_buffer(storage, &record_to_write, buffer,
                                                              buffer_size)) {
+            zf_crypto_secure_zero(&record_to_write, sizeof(record_to_write));
             return false;
         }
+        zf_crypto_secure_zero(&record_to_write, sizeof(record_to_write));
 
         zf_store_index_entry_from_record(record, &store->records[i]);
         store->records[i].counter_high_water = counter_high_water;
@@ -467,7 +476,9 @@ bool zf_store_load_record_by_index_for_rp_with_buffer(Storage *storage,
 
 bool zf_store_advance_counter(Storage *storage, ZfCredentialStore *store,
                               const ZfCredentialRecord *record) {
+    uint8_t buffer[ZF_STORE_RECORD_IO_SIZE];
     uint32_t counter_high_water = 0;
+    bool ok = false;
 
     if (!store || !store->records || !record) {
         return false;
@@ -481,26 +492,32 @@ bool zf_store_advance_counter(Storage *storage, ZfCredentialStore *store,
             continue;
         }
 
-        if (!zf_store_prepare_counter_advance(storage, entry, record, &counter_high_water)) {
-            return false;
+        if (!zf_store_prepare_counter_advance(storage, entry, record, buffer, sizeof(buffer),
+                                              &counter_high_water)) {
+            goto cleanup;
         }
-        return zf_store_publish_counter_advance(store, record, counter_high_water);
+        ok = zf_store_publish_counter_advance(store, record, counter_high_water);
+        goto cleanup;
     }
 
-    return false;
+cleanup:
+    zf_crypto_secure_zero(buffer, sizeof(buffer));
+    return ok;
 }
 
 bool zf_store_prepare_counter_advance(Storage *storage, const ZfCredentialIndexEntry *entry,
-                                      const ZfCredentialRecord *record,
-                                      uint32_t *out_counter_high_water) {
+                                      const ZfCredentialRecord *record, uint8_t *buffer,
+                                      size_t buffer_size, uint32_t *out_counter_high_water) {
     uint32_t counter_high_water = 0;
 
-    if (!entry || !record || !out_counter_high_water || record->sign_count < entry->sign_count) {
+    if (!entry || !record || !buffer || buffer_size < ZF_STORE_RECORD_IO_SIZE ||
+        !out_counter_high_water || record->sign_count < entry->sign_count) {
         return false;
     }
     counter_high_water = entry->counter_high_water;
     if (record->sign_count > counter_high_water) {
-        if (!zf_store_record_format_reserve_counter(storage, record, &counter_high_water)) {
+        if (!zf_store_record_format_reserve_counter_with_buffer(storage, record, buffer,
+                                                                buffer_size, &counter_high_water)) {
             return false;
         }
     }

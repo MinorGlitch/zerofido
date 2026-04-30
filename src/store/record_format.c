@@ -271,10 +271,9 @@ static bool zf_store_counter_floor_validate(Storage *storage, ZfCredentialRecord
     if (!record) {
         return false;
     }
-    return zf_store_counter_floor_validate_fields(storage, record->file_name, record->credential_id,
-                                                  record->created_at, &record->sign_count,
-                                                  embedded_counter_floor,
-                                                  has_embedded_counter_floor, out_high_water);
+    return zf_store_counter_floor_validate_fields(
+        storage, record->file_name, record->credential_id, record->created_at, &record->sign_count,
+        embedded_counter_floor, has_embedded_counter_floor, out_high_water);
 }
 
 static bool zf_store_counter_floor_validate_index(Storage *storage, const char *file_name,
@@ -285,11 +284,9 @@ static bool zf_store_counter_floor_validate_index(Storage *storage, const char *
     if (!entry) {
         return false;
     }
-    return zf_store_counter_floor_validate_fields(storage, file_name, entry->credential_id,
-                                                  entry->created_at, &entry->sign_count,
-                                                  embedded_counter_floor,
-                                                  has_embedded_counter_floor,
-                                                  out_high_water);
+    return zf_store_counter_floor_validate_fields(
+        storage, file_name, entry->credential_id, entry->created_at, &entry->sign_count,
+        embedded_counter_floor, has_embedded_counter_floor, out_high_water);
 }
 
 static bool zf_record_wrap_hmac_secret(const ZfCredentialRecord *record,
@@ -342,11 +339,15 @@ static bool zf_record_unwrap_hmac_secret(ZfCredentialRecord *record,
     return ok;
 }
 
-bool zf_store_record_format_reserve_counter(Storage *storage, const ZfCredentialRecord *record,
-                                            uint32_t *out_high_water) {
+bool zf_store_record_format_reserve_counter_with_buffer(Storage *storage,
+                                                        const ZfCredentialRecord *record,
+                                                        uint8_t *buffer, size_t buffer_size,
+                                                        uint32_t *out_high_water) {
+    ZfCredentialRecord reserved_record;
     uint32_t high_water = 0;
+    bool ok = false;
 
-    if (!record) {
+    if (!record || !buffer || buffer_size < ZF_STORE_RECORD_MAX_SIZE) {
         return false;
     }
 
@@ -354,10 +355,28 @@ bool zf_store_record_format_reserve_counter(Storage *storage, const ZfCredential
     if (!zf_store_counter_floor_write_value(storage, record, high_water)) {
         return false;
     }
+    reserved_record = *record;
+    reserved_record.sign_count = high_water;
+    ok = zf_store_record_format_write_record_with_buffer(storage, &reserved_record, buffer,
+                                                         buffer_size);
+    zf_crypto_secure_zero(&reserved_record, sizeof(reserved_record));
+    if (!ok) {
+        return false;
+    }
     if (out_high_water) {
         *out_high_water = high_water;
     }
     return true;
+}
+
+bool zf_store_record_format_reserve_counter(Storage *storage, const ZfCredentialRecord *record,
+                                            uint32_t *out_high_water) {
+    uint8_t buffer[ZF_STORE_RECORD_MAX_SIZE];
+    bool ok = zf_store_record_format_reserve_counter_with_buffer(storage, record, buffer,
+                                                                 sizeof(buffer), out_high_water);
+
+    zf_crypto_secure_zero(buffer, sizeof(buffer));
+    return ok;
 }
 
 bool zf_store_record_format_encode(const ZfCredentialRecord *record, uint8_t *out,
@@ -647,8 +666,7 @@ static bool zf_record_decode(const uint8_t *data, size_t data_size, const char *
             const uint8_t *ptr = NULL;
             size_t size = 0;
 
-            if (saw_counter_floor ||
-                !zf_cbor_read_bytes_ptr(&cursor, &ptr, &size) ||
+            if (saw_counter_floor || !zf_cbor_read_bytes_ptr(&cursor, &ptr, &size) ||
                 size != sizeof(ZfCounterFloorFile) || !embedded_counter_floor) {
                 goto cleanup;
             }
