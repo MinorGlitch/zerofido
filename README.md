@@ -19,6 +19,41 @@ Flipper to the phone over USB when the phone accepts USB security keys.
 U2F and FIDO2.0 pass their respective tests in the current FIDO Conformance Tools suite. FIDO2.1
 support is in development. Bug reports, feature requests, and pull requests are welcome.
 
+## Showcase
+
+<table>
+  <tr>
+    <td><img src="docs/screenshots/home-waiting.png" alt="ZeroFIDO waiting for a request" width="400"></td>
+    <td><img src="docs/screenshots/create-passkey.png" alt="ZeroFIDO create passkey approval prompt" width="400"></td>
+    <td><img src="docs/screenshots/credentials-list.png" alt="ZeroFIDO saved credentials list" width="400"></td>
+  </tr>
+  <tr>
+    <td align="center">Waiting for a browser or phone request</td>
+    <td align="center">Approving a new passkey</td>
+    <td align="center">Saved discoverable credentials</td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/passkey-detail.png" alt="ZeroFIDO passkey detail screen" width="400"></td>
+    <td><img src="docs/screenshots/settings.png" alt="ZeroFIDO settings screen" width="400"></td>
+    <td><img src="docs/screenshots/pin-menu.png" alt="ZeroFIDO PIN menu" width="400"></td>
+  </tr>
+  <tr>
+    <td align="center">Passkey details</td>
+    <td align="center">On-device settings</td>
+    <td align="center">PIN management</td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/pin-entry.png" alt="ZeroFIDO PIN entry keyboard" width="400"></td>
+    <td><img src="docs/screenshots/reset-confirm.png" alt="ZeroFIDO reset confirmation" width="400"></td>
+    <td><img src="docs/screenshots/delete-passkey.png" alt="ZeroFIDO delete passkey confirmation" width="400"></td>
+  </tr>
+  <tr>
+    <td align="center">PIN entry on the Flipper</td>
+    <td align="center">Reset confirmation</td>
+    <td align="center">Deleting a saved passkey</td>
+  </tr>
+</table>
+
 ## Quick Start
 
 1. Download a release `.fap` from [GitHub Releases](https://github.com/MinorGlitch/zerofido/releases).
@@ -65,7 +100,7 @@ ZeroFIDO includes an on-device Settings screen.
 | FIDO2 profile | Use FIDO2.0 for normal compatibility. Use FIDO2.1 for experimental testing. |
 | Attestation | Choose how MakeCredential answers attestation requests. |
 | PIN | Set, change, or manage the ClientPIN used by sites that require user verification. |
-| Auto-accept | Test mode for flows that should not require a touch prompt. Keep it off for normal use. |
+| Auto-accept | Test mode for flows that should not require a touch prompt. Only appears when built with `ZEROFIDO_AUTO_ACCEPT_REQUESTS=1`. |
 
 ## Security Model and Limits
 
