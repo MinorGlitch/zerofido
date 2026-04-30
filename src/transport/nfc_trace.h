@@ -100,58 +100,13 @@ static inline void zf_transport_nfc_trace_apdu_tx(const uint8_t *data, size_t da
 }
 
 #else
-static inline void zf_transport_nfc_trace_bind(FuriMessageQueue *queue, FuriThreadId thread_id) {
-    (void)queue;
-    (void)thread_id;
-}
-
-static inline void zf_transport_nfc_trace_unbind(FuriMessageQueue *queue) {
-    (void)queue;
-}
-
-static inline void zf_transport_nfc_trace_drain(FuriMessageQueue *queue) {
-    (void)queue;
-}
-
-static inline void zf_transport_nfc_trace_format(const char *fmt, ...) {
-    (void)fmt;
-}
-
-static inline void zf_transport_nfc_trace_bytes(const char *label, const uint8_t *data,
-                                                size_t data_len) {
-    (void)label;
-    (void)data;
-    (void)data_len;
-}
-
-static inline void zf_transport_nfc_trace_event(const char *event) {
-    (void)event;
-}
-
-static inline void zf_transport_nfc_trace_apdu_header(const char *direction, uint8_t cla,
-                                                      uint8_t ins, uint8_t p1, uint8_t p2,
-                                                      size_t data_len, bool extended, bool chained,
-                                                      bool has_le, size_t le) {
-    (void)direction;
-    (void)cla;
-    (void)ins;
-    (void)p1;
-    (void)p2;
-    (void)data_len;
-    (void)extended;
-    (void)chained;
-    (void)has_le;
-    (void)le;
-}
-
-static inline void zf_transport_nfc_trace_apdu_status(uint16_t status_word) {
-    (void)status_word;
-}
-
-static inline void zf_transport_nfc_trace_apdu_tx(const uint8_t *data, size_t data_len,
-                                                  uint16_t status_word) {
-    (void)data;
-    (void)data_len;
-    (void)status_word;
-}
+#define zf_transport_nfc_trace_bind(...) ((void)0)
+#define zf_transport_nfc_trace_unbind(...) ((void)0)
+#define zf_transport_nfc_trace_drain(...) ((void)0)
+#define zf_transport_nfc_trace_format(...) ((void)0)
+#define zf_transport_nfc_trace_bytes(...) ((void)0)
+#define zf_transport_nfc_trace_event(...) ((void)0)
+#define zf_transport_nfc_trace_apdu_header(...) ((void)0)
+#define zf_transport_nfc_trace_apdu_status(...) ((void)0)
+#define zf_transport_nfc_trace_apdu_tx(...) ((void)0)
 #endif

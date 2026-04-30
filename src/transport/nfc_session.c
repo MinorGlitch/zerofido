@@ -172,14 +172,19 @@ void zf_transport_nfc_teardown_rf_activation_locked(ZfNfcTransportState *state) 
 /* Field loss cancels pending UI, resets ISO state, and clears replay buffers. */
 void zf_transport_nfc_on_disconnect(ZerofidoApp *app) {
     bool canceled = false;
-    ZfNfcTransportState *state = zf_app_nfc_transport_state(app);
+    ZfNfcTransportState *state = NULL;
 
-    if (!app || !state) {
+    if (!app) {
         return;
     }
 
     ZF_NFC_MEM_DIAG("nfc field disconnect before");
     furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
+    state = zf_app_nfc_transport_state(app);
+    if (!state) {
+        furi_mutex_release(app->ui_mutex);
+        return;
+    }
     zf_transport_nfc_teardown_rf_activation_locked(state);
     furi_mutex_release(app->ui_mutex);
 

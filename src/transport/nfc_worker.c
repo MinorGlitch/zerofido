@@ -92,14 +92,23 @@ static void zf_transport_nfc_worker_state_free(ZerofidoApp *app, ZfNfcTransportS
 #endif
 }
 
-static void zf_transport_nfc_signal_worker(ZerofidoApp *app, uint32_t flags) {
+static void zf_transport_nfc_signal_worker(ZerofidoApp *app, uint32_t flags,
+                                           bool caller_holds_ui_mutex) {
+    FuriThread *worker_thread = NULL;
     FuriThreadId id = 0;
 
-    if (!app || !app->worker_thread) {
+    if (!app) {
         return;
     }
 
-    id = furi_thread_get_id(app->worker_thread);
+    if (!caller_holds_ui_mutex) {
+        furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
+    }
+    worker_thread = app->worker_thread;
+    id = worker_thread ? furi_thread_get_id(worker_thread) : 0;
+    if (!caller_holds_ui_mutex) {
+        furi_mutex_release(app->ui_mutex);
+    }
     if (id) {
         furi_thread_flags_set(id, flags);
     }
@@ -207,7 +216,7 @@ bool zf_transport_nfc_wake_request_worker(ZerofidoApp *app, ZfNfcTransportState 
         return false;
     }
 
-    zf_transport_nfc_signal_worker(app, ZF_NFC_WORKER_EVT_REQUEST);
+    zf_transport_nfc_signal_worker(app, ZF_NFC_WORKER_EVT_REQUEST, caller_holds_ui_mutex);
     return true;
 }
 
@@ -326,7 +335,6 @@ int32_t zf_transport_nfc_worker(void *context) {
         }
     }
 
-    zf_transport_nfc_trace_drain(state->trace_queue);
     furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
     state->stopping = true;
     zf_transport_nfc_cancel_current_request_locked(state);
@@ -334,9 +342,14 @@ int32_t zf_transport_nfc_worker(void *context) {
     furi_mutex_release(app->ui_mutex);
     furi_semaphore_release(app->approval.done);
     nfc_listener_stop(state->listener);
+    zf_transport_nfc_trace_drain(state->trace_queue);
     zf_transport_nfc_trace_unbind(state->trace_queue);
     zf_transport_nfc_on_disconnect(app);
-    app->transport_state = NULL;
+    furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
+    if (app->transport_state == state) {
+        app->transport_state = NULL;
+    }
+    furi_mutex_release(app->ui_mutex);
     ZF_NFC_MEM_DIAG("nfc worker stop release before");
     nfc_listener_free(state->listener);
     iso14443_4a_free(state->iso14443_4a_data);
@@ -356,9 +369,10 @@ int32_t zf_transport_nfc_worker(void *context) {
 
 void zf_transport_nfc_stop(ZerofidoApp *app) {
     if (app) {
-        ZfNfcTransportState *state = zf_app_nfc_transport_state(app);
+        ZfNfcTransportState *state = NULL;
 
         furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
+        state = zf_app_nfc_transport_state(app);
         if (state) {
             state->stopping = true;
             zf_transport_nfc_cancel_current_request_locked(state);
@@ -368,7 +382,7 @@ void zf_transport_nfc_stop(ZerofidoApp *app) {
             furi_semaphore_release(app->approval.done);
         }
     }
-    zf_transport_nfc_signal_worker(app, ZF_NFC_WORKER_EVT_STOP);
+    zf_transport_nfc_signal_worker(app, ZF_NFC_WORKER_EVT_STOP, false);
 }
 
 void zf_transport_nfc_send_dispatch_result(ZerofidoApp *app,

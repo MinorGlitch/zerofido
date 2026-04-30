@@ -275,6 +275,7 @@ static NfcCommand zf_transport_nfc_handle_recovery_r_nak_locked(ZerofidoApp *app
                                                                 bool refresh_status) {
     const bool sent = zf_transport_nfc_replay_last_iso_response(state);
 
+    UNUSED(frame_len);
     zf_transport_nfc_trace_bytes("iso-rx", frame, frame_len);
     furi_mutex_release(app->ui_mutex);
     zf_transport_nfc_set_frame_status(sent ? "NFC R-NAK replay" : "NFC R-NAK", frame[0], NULL, 0U);
@@ -508,6 +509,7 @@ static NfcCommand zf_transport_nfc_handle_poll_restart_locked(ZerofidoApp *app,
     state->iso_cid = 0U;
     state->iso4_active = false;
     zf_transport_nfc_note_ui_stage_locked(state, ZfNfcUiStageAppletWaiting);
+    UNUSED(frame_len);
     zf_transport_nfc_trace_bytes("iso3-rx", frame, frame_len);
     furi_mutex_release(app->ui_mutex);
     zf_transport_nfc_set_frame_status("NFC poll restart", frame[0], NULL, 0U);
@@ -691,6 +693,13 @@ NfcCommand zf_transport_nfc_event_callback(NfcGenericEvent event, void *context)
         return NfcCommandStop;
     }
 
+    furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
+    const bool callback_allowed = state->listener_active && !state->stopping;
+    furi_mutex_release(app->ui_mutex);
+    if (!callback_allowed) {
+        return NfcCommandStop;
+    }
+
     if (event.protocol == NfcProtocolIso14443_3a) {
         protocol_3a = true;
         iso3_event = event.event_data;
@@ -698,11 +707,6 @@ NfcCommand zf_transport_nfc_event_callback(NfcGenericEvent event, void *context)
         protocol_4a = true;
         iso4_event = event.event_data;
     } else {
-        return NfcCommandStop;
-    }
-
-    const bool callback_allowed = state->listener_active && !state->stopping;
-    if (!callback_allowed) {
         return NfcCommandStop;
     }
 

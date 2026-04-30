@@ -236,14 +236,27 @@ static bool zf_app_lifecycle_start_worker(ZerofidoApp *app) {
 }
 
 static void zf_app_lifecycle_stop_worker(ZerofidoApp *app) {
-    if (!app->worker_thread) {
+    FuriThread *worker_thread = NULL;
+
+    if (!app || !app->ui_mutex) {
+        return;
+    }
+
+    furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
+    worker_thread = app->worker_thread;
+    furi_mutex_release(app->ui_mutex);
+    if (!worker_thread) {
         return;
     }
 
     zf_transport_stop(app);
-    furi_thread_join(app->worker_thread);
-    furi_thread_free(app->worker_thread);
-    app->worker_thread = NULL;
+    furi_thread_join(worker_thread);
+    furi_mutex_acquire(app->ui_mutex, FuriWaitForever);
+    if (app->worker_thread == worker_thread) {
+        app->worker_thread = NULL;
+    }
+    furi_mutex_release(app->ui_mutex);
+    furi_thread_free(worker_thread);
 }
 
 ZerofidoApp *zf_app_lifecycle_alloc(void) {

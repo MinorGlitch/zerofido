@@ -48,27 +48,51 @@ void zf_transport_nfc_trace_format(const char *fmt, ...) {
 static FuriMessageQueue *zf_nfc_trace_queue = NULL;
 static FuriThreadId zf_nfc_trace_worker_thread_id = 0;
 static uint32_t zf_nfc_trace_dropped = 0U;
+static FuriMutex *zf_nfc_trace_mutex = NULL;
+
+static void zf_transport_nfc_trace_lock(void) {
+    if (zf_nfc_trace_mutex) {
+        furi_mutex_acquire(zf_nfc_trace_mutex, FuriWaitForever);
+    }
+}
+
+static void zf_transport_nfc_trace_unlock(void) {
+    if (zf_nfc_trace_mutex) {
+        furi_mutex_release(zf_nfc_trace_mutex);
+    }
+}
 
 void zf_transport_nfc_trace_bind(FuriMessageQueue *queue, FuriThreadId thread_id) {
+    if (!zf_nfc_trace_mutex) {
+        zf_nfc_trace_mutex = furi_mutex_alloc(FuriMutexTypeNormal);
+    }
+    if (!zf_nfc_trace_mutex) {
+        return;
+    }
+    zf_transport_nfc_trace_lock();
     zf_nfc_trace_queue = queue;
     zf_nfc_trace_worker_thread_id = thread_id;
     zf_nfc_trace_dropped = 0U;
+    zf_transport_nfc_trace_unlock();
 }
 
 void zf_transport_nfc_trace_unbind(FuriMessageQueue *queue) {
+    zf_transport_nfc_trace_lock();
     if (zf_nfc_trace_queue == queue) {
         zf_nfc_trace_queue = NULL;
         zf_nfc_trace_worker_thread_id = 0;
         zf_nfc_trace_dropped = 0U;
     }
+    zf_transport_nfc_trace_unlock();
 }
 
 void zf_transport_nfc_trace_format(const char *fmt, ...) {
-    FuriMessageQueue *queue = zf_nfc_trace_queue;
     ZfNfcTraceRecord record;
+    FuriMessageQueue *queue = NULL;
+    FuriThreadId worker_thread_id = 0;
     va_list args;
 
-    if (!fmt || !queue) {
+    if (!fmt) {
         return;
     }
 
@@ -77,12 +101,21 @@ void zf_transport_nfc_trace_format(const char *fmt, ...) {
     vsnprintf(record.text, sizeof(record.text), fmt, args);
     va_end(args);
 
-    if (furi_message_queue_put(queue, &record, 0U) != FuriStatusOk) {
-        zf_nfc_trace_dropped++;
+    zf_transport_nfc_trace_lock();
+    queue = zf_nfc_trace_queue;
+    worker_thread_id = zf_nfc_trace_worker_thread_id;
+    if (!queue) {
+        zf_transport_nfc_trace_unlock();
         return;
     }
-    if (zf_nfc_trace_worker_thread_id) {
-        furi_thread_flags_set(zf_nfc_trace_worker_thread_id, ZF_NFC_WORKER_EVT_TRACE);
+    if (furi_message_queue_put(queue, &record, 0U) != FuriStatusOk) {
+        zf_nfc_trace_dropped++;
+        zf_transport_nfc_trace_unlock();
+        return;
+    }
+    zf_transport_nfc_trace_unlock();
+    if (worker_thread_id) {
+        furi_thread_flags_set(worker_thread_id, ZF_NFC_WORKER_EVT_TRACE);
     }
 }
 
@@ -94,8 +127,10 @@ void zf_transport_nfc_trace_drain(FuriMessageQueue *queue) {
         return;
     }
 
+    zf_transport_nfc_trace_lock();
     dropped = zf_nfc_trace_dropped;
     zf_nfc_trace_dropped = 0U;
+    zf_transport_nfc_trace_unlock();
     if (dropped > 0U) {
         FURI_LOG_I(ZF_NFC_TRACE_TAG, "trace dropped=%lu", (unsigned long)dropped);
     }
