@@ -15,9 +15,20 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
+#define ZF_CBOR_IMPLEMENTATION
 #include "zerofido_cbor.h"
 
 #include <string.h>
+
+#ifdef zf_cbor_encoder_init
+#undef zf_cbor_encoder_init
+#endif
+#ifdef zf_cbor_encoder_size
+#undef zf_cbor_encoder_size
+#endif
+#ifdef zf_cbor_cursor_init
+#undef zf_cbor_cursor_init
+#endif
 
 enum {
     ZF_CBOR_MAJOR_UINT = 0,

@@ -37,8 +37,29 @@ typedef struct {
  * malformed input by returning false and never allocates; callers enforce each
  * command's map keys and semantic constraints.
  */
+#if defined(ZF_CBOR_IMPLEMENTATION)
 bool zf_cbor_encoder_init(ZfCborEncoder *enc, uint8_t *buf, size_t capacity);
+#else
+static inline bool zf_cbor_encoder_init_inline(ZfCborEncoder *enc, uint8_t *buf, size_t capacity) {
+    if (!enc || !buf || capacity == 0) {
+        return false;
+    }
+
+    enc->buf = buf;
+    enc->capacity = capacity;
+    enc->offset = 0;
+    return true;
+}
+#define zf_cbor_encoder_init(enc, buf, capacity) zf_cbor_encoder_init_inline((enc), (buf), (capacity))
+#endif
+#if defined(ZF_CBOR_IMPLEMENTATION)
 size_t zf_cbor_encoder_size(const ZfCborEncoder *enc);
+#else
+static inline size_t zf_cbor_encoder_size_inline(const ZfCborEncoder *enc) {
+    return enc->offset;
+}
+#define zf_cbor_encoder_size(enc) zf_cbor_encoder_size_inline(enc)
+#endif
 bool zf_cbor_encode_uint(ZfCborEncoder *enc, uint64_t value);
 bool zf_cbor_encode_int(ZfCborEncoder *enc, int64_t value);
 bool zf_cbor_encode_bool(ZfCborEncoder *enc, bool value);
@@ -51,7 +72,16 @@ bool zf_cbor_encode_array(ZfCborEncoder *enc, size_t items);
 bool zf_cbor_encode_p256_cose_key(ZfCborEncoder *enc, int64_t alg, const uint8_t *x, size_t x_size,
                                   const uint8_t *y, size_t y_size);
 
+#if defined(ZF_CBOR_IMPLEMENTATION)
 void zf_cbor_cursor_init(ZfCborCursor *cursor, const uint8_t *data, size_t size);
+#else
+static inline void zf_cbor_cursor_init_inline(ZfCborCursor *cursor, const uint8_t *data,
+                                              size_t size) {
+    cursor->ptr = data;
+    cursor->end = data + size;
+}
+#define zf_cbor_cursor_init(cursor, data, size) zf_cbor_cursor_init_inline((cursor), (data), (size))
+#endif
 bool zf_cbor_read_uint(ZfCborCursor *cursor, uint64_t *value);
 bool zf_cbor_read_int(ZfCborCursor *cursor, int64_t *value);
 bool zf_cbor_read_bool(ZfCborCursor *cursor, bool *value);
