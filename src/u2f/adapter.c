@@ -23,6 +23,7 @@
 #include "apdu.h"
 #include "session.h"
 #include "persistence.h"
+#include "status.h"
 #include "../zerofido_app_i.h"
 #include "../zerofido_attestation.h"
 #include "../zerofido_crypto.h"
@@ -33,21 +34,14 @@
 #define ZF_U2F_REGISTER_REQ_LEN 71
 #define ZF_U2F_APP_ID_OFFSET 39
 #define ZF_U2F_APP_ID_SIZE 32
-#define ZF_U2F_VERSION_RESPONSE_LEN 8
+#define ZF_U2F_VERSION_RESPONSE_LEN 8U
 
-static const uint8_t zf_u2f_adapter_state_user_missing[] = {0x69, 0x85};
-static const uint8_t zf_u2f_adapter_state_wrong_length[] = {0x67, 0x00};
-static const uint8_t zf_u2f_adapter_state_not_supported[] = {0x6D, 0x00};
-static const uint8_t zf_u2f_adapter_version_response[] = {'U', '2', 'F', '_', 'V', '2', 0x90, 0x00};
-
-static uint16_t zf_u2f_adapter_reply_status(uint8_t *response, const uint8_t status[2]) {
-    memcpy(response, status, 2);
-    return 2;
-}
+static const uint8_t zf_u2f_adapter_version_response[] = {'U', '2', 'F', '_',
+                                                          'V', '2', 0x90, 0x00};
 
 static uint16_t zf_u2f_adapter_reply_version(uint8_t *response, size_t response_capacity) {
-    if (response_capacity < sizeof(zf_u2f_adapter_version_response)) {
-        return zf_u2f_adapter_reply_status(response, zf_u2f_adapter_state_wrong_length);
+    if (response_capacity < ZF_U2F_VERSION_RESPONSE_LEN) {
+        return zf_u2f_write_status(response, ZF_U2F_SW_WRONG_LENGTH);
     }
 
     memcpy(response, zf_u2f_adapter_version_response, sizeof(zf_u2f_adapter_version_response));
@@ -232,7 +226,7 @@ size_t zf_u2f_adapter_handle_msg(ZerofidoApp *app, ZfTransportSessionId session_
         return 0;
     }
     if (request_len > UINT16_MAX) {
-        return zf_u2f_adapter_reply_status(response, zf_u2f_adapter_state_wrong_length);
+        return zf_u2f_write_status(response, ZF_U2F_SW_WRONG_LENGTH);
     }
 
     validation_status = u2f_validate_request_into_response(request, (uint16_t)request_len, response,
@@ -241,7 +235,7 @@ size_t zf_u2f_adapter_handle_msg(ZerofidoApp *app, ZfTransportSessionId session_
         return validation_status;
     }
     if (request_len > response_capacity) {
-        return zf_u2f_adapter_reply_status(response, zf_u2f_adapter_state_wrong_length);
+        return zf_u2f_write_status(response, ZF_U2F_SW_WRONG_LENGTH);
     }
     if (request[1] == U2F_CMD_VERSION && !zf_u2f_adapter_is_available(app)) {
         return zf_u2f_adapter_reply_version(response, response_capacity);
@@ -251,15 +245,13 @@ size_t zf_u2f_adapter_handle_msg(ZerofidoApp *app, ZfTransportSessionId session_
         memcpy(response, request, request_len);
     }
     if (!zf_u2f_adapter_ensure_init(app)) {
-        return zf_u2f_adapter_reply_status(response, zf_u2f_adapter_state_not_supported);
+        return zf_u2f_write_status(response, ZF_U2F_SW_INS_NOT_SUPPORTED);
     }
     if (response_capacity < ZF_U2F_VERSION_RESPONSE_LEN) {
         return 0;
     }
     if (!zf_u2f_request_approval(app, session_id, response, (uint16_t)request_len)) {
-        memcpy(response, zf_u2f_adapter_state_user_missing,
-               sizeof(zf_u2f_adapter_state_user_missing));
-        return sizeof(zf_u2f_adapter_state_user_missing);
+        return zf_u2f_write_status(response, ZF_U2F_SW_CONDITIONS_NOT_SATISFIED);
     }
 
     validation_status =

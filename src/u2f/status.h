@@ -17,22 +17,19 @@
 
 #pragma once
 
-#include <stdbool.h>
 #include <stdint.h>
 
-#include "common.h"
-#include "session.h"
-#include "status.h"
+#define ZF_U2F_STATUS_SIZE 2U
 
-/* Private U2F runtime state shared by session, response, and persistence code. */
-typedef struct U2fData {
-    uint8_t device_key[U2F_EC_KEY_SIZE];
-    uint8_t cert_key[U2F_EC_KEY_SIZE];
-    uint32_t counter;
-    uint32_t counter_high_water;
-    bool cert_ready;
-    bool ready;
-    bool user_present;
-    U2fEvtCallback callback;
-    void *context;
-} U2fData;
+#define ZF_U2F_SW_NO_ERROR 0x9000U
+#define ZF_U2F_SW_WRONG_LENGTH 0x6700U
+#define ZF_U2F_SW_CONDITIONS_NOT_SATISFIED 0x6985U
+#define ZF_U2F_SW_WRONG_DATA 0x6A80U
+#define ZF_U2F_SW_INS_NOT_SUPPORTED 0x6D00U
+#define ZF_U2F_SW_CLA_NOT_SUPPORTED 0x6E00U
+
+static inline uint16_t zf_u2f_write_status(uint8_t *buf, uint16_t status) {
+    buf[0] = (uint8_t)(status >> 8);
+    buf[1] = (uint8_t)status;
+    return ZF_U2F_STATUS_SIZE;
+}

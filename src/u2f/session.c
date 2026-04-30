@@ -126,7 +126,7 @@ uint16_t u2f_msg_parse(U2fData *U2F, uint8_t *buf, uint16_t request_len,
     if (!U2F->ready)
         return 0;
     if (response_capacity < 2) {
-        return zf_u2f_reply_status(buf, zf_u2f_state_wrong_length);
+        return zf_u2f_write_status(buf, ZF_U2F_SW_WRONG_LENGTH);
     }
 
     uint16_t validation_status = u2f_validate_request(buf, request_len);
@@ -141,14 +141,14 @@ uint16_t u2f_msg_parse(U2fData *U2F, uint8_t *buf, uint16_t request_len,
         return zf_u2f_encode_authenticate_response(U2F, buf, request_len, response_capacity);
 
     } else if (buf[1] == U2F_CMD_VERSION) { // Get U2F version string
-        if (response_capacity < 6 + sizeof(zf_u2f_state_no_error)) {
-            return zf_u2f_reply_status(buf, zf_u2f_state_wrong_length);
+        if (response_capacity < 6 + ZF_U2F_STATUS_SIZE) {
+            return zf_u2f_write_status(buf, ZF_U2F_SW_WRONG_LENGTH);
         }
         memcpy(&buf[0], ver_str, 6);
-        memcpy(&buf[6], zf_u2f_state_no_error, sizeof(zf_u2f_state_no_error));
+        zf_u2f_write_status(&buf[6], ZF_U2F_SW_NO_ERROR);
         return 8;
     } else {
-        return zf_u2f_reply_status(buf, zf_u2f_state_not_supported);
+        return zf_u2f_write_status(buf, ZF_U2F_SW_INS_NOT_SUPPORTED);
     }
     return 0;
 }
