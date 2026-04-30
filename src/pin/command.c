@@ -95,11 +95,6 @@ static void zf_pin_log_result(const char *tag, uint8_t status) {
 #define ZF_PIN_DIAG(...)                                                                           \
     do {                                                                                           \
     } while (false)
-
-static void zf_pin_log_result(const char *tag, uint8_t status) {
-    (void)tag;
-    (void)status;
-}
 #endif
 
 #if ZF_RELEASE_DIAGNOSTICS
@@ -120,7 +115,9 @@ uint8_t zerofido_pin_handle_command_with_session(ZerofidoApp *app, ZfTransportSe
     ZfResolvedCapabilities capabilities;
     ZfClientPinRequest *parsed = NULL;
     ZfClientPinState *state = NULL;
+#if ZF_RELEASE_DIAGNOSTICS
     const char *diagnostic_tag = "CP-PARSE";
+#endif
     bool pin_set_before = false;
     uint8_t status = ZF_CTAP_ERR_OTHER;
 
@@ -136,12 +133,16 @@ uint8_t zerofido_pin_handle_command_with_session(ZerofidoApp *app, ZfTransportSe
     if (status != ZF_CTAP_SUCCESS) {
         goto cleanup;
     }
+#if ZF_RELEASE_DIAGNOSTICS
     diagnostic_tag = zerofido_pin_subcommand_tag(parsed->subcommand);
     ZF_PIN_DIAG("cmd=%s parsed", diagnostic_tag);
+#endif
     zf_pin_snapshot_state(app, state);
     pin_set_before = state->pin_set;
+#if ZF_RELEASE_DIAGNOSTICS
     ZF_PIN_DIAG("cmd=%s state pin=%u retries=%u block=%u", diagnostic_tag, state->pin_set ? 1U : 0U,
                 (unsigned)state->pin_retries, state->pin_auth_blocked ? 1U : 0U);
+#endif
     zf_runtime_get_effective_capabilities(app, &capabilities);
     if (parsed->has_pin_protocol && parsed->pin_protocol == ZF_PIN_PROTOCOL_V2 &&
         !capabilities.pin_uv_auth_protocol_2_enabled) {
@@ -184,7 +185,9 @@ uint8_t zerofido_pin_handle_command_with_session(ZerofidoApp *app, ZfTransportSe
         zf_runtime_config_refresh_capabilities(app);
     }
 cleanup:
+#if ZF_RELEASE_DIAGNOSTICS
     zf_pin_log_result(diagnostic_tag, status);
+#endif
     zf_crypto_secure_zero(scratch, sizeof(*scratch));
     zf_app_command_scratch_release(app);
     return status;

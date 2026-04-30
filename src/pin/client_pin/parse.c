@@ -144,6 +144,7 @@ uint8_t zf_client_pin_parse_request(const uint8_t *data, size_t size, ZfClientPi
     return ZF_CTAP_SUCCESS;
 }
 
+#if ZF_RELEASE_DIAGNOSTICS
 /* Short diagnostic labels keep host conformance output compact and searchable. */
 const char *zerofido_pin_subcommand_tag(uint64_t subcommand) {
     switch (subcommand) {
@@ -163,3 +164,4 @@ const char *zerofido_pin_subcommand_tag(uint64_t subcommand) {
         return "CP-UK";
     }
 }
+#endif

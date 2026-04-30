@@ -73,7 +73,9 @@ uint8_t zerofido_pin_handle_command_with_session(ZerofidoApp *app, ZfTransportSe
                                                  const uint8_t *request, size_t request_len,
                                                  uint8_t *out, size_t out_capacity,
                                                  size_t *out_len);
+#if ZF_RELEASE_DIAGNOSTICS
 const char *zerofido_pin_subcommand_tag(uint64_t subcommand);
+#endif
 uint8_t zerofido_pin_require_auth(Storage *storage, ZfClientPinState *state, bool uv_requested,
                                   bool has_pin_auth,
                                   const uint8_t client_data_hash[ZF_CLIENT_DATA_HASH_LEN],

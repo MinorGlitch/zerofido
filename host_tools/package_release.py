@@ -18,6 +18,25 @@ import check_symbol_gate
 
 ROOT = Path(__file__).resolve().parents[1]
 
+FORBIDDEN_RELEASE_PATTERNS = {
+    b"ZeroFIDO:CTAP": "CTAP diagnostics log tag",
+    b"ZeroFIDO:MEM": "memory telemetry log tag",
+    b"ZeroFIDO:NFC": "NFC diagnostics log tag",
+    b"cmd=": "diagnostic command log text",
+    b"trace dropped": "NFC trace buffer log text",
+    b"idle heartbeat": "idle telemetry log text",
+    b"redacted": "redacted diagnostic payload marker",
+    b"CP-RT": "ClientPIN diagnostic tag",
+    b"CP-GA": "ClientPIN diagnostic tag",
+    b"CP-SP": "ClientPIN diagnostic tag",
+    b"CP-CH": "ClientPIN diagnostic tag",
+    b"CP-TK": "ClientPIN diagnostic tag",
+    b"CP-PT": "ClientPIN diagnostic tag",
+    b"CP-UK": "ClientPIN diagnostic tag",
+    b"ZeroFIDO Root CA": "dev attestation root certificate",
+    b"ZeroFIDO Software Authenticator": "dev attestation leaf certificate",
+}
+
 
 def _root_relative(path: Path) -> Path:
     """Resolve CLI paths relative to the repository root unless already absolute."""
@@ -55,16 +74,38 @@ def run_ufbt() -> None:
     subprocess.run([sys.executable, "-m", "ufbt"], cwd=ROOT, check=True, env=env)
 
 
+def validate_release_payload(fap: Path) -> list[str]:
+    """Return forbidden release payload markers found in a packaged FAP."""
+    data = fap.read_bytes()
+    return [
+        f"{description}: {pattern.decode('ascii', errors='replace')}"
+        for pattern, description in FORBIDDEN_RELEASE_PATTERNS.items()
+        if pattern in data
+    ]
+
+
 def package_release(fap: Path, output_fap: Path, *, skip_build: bool) -> int:
-    """Build if requested, then enforce the release FAP symbol budget."""
+    """Build if requested, then enforce release FAP symbol and payload gates."""
     if not skip_build:
         run_ufbt()
 
-    return check_symbol_gate.check_fap_symbol_budget(
+    output = _root_relative(output_fap)
+    status = check_symbol_gate.check_fap_symbol_budget(
         _root_relative(fap),
         fix=False,
-        output_fap=_root_relative(output_fap),
+        output_fap=output,
     )
+    if status != 0:
+        return status
+
+    violations = validate_release_payload(output)
+    if violations:
+        print("release payload gate failed")
+        for item in violations:
+            print(f"  - {item}")
+        return 1
+
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
