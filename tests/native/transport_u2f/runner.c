@@ -1981,6 +1981,7 @@ int main(void) {
     test_transport_reclaims_lru_cid_when_table_is_full();
     test_transport_allocate_cid_reclaims_lru_when_table_is_full();
     test_transport_cancel_marks_processing_request_without_pending_approval();
+    test_transport_cancel_from_other_cid_does_not_cancel_pending_approval();
     test_transport_active_other_cid_short_init_returns_busy();
     test_transport_processing_other_cid_short_init_returns_busy();
     test_transport_processing_broadcast_init_recovers_channel();

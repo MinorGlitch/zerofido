@@ -556,8 +556,8 @@ static bool zf_transport_handle_init_command(const ZerofidoApp *app, ZfTransport
         }
         if (transport->processing && transport->cmd == ZF_CTAPHID_CBOR && cid == transport->cid) {
             transport->processing_cancel_requested = true;
+            zf_transport_add_action(actions, ZF_TRANSPORT_ACTION_CANCEL_PENDING_INTERACTION);
         }
-        zf_transport_add_action(actions, ZF_TRANSPORT_ACTION_CANCEL_PENDING_INTERACTION);
         return true;
     }
     if (cmd == ZF_CTAPHID_LOCK) {

@@ -69,6 +69,33 @@ static void test_transport_cancel_marks_processing_request_without_pending_appro
            "polling should surface a previously latched cancel request");
 }
 
+static void test_transport_cancel_from_other_cid_does_not_cancel_pending_approval(void) {
+    ZerofidoApp app = {0};
+    ZfTransportState transport = {0};
+    uint8_t cancel_packet[7] = {0};
+    uint32_t other_cid = 0xAABBCCDDU;
+    uint32_t actions = 0;
+
+    test_reset();
+    app.transport_state = &transport;
+    transport.processing = true;
+    transport.cmd = ZF_CTAPHID_CBOR;
+    transport.cid = 0x01020304U;
+
+    memcpy(cancel_packet, &other_cid, sizeof(other_cid));
+    cancel_packet[4] = ZF_CTAPHID_CANCEL;
+
+    expect(zf_transport_handle_init_command(&app, &transport, other_cid, ZF_CTAPHID_CANCEL, 0,
+                                            cancel_packet, sizeof(cancel_packet), &actions),
+           "non-matching CANCEL should be handled without affecting the active channel");
+    expect(!transport.processing_cancel_requested,
+           "non-matching CANCEL should not cancel the active CBOR request");
+    expect((actions & ZF_TRANSPORT_ACTION_CANCEL_PENDING_INTERACTION) == 0,
+           "non-matching CANCEL should not dismiss another channel's pending approval");
+    expect(zf_transport_usb_hid_poll_cbor_control(&app, transport.cid) == ZF_CTAP_SUCCESS,
+           "active channel should not observe cancel from another CID");
+}
+
 static void test_transport_active_other_cid_short_init_returns_busy(void) {
     ZerofidoApp app = {0};
     ZfTransportState transport = {0};
