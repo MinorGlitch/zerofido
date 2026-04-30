@@ -31,6 +31,7 @@
 
 #include "../zerofido_types.h"
 #include "dispatch.h"
+#include "nfc_protocol.h"
 #include "nfc_trace.h"
 
 #define ZF_NFC_WORKER_EVT_STOP (1U << 0)
@@ -99,18 +100,30 @@ typedef struct {
     bool post_success_probe_sleep_active;
     bool iso_cid_present;
     bool rx_chain_last_valid;
+    bool rx_complete_last_valid;
+    bool rx_complete_last_cid_present;
+    bool last_tx_preserved_replay;
+    bool rx_complete_last_response_preserves_replay;
     uint8_t iso4_tx_frame[ZF_NFC_TX_FRAME_CAPACITY];
+    uint8_t iso4_last_tx[ZF_NFC_LAST_TX_CAPACITY];
+    uint8_t rx_complete_last_payload[ZF_NFC_MAX_RX_FRAME_INF_SIZE];
+    uint8_t rx_complete_last_response[ZF_NFC_LAST_TX_CAPACITY];
     const uint8_t *iso4_tx_chain_data;
     uint8_t iso_pcb;
     uint8_t iso_cid;
     uint8_t desfire_probe_frame;
     uint8_t rx_chain_last_pcb;
+    uint8_t rx_complete_last_pcb;
+    uint8_t rx_complete_last_cid;
+    uint8_t rx_complete_last_iso_pcb;
     uint8_t rx_chain_duplicate_count;
     size_t iso4_last_tx_len;
     size_t iso4_tx_chain_len;
     size_t iso4_tx_chain_offset;
     size_t rx_chain_last_offset;
     size_t rx_chain_last_len;
+    size_t rx_complete_last_len;
+    size_t rx_complete_last_response_len;
     size_t request_len;
     size_t response_len;
     size_t response_offset;

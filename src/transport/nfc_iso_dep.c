@@ -90,14 +90,14 @@ static void zf_transport_nfc_trace_cache_state(const char *event, const ZfNfcTra
 
 static void zf_transport_nfc_cache_last_iso_response(ZfNfcTransportState *state,
                                                      const uint8_t *data, size_t data_len) {
-    if (!state || (!data && data_len > 0U) || data_len > sizeof(state->iso4_tx_frame)) {
+    if (!state || (!data && data_len > 0U) || data_len > sizeof(state->iso4_last_tx)) {
         zf_transport_nfc_trace_cache_state("skip", state, data && data_len > 0U ? data[0] : 0U,
                                            data_len);
         return;
     }
 
     if (data_len > 0U) {
-        memmove(state->iso4_tx_frame, data, data_len);
+        memmove(state->iso4_last_tx, data, data_len);
     }
     state->iso4_last_tx_len = data_len;
     state->iso4_last_tx_valid = true;
@@ -131,7 +131,7 @@ static void zf_transport_nfc_snapshot_replay(ZfNfcTransportState *state,
 
     snapshot->iso4_last_tx_valid = state->iso4_last_tx_valid;
     snapshot->iso4_last_tx_len = state->iso4_last_tx_len;
-    memcpy(snapshot->iso4_last_tx, state->iso4_tx_frame, sizeof(snapshot->iso4_last_tx));
+    memcpy(snapshot->iso4_last_tx, state->iso4_last_tx, sizeof(snapshot->iso4_last_tx));
 }
 
 static void zf_transport_nfc_restore_replay(ZfNfcTransportState *state,
@@ -142,7 +142,7 @@ static void zf_transport_nfc_restore_replay(ZfNfcTransportState *state,
 
     state->iso4_last_tx_valid = snapshot->iso4_last_tx_valid;
     state->iso4_last_tx_len = snapshot->iso4_last_tx_len;
-    memcpy(state->iso4_tx_frame, snapshot->iso4_last_tx, sizeof(state->iso4_tx_frame));
+    memcpy(state->iso4_last_tx, snapshot->iso4_last_tx, sizeof(state->iso4_last_tx));
 }
 
 static bool zf_transport_nfc_snapshot_has_replay(const ZfNfcReplaySnapshot *snapshot) {
@@ -171,6 +171,7 @@ bool zf_transport_nfc_send_frame(ZfNfcTransportState *state, const uint8_t *data
     iso14443_crc_append(Iso14443CrcTypeA, state->tx_buffer);
     const bool sent = nfc_listener_tx(state->nfc, state->tx_buffer) == NfcErrorNone;
     if (sent) {
+        state->last_tx_preserved_replay = false;
         if (zf_transport_nfc_is_replayable_iso_i_response(tx_data, data_len)) {
             zf_transport_nfc_cache_last_iso_response(state, tx_data, data_len);
         }
@@ -256,6 +257,9 @@ bool zf_transport_nfc_send_iso_response_preserving_replay(ZfNfcTransportState *s
     if (restore_replay) {
         zf_transport_nfc_restore_replay(state, &snapshot);
     }
+    if (sent) {
+        state->last_tx_preserved_replay = true;
+    }
     return sent;
 }
 
@@ -309,7 +313,7 @@ void zf_transport_nfc_clear_last_iso_response(ZfNfcTransportState *state) {
     had_cached_response = state->iso4_last_tx_valid || state->iso4_last_tx_len > 0U;
     state->iso4_last_tx_valid = false;
     state->iso4_last_tx_len = 0U;
-    memset(state->iso4_tx_frame, 0, sizeof(state->iso4_tx_frame));
+    memset(state->iso4_last_tx, 0, sizeof(state->iso4_last_tx));
     if (had_cached_response) {
         zf_transport_nfc_trace_cache_state("clear", state, 0U, 0U);
     }
@@ -327,12 +331,12 @@ bool zf_transport_nfc_replay_last_iso_response(ZfNfcTransportState *state) {
     }
 
     if (state->iso4_last_tx_valid && state->iso4_last_tx_len > 0U &&
-        state->iso4_last_tx_len <= sizeof(state->iso4_tx_frame)) {
+        state->iso4_last_tx_len <= sizeof(state->iso4_last_tx)) {
         bool sent = false;
 
-        sent = zf_transport_nfc_send_frame(state, state->iso4_tx_frame, state->iso4_last_tx_len);
+        sent = zf_transport_nfc_send_frame(state, state->iso4_last_tx, state->iso4_last_tx_len);
         zf_transport_nfc_trace_cache_state(sent ? "replay-array" : "replay-array-fail", state,
-                                           state->iso4_tx_frame[0], state->iso4_last_tx_len);
+                                           state->iso4_last_tx[0], state->iso4_last_tx_len);
         return sent;
     }
 
@@ -497,6 +501,9 @@ bool zf_transport_nfc_send_apdu_payload_preserving_replay(ZfNfcTransportState *s
     sent = zf_transport_nfc_send_apdu_payload(state, data, data_len, status_word);
     if (restore_replay) {
         zf_transport_nfc_restore_replay(state, &snapshot);
+    }
+    if (sent) {
+        state->last_tx_preserved_replay = true;
     }
     return sent;
 }

@@ -193,6 +193,172 @@ static void test_nfc_iso4_listener_event_decodes_block_and_sends_framed_response
     test_nfc_deinit_app(&app);
 }
 
+static void test_nfc_iso4_duplicate_complete_i_block_replays_response(void) {
+    ZerofidoApp app;
+    FuriMutex mutex = {0};
+    Iso14443_4aListener listener = {0};
+    BitBuffer *buffer = bit_buffer_alloc(32U);
+    Iso14443_4aListenerEventData event_data = {.buffer = buffer};
+    Iso14443_4aListenerEvent listener_event = {
+        .type = Iso14443_4aListenerEventTypeReceivedData,
+        .data = &event_data,
+    };
+    NfcGenericEvent event = {
+        .protocol = NfcProtocolIso14443_4a,
+        .instance = &listener,
+        .event_data = &listener_event,
+    };
+    static const uint8_t select_block[] = {0x02, 0x00, 0xA4, 0x04, 0x00, 0x08, 0xA0,
+                                           0x00, 0x00, 0x06, 0x47, 0x2F, 0x00, 0x01};
+    uint8_t cached_response[sizeof(g_last_nfc_tx)] = {0};
+    size_t cached_response_len = 0U;
+    ZfTransportSessionId selected_session_id = 0U;
+
+    test_reset();
+    test_nfc_init_app(&app, &mutex);
+
+    bit_buffer_append_bytes(buffer, select_block, sizeof(select_block));
+    expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
+           "initial complete I-block should dispatch the SELECT APDU");
+    expect(app.transport_nfc_state_storage.applet_selected,
+           "initial complete I-block should select the FIDO applet");
+    selected_session_id = app.transport_nfc_state_storage.session_id;
+    cached_response_len = g_last_nfc_tx_len;
+    memcpy(cached_response, g_last_nfc_tx, cached_response_len);
+
+    bit_buffer_reset(buffer);
+    bit_buffer_append_bytes(buffer, select_block, sizeof(select_block));
+    expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
+           "duplicate complete I-block should be handled as an ISO-DEP retransmission");
+    expect(app.transport_nfc_state_storage.session_id == selected_session_id,
+           "duplicate complete I-block should not re-dispatch the SELECT APDU");
+    expect(g_nfc_tx_count == 2U,
+           "duplicate complete I-block should only transmit the replayed response");
+    expect(g_last_nfc_tx_len == cached_response_len &&
+               memcmp(g_last_nfc_tx, cached_response, cached_response_len) == 0,
+           "duplicate complete I-block should replay the cached response byte-for-byte");
+    expect(test_log_contains("NFC I-dup replay"),
+           "duplicate complete I-block should leave a replay diagnostic breadcrumb");
+
+    bit_buffer_free(buffer);
+    test_nfc_deinit_app(&app);
+}
+
+static void test_nfc_iso4_duplicate_final_chain_block_replays_response(void) {
+    ZerofidoApp app;
+    FuriMutex mutex = {0};
+    Iso14443_4aListener listener = {0};
+    BitBuffer *buffer = bit_buffer_alloc(32U);
+    Iso14443_4aListenerEventData event_data = {.buffer = buffer};
+    Iso14443_4aListenerEvent listener_event = {
+        .type = Iso14443_4aListenerEventTypeReceivedData,
+        .data = &event_data,
+    };
+    NfcGenericEvent event = {
+        .protocol = NfcProtocolIso14443_4a,
+        .instance = &listener,
+        .event_data = &listener_event,
+    };
+    static const uint8_t select_first[] = {0x12, 0x00, 0xA4, 0x04, 0x00, 0x08};
+    static const uint8_t select_final[] = {0x03, 0xA0, 0x00, 0x00, 0x06,
+                                           0x47, 0x2F, 0x00, 0x01};
+    uint8_t cached_response[sizeof(g_last_nfc_tx)] = {0};
+    size_t cached_response_len = 0U;
+    ZfTransportSessionId selected_session_id = 0U;
+
+    test_reset();
+    test_nfc_init_app(&app, &mutex);
+
+    bit_buffer_append_bytes(buffer, select_first, sizeof(select_first));
+    expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
+           "first chained I-block should be acknowledged");
+    expect(app.transport_nfc_state_storage.command_chain_active,
+           "first chained I-block should leave an RX chain active");
+
+    bit_buffer_reset(buffer);
+    bit_buffer_append_bytes(buffer, select_final, sizeof(select_final));
+    expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
+           "terminal chained I-block should dispatch the assembled SELECT APDU");
+    expect(app.transport_nfc_state_storage.applet_selected,
+           "terminal chained I-block should select the FIDO applet");
+    selected_session_id = app.transport_nfc_state_storage.session_id;
+    cached_response_len = g_last_nfc_tx_len;
+    memcpy(cached_response, g_last_nfc_tx, cached_response_len);
+
+    bit_buffer_reset(buffer);
+    bit_buffer_append_bytes(buffer, select_final, sizeof(select_final));
+    expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
+           "duplicate terminal chained I-block should replay the assembled response");
+    expect(app.transport_nfc_state_storage.session_id == selected_session_id,
+           "duplicate terminal chained I-block should not re-dispatch the assembled APDU");
+    expect(g_last_nfc_tx_len == cached_response_len &&
+               memcmp(g_last_nfc_tx, cached_response, cached_response_len) == 0,
+           "duplicate terminal chained I-block should replay the cached response byte-for-byte");
+
+    bit_buffer_free(buffer);
+    test_nfc_deinit_app(&app);
+}
+
+static void test_nfc_duplicate_i_block_preserves_tx_chain_pcb(void) {
+    ZerofidoApp app;
+    FuriMutex mutex = {0};
+    Iso14443_4aListener listener = {0};
+    BitBuffer *buffer = bit_buffer_alloc(80U);
+    Iso14443_4aListenerEventData event_data = {.buffer = buffer};
+    Iso14443_4aListenerEvent listener_event = {
+        .type = Iso14443_4aListenerEventTypeReceivedData,
+        .data = &event_data,
+    };
+    NfcGenericEvent event = {
+        .protocol = NfcProtocolIso14443_4a,
+        .instance = &listener,
+        .event_data = &listener_event,
+    };
+    uint8_t ctap2_block[48] = {0x02, 0x80, 0x10, 0x00, 0x00, 0x00,
+                               0x00, 0x28, ZfCtapeCmdClientPin};
+    const size_t response_len = ZF_NFC_MAX_TX_FRAME_INF_SIZE + 50U;
+    uint8_t first_response[sizeof(g_last_nfc_tx)] = {0};
+    size_t first_response_len = 0U;
+    uint8_t first_pcb = 0U;
+
+    test_reset();
+    test_nfc_init_app(&app, &mutex);
+    test_nfc_select_applet(&app);
+    g_ctap2_large_response_len = response_len;
+    for (size_t i = 9U; i < sizeof(ctap2_block); ++i) {
+        ctap2_block[i] = (uint8_t)i;
+    }
+
+    bit_buffer_append_bytes(buffer, ctap2_block, sizeof(ctap2_block));
+    expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
+           "complete I-block should start a chained CTAP2 response");
+    expect(app.transport_nfc_state_storage.iso4_tx_chain_active,
+           "large CTAP2 response should leave an ISO-DEP TX chain active");
+    expect((g_last_nfc_tx[0] & ZF_NFC_PCB_CHAIN) != 0U,
+           "large CTAP2 response should send a chained first response block");
+    first_pcb = g_last_nfc_tx[0];
+    first_response_len = g_last_nfc_tx_len;
+    memcpy(first_response, g_last_nfc_tx, first_response_len);
+
+    bit_buffer_reset(buffer);
+    bit_buffer_append_bytes(buffer, ctap2_block, sizeof(ctap2_block));
+    expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
+           "duplicate complete I-block should replay the first chained response");
+    expect(g_last_nfc_tx_len == first_response_len &&
+               memcmp(g_last_nfc_tx, first_response, first_response_len) == 0,
+           "duplicate complete I-block should replay the first chained response byte-for-byte");
+
+    bit_buffer_reset(buffer);
+    bit_buffer_append_bytes(buffer, (const uint8_t[]){0xA3U}, 1U);
+    expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
+           "R-ACK after duplicate replay should advance the queued TX chain");
+    expect(g_last_nfc_tx[0] != first_pcb,
+           "R-ACK after duplicate replay should use the next response block number");
+
+    bit_buffer_free(buffer);
+    test_nfc_deinit_app(&app);
+}
+
 static void test_nfc_iso4_listener_raw60_returns_unsupported_via_send_block(void) {
     ZerofidoApp app;
     FuriMutex mutex = {0};
@@ -524,6 +690,37 @@ static void test_nfc_3a_r_nak_replays_last_iso_response(void) {
            "R-NAK replay should expose the reader PCB breadcrumb");
 
     bit_buffer_free(buffer);
+    test_nfc_deinit_app(&app);
+}
+
+static void test_nfc_control_frame_does_not_corrupt_cached_replay(void) {
+    ZerofidoApp app;
+    FuriMutex mutex = {0};
+    static const uint8_t response[] = {0x01, 0xA0};
+    uint8_t cached_response[sizeof(g_last_nfc_tx)] = {0};
+    size_t cached_response_len = 0U;
+
+    test_reset();
+    test_nfc_init_app(&app, &mutex);
+
+    expect(zf_transport_nfc_send_apdu_payload(&app.transport_nfc_state_storage, response,
+                                              sizeof(response), ZF_NFC_SW_SUCCESS),
+           "test should prime a cached ISO-DEP response");
+    cached_response_len = g_last_nfc_tx_len;
+    memcpy(cached_response, g_last_nfc_tx, cached_response_len);
+
+    expect(zf_transport_nfc_send_r_ack(&app.transport_nfc_state_storage, 0x02),
+           "test should send a non-replayable control frame after the cached response");
+    expect(g_last_nfc_tx_len != cached_response_len ||
+               memcmp(g_last_nfc_tx, cached_response, cached_response_len) != 0,
+           "control frame should replace the physical TX frame");
+
+    expect(zf_transport_nfc_replay_last_iso_response(&app.transport_nfc_state_storage),
+           "cached replay should survive an intervening control frame");
+    expect(g_last_nfc_tx_len == cached_response_len &&
+               memcmp(g_last_nfc_tx, cached_response, cached_response_len) == 0,
+           "cached replay should not resend the intervening control frame");
+
     test_nfc_deinit_app(&app);
 }
 
@@ -1107,7 +1304,7 @@ static void test_nfc_cache_last_iso_response_handles_frame_buffer_alias(void) {
     expect(app.transport_nfc_state_storage.iso4_last_tx_valid &&
                app.transport_nfc_state_storage.iso4_last_tx_len == sizeof(frame),
            "last ISO response cache should keep the aliased frame length");
-    expect(memcmp(app.transport_nfc_state_storage.iso4_tx_frame, frame, sizeof(frame)) == 0,
+    expect(memcmp(app.transport_nfc_state_storage.iso4_last_tx, frame, sizeof(frame)) == 0,
            "last ISO response cache should be an owned byte-array snapshot");
     expect(app.transport_nfc_state_storage.tx_frame_len == 0U,
            "manual cache snapshot must not depend on a prior TX frame");
@@ -2623,6 +2820,56 @@ static void test_nfc_preselect_raw60_sends_iso_status(void) {
     test_nfc_deinit_app(&app);
 }
 
+static void test_nfc_duplicate_native_desfire_af_replays_previous_frame(void) {
+    ZerofidoApp app;
+    FuriMutex mutex = {0};
+    BitBuffer *buffer = bit_buffer_alloc(8U);
+    Iso14443_4aListenerEventData event_data = {.buffer = buffer};
+    Iso14443_4aListenerEvent listener_event = {
+        .type = Iso14443_4aListenerEventTypeReceivedData,
+        .data = &event_data,
+    };
+    NfcGenericEvent event = {
+        .protocol = NfcProtocolIso14443_4a,
+        .event_data = &listener_event,
+    };
+    uint8_t cached_af_response[sizeof(g_last_nfc_tx)] = {0};
+    size_t cached_af_response_len = 0U;
+
+    test_reset();
+    test_nfc_init_app(&app, &mutex);
+
+    bit_buffer_append_bytes(buffer, (const uint8_t[]){0x02, 0x60}, 2U);
+    expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
+           "initial native DESFire probe should start the shim sequence");
+
+    bit_buffer_reset(buffer);
+    bit_buffer_append_bytes(buffer, (const uint8_t[]){0x03, 0xAF}, 2U);
+    expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
+           "first native DESFire AF should return the second shim frame");
+    cached_af_response_len = g_last_nfc_tx_len;
+    memcpy(cached_af_response, g_last_nfc_tx, cached_af_response_len);
+
+    bit_buffer_reset(buffer);
+    bit_buffer_append_bytes(buffer, (const uint8_t[]){0x03, 0xAF}, 2U);
+    expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
+           "duplicate native DESFire AF should replay instead of advancing the shim");
+    expect(g_last_nfc_tx_len == cached_af_response_len &&
+               memcmp(g_last_nfc_tx, cached_af_response, cached_af_response_len) == 0,
+           "duplicate native DESFire AF should replay the previous AF response");
+
+    bit_buffer_reset(buffer);
+    bit_buffer_append_bytes(buffer, (const uint8_t[]){0x02, 0xAF}, 2U);
+    expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
+           "next fresh native DESFire AF should still advance the shim");
+    expect(g_last_nfc_tx_len != cached_af_response_len ||
+               memcmp(g_last_nfc_tx, cached_af_response, cached_af_response_len) != 0,
+           "fresh native DESFire AF should return the final shim frame after the duplicate replay");
+
+    bit_buffer_free(buffer);
+    test_nfc_deinit_app(&app);
+}
+
 static void test_nfc_repeated_native_desfire_probe_keeps_discovery_compatible(void) {
     ZerofidoApp app;
     FuriMutex mutex = {0};
@@ -2712,6 +2959,62 @@ static void test_nfc_native_desfire_preserves_existing_fido_replay(void) {
     expect(g_last_nfc_tx_len == cached_response_len &&
                memcmp(g_last_nfc_tx, cached_response, cached_response_len) == 0,
            "replay after native DESFire discovery should resend the prior FIDO response");
+
+    bit_buffer_free(buffer);
+    test_nfc_deinit_app(&app);
+}
+
+static void test_nfc_wrapped_desfire_duplicate_replays_desfire_response(void) {
+    ZerofidoApp app;
+    FuriMutex mutex = {0};
+    BitBuffer *buffer = bit_buffer_alloc(16U);
+    Iso14443_4aListenerEventData event_data = {.buffer = buffer};
+    Iso14443_4aListenerEvent listener_event = {
+        .type = Iso14443_4aListenerEventTypeReceivedData,
+        .data = &event_data,
+    };
+    NfcGenericEvent event = {
+        .protocol = NfcProtocolIso14443_4a,
+        .event_data = &listener_event,
+    };
+    static const uint8_t fido_response[] = {0x01, 0xA0};
+    static const uint8_t wrapped_desfire[] = {0x02, 0x90, 0x60, 0x00, 0x00, 0x00};
+    uint8_t cached_fido_response[sizeof(g_last_nfc_tx)] = {0};
+    uint8_t cached_desfire_response[sizeof(g_last_nfc_tx)] = {0};
+    size_t cached_fido_response_len = 0U;
+    size_t cached_desfire_response_len = 0U;
+
+    test_reset();
+    test_nfc_init_app(&app, &mutex);
+
+    expect(zf_transport_nfc_send_apdu_payload(&app.transport_nfc_state_storage, fido_response,
+                                              sizeof(fido_response), ZF_NFC_SW_SUCCESS),
+           "test should prime an existing FIDO replay response");
+    cached_fido_response_len = g_last_nfc_tx_len;
+    memcpy(cached_fido_response, g_last_nfc_tx, cached_fido_response_len);
+
+    bit_buffer_append_bytes(buffer, wrapped_desfire, sizeof(wrapped_desfire));
+    expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
+           "wrapped DESFire probe should receive its own response");
+    cached_desfire_response_len = g_last_nfc_tx_len;
+    memcpy(cached_desfire_response, g_last_nfc_tx, cached_desfire_response_len);
+    expect(cached_desfire_response_len != cached_fido_response_len ||
+               memcmp(cached_desfire_response, cached_fido_response, cached_fido_response_len) != 0,
+           "wrapped DESFire response should differ from the primed FIDO replay");
+
+    bit_buffer_reset(buffer);
+    bit_buffer_append_bytes(buffer, wrapped_desfire, sizeof(wrapped_desfire));
+    expect(zf_transport_nfc_event_callback(event, &app) == NfcCommandContinue,
+           "duplicate wrapped DESFire probe should replay the DESFire response");
+    expect(g_last_nfc_tx_len == cached_desfire_response_len &&
+               memcmp(g_last_nfc_tx, cached_desfire_response, cached_desfire_response_len) == 0,
+           "duplicate wrapped DESFire probe should not replay the older FIDO response");
+
+    expect(zf_transport_nfc_replay_last_iso_response(&app.transport_nfc_state_storage),
+           "wrapped DESFire duplicate replay should preserve the older FIDO replay cache");
+    expect(g_last_nfc_tx_len == cached_fido_response_len &&
+               memcmp(g_last_nfc_tx, cached_fido_response, cached_fido_response_len) == 0,
+           "older FIDO replay cache should remain available after wrapped DESFire replay");
 
     bit_buffer_free(buffer);
     test_nfc_deinit_app(&app);

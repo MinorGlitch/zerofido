@@ -111,10 +111,22 @@ static void zf_transport_nfc_reset_exchange_internal_locked(ZfNfcTransportState 
     state->response_len = 0;
     state->response_offset = 0;
     state->rx_chain_last_valid = false;
+    state->rx_complete_last_valid = false;
+    state->rx_complete_last_cid_present = false;
+    state->rx_complete_last_response_preserves_replay = false;
+    zf_crypto_secure_zero(state->rx_complete_last_payload,
+                          sizeof(state->rx_complete_last_payload));
+    zf_crypto_secure_zero(state->rx_complete_last_response,
+                          sizeof(state->rx_complete_last_response));
     state->rx_chain_last_pcb = 0U;
+    state->rx_complete_last_pcb = 0U;
+    state->rx_complete_last_cid = 0U;
+    state->rx_complete_last_iso_pcb = 0U;
     state->rx_chain_duplicate_count = 0U;
     state->rx_chain_last_offset = 0U;
     state->rx_chain_last_len = 0U;
+    state->rx_complete_last_len = 0U;
+    state->rx_complete_last_response_len = 0U;
     state->error_status_word = 0;
     state->pending_status = ZF_NFC_STATUS_PROCESSING;
     state->request_kind = ZfNfcRequestKindNone;

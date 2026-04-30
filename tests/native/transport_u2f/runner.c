@@ -1898,6 +1898,9 @@ int main(void) {
     test_nfc_select_applet_accepts_le_and_legacy_nine_byte_aid();
     test_nfc_event_callback_accepts_bare_select_apdu();
     test_nfc_iso4_listener_event_decodes_block_and_sends_framed_response();
+    test_nfc_iso4_duplicate_complete_i_block_replays_response();
+    test_nfc_iso4_duplicate_final_chain_block_replays_response();
+    test_nfc_duplicate_i_block_preserves_tx_chain_pcb();
     test_nfc_iso4_listener_raw60_returns_unsupported_via_send_block();
     test_nfc_iso4_listener_native_desfire_payload_is_not_parsed_as_apdu();
     test_nfc_desfire_deselect_sleeps_before_next_activation();
@@ -1906,6 +1909,7 @@ int main(void) {
     test_nfc_3a_reqa_data_resets_active_iso_dep_session();
     test_nfc_3a_iso_dep_select_decodes_and_responds();
     test_nfc_3a_r_nak_replays_last_iso_response();
+    test_nfc_control_frame_does_not_corrupt_cached_replay();
     test_nfc_3a_r_ack_advances_chained_response_and_r_nak_replays();
     test_nfc_make_credential_sized_response_uses_single_i_block();
     test_nfc_terminal_r_ack_after_chained_response_keeps_fido_selected();
@@ -1957,8 +1961,10 @@ int main(void) {
     test_nfc_ctap_get_response_ins_11_returns_ready_response();
     test_nfc_field_off_marks_current_session_canceled();
     test_nfc_preselect_raw60_sends_iso_status();
+    test_nfc_duplicate_native_desfire_af_replays_previous_frame();
     test_nfc_repeated_native_desfire_probe_keeps_discovery_compatible();
     test_nfc_native_desfire_preserves_existing_fido_replay();
+    test_nfc_wrapped_desfire_duplicate_replays_desfire_response();
     test_nfc_raw60_does_not_make_next_framed_select_bare();
     test_nfc_preselect_raw_native_probe_traces_halt();
     test_nfc_selected_raw_native_probe_traces_selected_state();
