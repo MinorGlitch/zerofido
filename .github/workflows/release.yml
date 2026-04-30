@@ -32,6 +32,8 @@ jobs:
       UV_PYTHON: "3.14"
       ZEROFIDO_RELEASE_DIAGNOSTICS: "0"
       ZEROFIDO_DEV_ATTESTATION: "0"
+      ZEROFIDO_AUTO_ACCEPT_REQUESTS: "0"
+      ZEROFIDO_DEV_SCREENSHOT: "0"
 
     steps:
       - name: Check out repository
@@ -115,6 +117,8 @@ jobs:
             echo
             echo "- ZEROFIDO_RELEASE_DIAGNOSTICS=0"
             echo "- ZEROFIDO_DEV_ATTESTATION=0"
+            echo "- ZEROFIDO_AUTO_ACCEPT_REQUESTS=0"
+            echo "- ZEROFIDO_DEV_SCREENSHOT=0"
           } > RELEASE_NOTES.md
 
       - name: Upload workflow artifacts
