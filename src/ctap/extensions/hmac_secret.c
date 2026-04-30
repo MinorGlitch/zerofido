@@ -19,6 +19,7 @@
 
 #include <string.h>
 
+#include "../parse/internal.h"
 #include "../../pin/protocol.h"
 #include "../../zerofido_cbor.h"
 #include "../../zerofido_crypto.h"
@@ -26,6 +27,80 @@
 static uint8_t zf_hmac_secret_finish(ZfHmacSecretScratch *scratch, uint8_t status) {
     zf_crypto_secure_zero(scratch, sizeof(*scratch));
     return status;
+}
+
+uint8_t zf_ctap_hmac_secret_parse_get_assertion_input(ZfCborCursor *cursor,
+                                                      ZfGetAssertionRequest *request) {
+    size_t pairs = 0;
+    uint16_t seen_keys = 0;
+    bool saw_key_agreement = false;
+    bool saw_salt_enc = false;
+    bool saw_salt_auth = false;
+
+    if (!zf_cbor_read_map_start(cursor, &pairs)) {
+        return ZF_CTAP_ERR_INVALID_CBOR;
+    }
+
+    request->assertion.hmac_secret_pin_protocol = ZF_PIN_PROTOCOL_V1;
+    for (size_t i = 0; i < pairs; ++i) {
+        uint64_t key = 0;
+        if (!zf_cbor_read_uint(cursor, &key) || !zf_ctap_mark_seen_key(&seen_keys, key)) {
+            return ZF_CTAP_ERR_INVALID_CBOR;
+        }
+
+        switch (key) {
+        case 1:
+            if (!zf_ctap_parse_cose_p256_key_agreement(
+                    cursor, request->assertion.hmac_secret_platform_x,
+                    request->assertion.hmac_secret_platform_y)) {
+                return ZF_CTAP_ERR_INVALID_CBOR;
+            }
+            saw_key_agreement = true;
+            break;
+        case 2:
+            if (!zf_ctap_cbor_read_bytes_copy(cursor, request->assertion.hmac_secret_salt_enc,
+                                              sizeof(request->assertion.hmac_secret_salt_enc),
+                                              &request->assertion.hmac_secret_salt_enc_len)) {
+                return ZF_CTAP_ERR_INVALID_CBOR;
+            }
+            saw_salt_enc = true;
+            break;
+        case 3:
+            if (!zf_ctap_cbor_read_bytes_copy(cursor, request->assertion.hmac_secret_salt_auth,
+                                              sizeof(request->assertion.hmac_secret_salt_auth),
+                                              &request->assertion.hmac_secret_salt_auth_len)) {
+                return ZF_CTAP_ERR_INVALID_CBOR;
+            }
+            saw_salt_auth = true;
+            break;
+        case 4:
+            if (!zf_cbor_read_uint(cursor, &request->assertion.hmac_secret_pin_protocol)) {
+                return ZF_CTAP_ERR_INVALID_CBOR;
+            }
+            request->assertion.hmac_secret_has_pin_protocol = true;
+            break;
+        default:
+            if (!zf_cbor_skip(cursor)) {
+                return ZF_CTAP_ERR_INVALID_CBOR;
+            }
+            break;
+        }
+    }
+
+    if (!saw_key_agreement || !saw_salt_enc || !saw_salt_auth) {
+        return ZF_CTAP_ERR_MISSING_PARAMETER;
+    }
+
+    request->assertion.has_hmac_secret = true;
+    return ZF_CTAP_SUCCESS;
+}
+
+bool zf_ctap_hmac_secret_parse_make_credential_request(ZfCborCursor *cursor, bool *requested) {
+    return requested && zf_cbor_read_bool(cursor, requested);
+}
+
+bool zf_ctap_hmac_secret_encode_make_credential_output(ZfCborEncoder *enc, bool created) {
+    return zf_cbor_encode_text(enc, "hmac-secret") && zf_cbor_encode_bool(enc, created);
 }
 
 /*

@@ -20,6 +20,7 @@
 #include <string.h>
 
 #include "../extensions/cred_protect.h"
+#include "../extensions/hmac_secret.h"
 #include "../../zerofido_crypto.h"
 
 ZfCtapTextKey zf_ctap_classify_text_key(const uint8_t *ptr, size_t size) {
@@ -260,11 +261,11 @@ uint8_t zf_ctap_parse_make_credential_extensions_map(ZfCborCursor *cursor, bool 
         }
 
         case ZfCtapTextKeyHmacSecret: {
-            bool requested = false;
-            if (saw_hmac_secret || !zf_cbor_read_bool(cursor, &requested)) {
+            if (saw_hmac_secret ||
+                !zf_ctap_hmac_secret_parse_make_credential_request(cursor,
+                                                                    hmac_secret_requested)) {
                 return ZF_CTAP_ERR_INVALID_CBOR;
             }
-            *hmac_secret_requested = requested;
             saw_hmac_secret = true;
             continue;
         }

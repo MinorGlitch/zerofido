@@ -21,6 +21,7 @@
 #include <string.h>
 
 #include "extensions/cred_protect.h"
+#include "extensions/hmac_secret.h"
 #include "../zerofido_attestation.h"
 #include "../zerofido_cbor.h"
 #include "../zerofido_crypto.h"
@@ -79,8 +80,8 @@ static bool zf_encode_make_credential_extensions(uint8_t cred_protect, bool incl
         !zf_ctap_cred_protect_encode_make_credential_output(&enc, cred_protect)) {
         return false;
     }
-    if (include_hmac_secret && !(zf_cbor_encode_text(&enc, "hmac-secret") &&
-                                 zf_cbor_encode_bool(&enc, hmac_secret_created))) {
+    if (include_hmac_secret &&
+        !zf_ctap_hmac_secret_encode_make_credential_output(&enc, hmac_secret_created)) {
         return false;
     }
 

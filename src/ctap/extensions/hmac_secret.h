@@ -22,6 +22,7 @@
 #include <stdint.h>
 
 #include "../../pin/protocol.h"
+#include "../../zerofido_cbor.h"
 #include "../../zerofido_crypto.h"
 #include "../../zerofido_pin.h"
 #include "../../zerofido_types.h"
@@ -33,6 +34,11 @@ typedef struct {
     uint8_t output_enc[ZF_HMAC_SECRET_OUTPUT_MAX_LEN];
     ZfHmacSha256Scratch hmac_scratch;
 } ZfHmacSecretScratch;
+
+uint8_t zf_ctap_hmac_secret_parse_get_assertion_input(ZfCborCursor *cursor,
+                                                      ZfGetAssertionRequest *request);
+bool zf_ctap_hmac_secret_parse_make_credential_request(ZfCborCursor *cursor, bool *requested);
+bool zf_ctap_hmac_secret_encode_make_credential_output(ZfCborEncoder *enc, bool created);
 
 /*
  * Implements the hmac-secret getAssertion extension. It decrypts one or two
