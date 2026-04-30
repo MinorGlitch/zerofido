@@ -453,6 +453,9 @@ int32_t zf_transport_usb_hid_worker(void *context) {
 
         zf_transport_handle_worker_flags(app, transport, flags);
         zf_transport_handle_request(app, transport, flags, packet);
+        if (zf_transport_stop_requested(transport)) {
+            break;
+        }
         zf_transport_tick(transport);
     }
 
