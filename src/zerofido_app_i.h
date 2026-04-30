@@ -34,7 +34,9 @@
 #ifndef ZF_USB_ONLY
 #include "transport/nfc_worker.h"
 #endif
+#ifndef ZF_NFC_ONLY
 #include "transport/usb_hid_session.h"
+#endif
 #include "zerofido_pin.h"
 #include "zerofido_runtime_config.h"
 #include "zerofido_telemetry.h"
@@ -151,9 +153,13 @@ typedef struct ZerofidoApp {
     FuriThread *worker_thread;
     FuriMutex *ui_mutex;
     const ZfTransportAdapterOps *transport_adapter;
+#ifndef ZF_NFC_ONLY
     FuriHalUsbInterface *previous_usb;
+#endif
     void *transport_state;
+#ifndef ZF_NFC_ONLY
     ZfTransportState transport_state_storage;
+#endif
 #if defined(ZF_HOST_TEST) && !defined(ZF_USB_ONLY)
     ZfNfcTransportState transport_nfc_state_storage;
 #elif !defined(ZF_USB_ONLY)

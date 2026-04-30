@@ -17,6 +17,8 @@
 
 #include "dispatch.h"
 
+#ifndef ZF_NFC_ONLY
+
 #include <string.h>
 
 #include "../zerofido_app_i.h"
@@ -182,3 +184,5 @@ void zf_transport_dispatch_complete_message(ZerofidoApp *app, ZfTransportState *
 
     zf_transport_dispatch_abort_if_interrupted(transport, generation);
 }
+
+#endif
