@@ -2347,6 +2347,37 @@ static void test_nfc_stale_worker_completion_preserves_new_request(void) {
     test_nfc_deinit_app(&app);
 }
 
+static void test_nfc_worker_response_buffer_survives_requeued_request(void) {
+    ZerofidoApp app;
+    FuriMutex mutex = {0};
+    static const uint8_t first_request[] = {ZfCtapeCmdGetInfo};
+
+    test_reset();
+    test_nfc_init_app(&app, &mutex);
+    test_nfc_select_applet(&app);
+
+    expect(zf_transport_nfc_queue_request_locked(&app, &app.transport_nfc_state_storage,
+                                                 ZfNfcRequestKindCtap2, first_request,
+                                                 sizeof(first_request)),
+           "first NFC CTAP2 request should queue for worker processing");
+    g_ctap2_requeue_during_handle = true;
+
+    zf_transport_nfc_process_request(&app);
+    expect(!g_ctap2_requeued_arena_corrupted,
+           "late NFC worker response writes must not corrupt a requeued request arena");
+    expect(app.transport_arena && app.transport_arena[0] == ZfCtapeCmdGetAssertion,
+           "requeued NFC request should remain intact after stale worker completion");
+    expect(app.transport_nfc_state_storage.processing &&
+               app.transport_nfc_state_storage.request_pending,
+           "stale NFC worker completion should leave the requeued request active");
+    expect(!app.transport_nfc_state_storage.response_ready,
+           "stale NFC worker completion should not publish its obsolete response");
+    expect(!app.transport_auto_accept_transaction,
+           "stale NFC worker completion should restore the auto-accept override");
+
+    test_nfc_deinit_app(&app);
+}
+
 static void test_nfc_ctap_control_end_clears_selected_applet(void) {
     ZerofidoApp app;
     FuriMutex mutex = {0};

@@ -114,6 +114,33 @@ static void zf_transport_nfc_signal_worker(ZerofidoApp *app, uint32_t flags,
     }
 }
 
+static uint8_t *zf_transport_nfc_response_buffer_alloc(size_t *out_capacity) {
+    uint8_t *buffer = malloc(ZF_TRANSPORT_ARENA_SIZE);
+
+    if (out_capacity) {
+        *out_capacity = 0U;
+    }
+    if (!buffer) {
+        zf_telemetry_log_oom("nfc response buffer", ZF_TRANSPORT_ARENA_SIZE);
+        return NULL;
+    }
+
+    memset(buffer, 0, ZF_TRANSPORT_ARENA_SIZE);
+    if (out_capacity) {
+        *out_capacity = ZF_TRANSPORT_ARENA_SIZE;
+    }
+    return buffer;
+}
+
+static void zf_transport_nfc_response_buffer_free(uint8_t *buffer, size_t capacity) {
+    if (!buffer) {
+        return;
+    }
+
+    zf_crypto_secure_zero(buffer, capacity);
+    free(buffer);
+}
+
 /*
  * Worker-side processing for queued NFC CTAP2/U2F requests. Responses are stored
  * only if the generation/session still match, preventing late completions from
@@ -150,14 +177,9 @@ static void zf_transport_nfc_process_request(ZerofidoApp *app) {
     app->transport_auto_accept_transaction = true;
     zf_transport_nfc_attach_arena(state, NULL, 0U);
     zf_app_transport_arena_release(app);
-    if (zf_app_transport_arena_acquire(app)) {
-        response = app->transport_arena;
-        response_capacity = zf_app_transport_arena_capacity(app);
-        memset(response, 0, response_capacity);
-        zf_transport_nfc_attach_arena(state, response, response_capacity);
-    }
     furi_mutex_release(app->ui_mutex);
 
+    response = zf_transport_nfc_response_buffer_alloc(&response_capacity);
     if (!response || response_capacity <= 1U) {
         zf_transport_nfc_store_response(app, state, session_id, request_generation, NULL, 0,
                                         request_kind == ZfNfcRequestKindU2f, true,
@@ -199,6 +221,7 @@ cleanup:
         app->transport_auto_accept_transaction = old_auto_accept;
     }
     furi_mutex_release(app->ui_mutex);
+    zf_transport_nfc_response_buffer_free(response, response_capacity);
     zf_crypto_secure_zero(request_copy, sizeof(request_copy));
     (void)request_len;
 }
