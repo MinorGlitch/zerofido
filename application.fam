@@ -1,7 +1,7 @@
 import os
 
 
-profile = os.environ.get("ZEROFIDO_PROFILE", "nfc").lower()
+profile = os.environ.get("ZEROFIDO_PROFILE", "usb").lower()
 if profile not in ("usb", "nfc", "full"):
     raise ValueError("ZEROFIDO_PROFILE must be one of: usb, nfc, full")
 
@@ -64,7 +64,7 @@ requires = [
     "storage",
     "notification",
 ]
-description = "CTAP2 authenticator over USB HID"
+description = "FIDO2 for Flipper Zero"
 if profile == "usb":
     cdefines.append("ZF_USB_ONLY")
     sources.extend(
@@ -80,10 +80,10 @@ elif profile == "nfc":
         ]
     )
     requires.append("nfc")
-    description = "CTAP2 authenticator over NFC"
+    description = "FIDO2 for Flipper Zero"
 else:
     requires.append("nfc")
-    description = "CTAP2 authenticator over USB HID or NFC"
+    description = "FIDO2 for Flipper Zero"
 
 if not release_diagnostics:
     sources.append("!nfc_trace.c")
@@ -103,5 +103,5 @@ App(
     fap_category="Tools",
     fap_description=description,
     fap_author="Alex Stoyanov",
-    fap_version=(1, 0),
+    fap_version=(0, 6),
 )

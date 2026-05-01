@@ -32,18 +32,22 @@ class ManifestProfileTests(unittest.TestCase):
 
         return captured
 
-    def test_default_build_is_nfc_release_safe(self) -> None:
+    def test_default_build_is_usb_release_safe(self) -> None:
         app = self.load_manifest()
 
-        self.assertIn("ZF_NFC_ONLY", app["cdefines"])
+        self.assertEqual(app["fap_description"], "FIDO2 for Flipper Zero")
+        self.assertEqual(app["fap_version"], (0, 6))
+        self.assertIn("ZF_USB_ONLY", app["cdefines"])
         self.assertIn("ZF_RELEASE_DIAGNOSTICS=0", app["cdefines"])
         self.assertIn("ZF_USB_DIAGNOSTICS=0", app["cdefines"])
         self.assertIn("ZF_AUTO_ACCEPT_REQUESTS=0", app["cdefines"])
         self.assertIn("ZF_DEV_SCREENSHOT=0", app["cdefines"])
         self.assertIn("ZF_DEV_FIDO2_1=0", app["cdefines"])
         self.assertIn("ZF_PACKED_ATTESTATION=1", app["cdefines"])
+        self.assertIn("!nfc_*.c", app["sources"])
         self.assertIn("!nfc_trace.c", app["sources"])
         self.assertIn("!zerofido_usb_diagnostics.c", app["sources"])
+        self.assertNotIn("nfc", app["requires"])
         self.assertIn("!.tmp", app["sources"])
         self.assertIn("!.venv", app["sources"])
         self.assertIn("!*_debug.c", app["sources"])

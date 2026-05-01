@@ -134,7 +134,7 @@ class ExportCertificationMetadataTests(unittest.TestCase):
 
         self.assertEqual(exported["legalHeader"], MDS3_LEGAL_HEADER)
         self.assertEqual(exported["description"], "ZeroFIDO")
-        self.assertEqual(exported["authenticatorVersion"], 10000)
+        self.assertEqual(exported["authenticatorVersion"], 600)
         self.assertEqual(exported["protocolFamily"], "fido2")
         self.assertEqual(exported["schema"], 3)
         self.assertEqual(exported["upv"], [{"major": 1, "minor": 0}])
@@ -226,7 +226,7 @@ class ExportCertificationMetadataTests(unittest.TestCase):
         self.assertEqual(exported["authenticatorGetInfo"]["transports"], ["usb"])
         self.assertEqual(exported["authenticatorGetInfo"]["algorithms"], [{"type": "public-key", "alg": -7}])
         self.assertEqual(exported["authenticatorGetInfo"]["minPINLength"], 4)
-        self.assertEqual(exported["authenticatorGetInfo"]["firmwareVersion"], 10000)
+        self.assertEqual(exported["authenticatorGetInfo"]["firmwareVersion"], 600)
 
     def test_build_certification_metadata_can_export_set_or_omitted_client_pin_state(self) -> None:
         statement = self.load_statement()
@@ -287,7 +287,7 @@ class ExportCertificationMetadataTests(unittest.TestCase):
             9: ["usb"],
             10: [{"alg": -7, "type": "public-key"}],
             13: 4,
-            14: 10000,
+            14: 600,
         }
 
         exported = build_certification_metadata(statement, live_get_info=live_get_info)
@@ -310,7 +310,7 @@ class ExportCertificationMetadataTests(unittest.TestCase):
 
         self.assertEqual(exported["protocolFamily"], "u2f")
         self.assertEqual(exported["description"], "ZeroFIDO")
-        self.assertEqual(exported["authenticatorVersion"], 10000)
+        self.assertEqual(exported["authenticatorVersion"], 600)
         self.assertEqual(exported["schema"], 3)
         self.assertEqual(exported["upv"], [{"major": 1, "minor": 2}])
         self.assertEqual(exported["authenticationAlgorithms"], ["secp256r1_ecdsa_sha256_raw"])

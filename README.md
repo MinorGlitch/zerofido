@@ -159,13 +159,14 @@ brew install llvm cppcheck
 
 ### Build Profiles
 
-The app manifest reads `ZEROFIDO_PROFILE` at build time. The default profile is `nfc`.
-Release builds default to `ZEROFIDO_RELEASE_DIAGNOSTICS=0`.
+The app manifest reads `ZEROFIDO_PROFILE` at build time. The default profile is `usb`, with
+the stable FIDO2.0 profile enabled by default. Release builds default to
+`ZEROFIDO_RELEASE_DIAGNOSTICS=0`.
 
 | Profile | Build flag | Use |
 | --- | --- | --- |
+| USB HID only | `ZEROFIDO_PROFILE=usb` | Default; desktop browser WebAuthn and U2F testing. |
 | NFC only | `ZEROFIDO_PROFILE=nfc` | Phone and NFC conformance work. |
-| USB HID only | `ZEROFIDO_PROFILE=usb` | Desktop browser WebAuthn and U2F testing. |
 | Full | `ZEROFIDO_PROFILE=full` | Both transports in one app. |
 
 Release-default builds exclude the NFC trace implementation. Diagnostics must opt in:
@@ -313,15 +314,15 @@ publishes GitHub Releases from existing `v*` tags.
 Create and push a tag:
 
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+git tag v0.6.0
+git push origin v0.6.0
 ```
 
 The release workflow builds the `nfc`, `usb`, and `full` profiles with
 `ZEROFIDO_RELEASE_DIAGNOSTICS=0`, packages the stripped `*-release.fap` artifacts, and uploads
 `SHA256SUMS`.
 
-You can also run the workflow from GitHub Actions with an existing tag such as `v1.0.0`.
+You can also run the workflow from GitHub Actions with an existing tag such as `v0.6.0`.
 
 ### Certification Metadata
 

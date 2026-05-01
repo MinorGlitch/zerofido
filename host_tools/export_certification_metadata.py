@@ -39,7 +39,7 @@ ICON_DATA_URL = (
 DEFAULT_CANONICAL_STATEMENT: dict[str, Any] = {
     "legalHeader": "https://fidoalliance.org/metadata/metadata-statement-legal-header/",
     "description": "ZeroFIDO",
-    "authenticatorVersion": 10000,
+    "authenticatorVersion": 600,
     "protocolFamily": "fido2",
     "schema": 3,
     "aaguid": "b51a976a-0b02-40aa-9d8a-36c8b91bbd1a",
@@ -217,7 +217,7 @@ def normalize_statement_get_info(get_info: Any, profile: str) -> dict[str, Any]:
         normalized.setdefault("transports", ["usb"])
         normalized.setdefault("algorithms", [{"type": "public-key", "alg": -7}])
         normalized.setdefault("minPINLength", 4)
-        normalized.setdefault("firmwareVersion", 10000)
+        normalized.setdefault("firmwareVersion", 600)
     else:
         options.pop("pinUvAuthToken", None)
         options.pop("makeCredUvNotRqd", None)
@@ -299,7 +299,7 @@ def build_u2f_metadata(
     exported.pop("isSecondFactorOnly", None)
     exported.pop("friendlyNames", None)
     exported["description"] = exported.get("description", "ZeroFIDO")
-    exported["authenticatorVersion"] = exported.get("authenticatorVersion", 10000)
+    exported["authenticatorVersion"] = exported.get("authenticatorVersion", 600)
     exported["schema"] = 3
     exported["protocolFamily"] = "u2f"
     exported["upv"] = [{"major": 1, "minor": 2}]
