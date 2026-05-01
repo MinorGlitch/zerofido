@@ -314,15 +314,15 @@ publishes GitHub Releases from existing `v*` tags.
 Create and push a tag:
 
 ```bash
-git tag v0.6.0
-git push origin v0.6.0
+git tag v0.7.0
+git push origin v0.7.0
 ```
 
 The release workflow builds the `nfc`, `usb`, and `full` profiles with
 `ZEROFIDO_RELEASE_DIAGNOSTICS=0`, packages the stripped `*-release.fap` artifacts, and uploads
 `SHA256SUMS`.
 
-You can also run the workflow from GitHub Actions with an existing tag such as `v0.6.0`.
+You can also run the workflow from GitHub Actions with an existing tag such as `v0.7.0`.
 
 ### Certification Metadata
 
