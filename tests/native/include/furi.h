@@ -45,3 +45,4 @@ FuriTimer *furi_timer_alloc(FuriTimerCallback callback, FuriTimerType type, void
 void furi_timer_free(FuriTimer *timer);
 void furi_timer_start(FuriTimer *timer, uint32_t timeout);
 void furi_timer_stop(FuriTimer *timer);
+void furi_delay_ms(uint32_t milliseconds);

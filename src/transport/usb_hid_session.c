@@ -19,6 +19,7 @@
 
 #include "usb_hid_session.h"
 
+#include <furi.h>
 #include <furi_hal_usb_hid_u2f.h>
 #include <string.h>
 
@@ -26,6 +27,8 @@
 #include "../u2f/apdu.h"
 #include "../zerofido_app_i.h"
 #include "../zerofido_crypto.h"
+
+#define ZF_U2F_HID_RESPONSE_SETTLE_MS 50U
 
 static void zf_transport_handle_init(uint32_t response_cid, uint32_t assigned_cid,
                                      const uint8_t *payload, size_t payload_len,
@@ -260,6 +263,15 @@ void zf_transport_session_send_frames(uint32_t cid, uint8_t cmd, const uint8_t *
     uint8_t seq = 0;
     size_t chunk = 0;
     size_t offset = 0;
+
+    /*
+     * U2F conformance meta tests can produce immediate two-byte MSG responses.
+     * Give the Flipper U2F HAL a small turn-around window before queueing the IN report; otherwise
+     * the HAL can silently miss the response under fast host OUT->IN traffic.
+     */
+    if (cmd == ZF_CTAPHID_MSG) {
+        furi_delay_ms(ZF_U2F_HID_RESPONSE_SETTLE_MS);
+    }
 
     memset(packet, 0, sizeof(packet));
     memcpy(packet, &cid, sizeof(cid));

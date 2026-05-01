@@ -163,6 +163,8 @@ static size_t g_thread_flags_set_count = 0;
 static FuriThread g_nfc_worker_thread;
 static uint32_t g_last_thread_wait_timeout = 0;
 static size_t g_thread_flag_wait_call_count = 0;
+static uint32_t g_last_delay_ms = 0;
+static size_t g_delay_ms_count = 0;
 static FuriMutex *g_thread_start_observed_mutex = NULL;
 static size_t g_thread_start_observed_depth = 0;
 static size_t g_thread_join_count = 0;
@@ -294,6 +296,8 @@ static void test_reset(void) {
     memset(&g_nfc_worker_thread, 0, sizeof(g_nfc_worker_thread));
     g_last_thread_wait_timeout = 0;
     g_thread_flag_wait_call_count = 0;
+    g_last_delay_ms = 0;
+    g_delay_ms_count = 0;
     g_thread_start_observed_mutex = NULL;
     g_thread_start_observed_depth = 0;
     g_thread_join_count = 0;
@@ -511,6 +515,11 @@ void furi_thread_free(FuriThread *thread) {
         thread->freed = true;
         free(thread);
     }
+}
+
+void furi_delay_ms(uint32_t milliseconds) {
+    g_last_delay_ms = milliseconds;
+    g_delay_ms_count++;
 }
 
 FuriStatus furi_semaphore_acquire(FuriSemaphore *sem, uint32_t timeout) {

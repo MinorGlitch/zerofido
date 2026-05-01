@@ -441,6 +441,7 @@ static void test_transport_request_wakeup_processes_one_complete_transaction(voi
            "the first queued packet should complete normally");
     expect(memcmp(&g_last_hid_response[7], nonce_a, sizeof(nonce_a)) == 0,
            "the first INIT response should echo the first queued request nonce");
+    expect(g_delay_ms_count == 0, "INIT responses should not use the U2F MSG response settle");
 }
 
 static void test_transport_request_without_wakeup_marks_connected_and_processes_packet(void) {
@@ -524,6 +525,8 @@ static void test_transport_worker_idle_poll_processes_immediate_u2f_invalid_cla(
            "invalid-CLA U2F APDU should return a two-byte status word");
     expect(g_last_hid_response[7] == 0x6E && g_last_hid_response[8] == 0x00,
            "invalid-CLA U2F APDU should return SW_CLA_NOT_SUPPORTED");
+    expect(g_delay_ms_count == 1 && g_last_delay_ms == 50U,
+           "U2F MSG responses should keep a USB turn-around settle before sending");
     expect(g_last_thread_wait_timeout == ZF_WORKER_POLL_MS,
            "worker should use a bounded poll timeout while idle");
 }
