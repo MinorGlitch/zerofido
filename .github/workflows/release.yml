@@ -31,9 +31,11 @@ jobs:
     env:
       UV_PYTHON: "3.14"
       ZEROFIDO_RELEASE_DIAGNOSTICS: "0"
+      ZEROFIDO_USB_DIAGNOSTICS: "0"
       ZEROFIDO_AUTO_ACCEPT_REQUESTS: "0"
       ZEROFIDO_DEV_SCREENSHOT: "0"
       ZEROFIDO_DEV_FIDO2_1: "0"
+      ZEROFIDO_PACKED_ATTESTATION: "1"
 
     steps:
       - name: Check out repository
@@ -124,10 +126,12 @@ jobs:
             echo
             echo "Build flags:"
             echo
-            echo "- ZEROFIDO_RELEASE_DIAGNOSTICS=0"
-            echo "- ZEROFIDO_AUTO_ACCEPT_REQUESTS=0"
-            echo "- ZEROFIDO_DEV_SCREENSHOT=0"
-            echo "- ZEROFIDO_DEV_FIDO2_1=0"
+            echo "- ZEROFIDO_RELEASE_DIAGNOSTICS=${ZEROFIDO_RELEASE_DIAGNOSTICS}"
+            echo "- ZEROFIDO_USB_DIAGNOSTICS=${ZEROFIDO_USB_DIAGNOSTICS}"
+            echo "- ZEROFIDO_AUTO_ACCEPT_REQUESTS=${ZEROFIDO_AUTO_ACCEPT_REQUESTS}"
+            echo "- ZEROFIDO_DEV_SCREENSHOT=${ZEROFIDO_DEV_SCREENSHOT}"
+            echo "- ZEROFIDO_DEV_FIDO2_1=${ZEROFIDO_DEV_FIDO2_1}"
+            echo "- ZEROFIDO_PACKED_ATTESTATION=${ZEROFIDO_PACKED_ATTESTATION}"
           } > RELEASE_NOTES.md
 
       - name: Upload workflow artifacts

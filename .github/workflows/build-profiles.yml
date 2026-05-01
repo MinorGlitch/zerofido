@@ -31,9 +31,11 @@ jobs:
       UV_PYTHON: "3.14"
       ZEROFIDO_PROFILE: ${{ matrix.profile }}
       ZEROFIDO_RELEASE_DIAGNOSTICS: "0"
+      ZEROFIDO_USB_DIAGNOSTICS: "0"
       ZEROFIDO_AUTO_ACCEPT_REQUESTS: "0"
       ZEROFIDO_DEV_SCREENSHOT: "0"
       ZEROFIDO_DEV_FIDO2_1: "0"
+      ZEROFIDO_PACKED_ATTESTATION: "1"
 
     steps:
       - name: Check out repository
