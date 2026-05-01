@@ -100,6 +100,7 @@ jobs:
             ZEROFIDO_PROFILE="${profile}" uv run python -m ufbt
             uv run python host_tools/package_release.py \
               --skip-build \
+              --allow-prebuilt-input \
               --fap dist/zerofido.fap \
               --output-fap "release/zerofido-${profile}-release.fap"
           done
