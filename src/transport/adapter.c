@@ -26,6 +26,9 @@
 #include "usb_hid_worker.h"
 #endif
 #include "../zerofido_app_i.h"
+#if ZF_BLE_ACTIVE
+#include "ble_worker.h"
+#endif
 
 #if !defined(ZF_USB_ONLY) && !defined(ZF_NFC_ONLY)
 
@@ -60,6 +63,19 @@ const ZfTransportAdapterOps zf_transport_nfc_adapter = {
     .wait_for_interaction = zf_transport_nfc_wait_for_interaction,
     .notify_interaction_changed = zf_transport_nfc_notify_interaction_changed,
     .poll_cbor_control = zf_transport_nfc_poll_cbor_control,
+};
+#endif
+
+#if ZF_BLE_ACTIVE
+/* BLE adapter publishes FIDO-over-BLE fragments as fidoStatus notifications. */
+const ZfTransportAdapterOps zf_transport_ble_adapter = {
+    .worker = zf_transport_ble_worker,
+    .worker_stack_size = 6 * 1024,
+    .stop = zf_transport_ble_stop,
+    .send_dispatch_result = zf_transport_ble_send_dispatch_result,
+    .wait_for_interaction = zf_transport_ble_wait_for_interaction,
+    .notify_interaction_changed = zf_transport_ble_notify_interaction_changed,
+    .poll_cbor_control = zf_transport_ble_poll_cbor_control,
 };
 #endif
 

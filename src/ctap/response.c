@@ -201,7 +201,8 @@ uint8_t zf_ctap_build_get_info_response(const ZfResolvedCapabilities *capabiliti
         get_info_pairs++;
     }
 #elif !defined(ZF_NFC_ONLY)
-    if (include_ctap21_info_fields || capabilities->advertise_nfc_transport) {
+    if (include_ctap21_info_fields || capabilities->advertise_nfc_transport ||
+        capabilities->advertise_ble_transport) {
         get_info_pairs++;
     }
 #endif
@@ -228,6 +229,9 @@ uint8_t zf_ctap_build_get_info_response(const ZfResolvedCapabilities *capabiliti
         transports_count++;
     }
     if (capabilities->advertise_nfc_transport) {
+        transports_count++;
+    }
+    if (capabilities->advertise_ble_transport) {
         transports_count++;
     }
 #endif
@@ -267,10 +271,12 @@ uint8_t zf_ctap_build_get_info_response(const ZfResolvedCapabilities *capabiliti
              zf_cbor_encode_text(&enc, "usb");
     }
 #else
-    if (ok && (include_ctap21_info_fields || capabilities->advertise_nfc_transport)) {
+    if (ok && (include_ctap21_info_fields || capabilities->advertise_nfc_transport ||
+               capabilities->advertise_ble_transport)) {
         ok = zf_cbor_encode_uint(&enc, 9) && zf_cbor_encode_array(&enc, transports_count) &&
              (!capabilities->advertise_usb_transport || zf_cbor_encode_text(&enc, "usb")) &&
-             (!capabilities->advertise_nfc_transport || zf_cbor_encode_text(&enc, "nfc"));
+             (!capabilities->advertise_nfc_transport || zf_cbor_encode_text(&enc, "nfc")) &&
+             (!capabilities->advertise_ble_transport || zf_cbor_encode_text(&enc, "ble"));
     }
 #endif
 
