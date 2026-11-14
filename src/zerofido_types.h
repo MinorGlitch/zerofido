@@ -26,6 +26,18 @@
 #define ZF_APP_DATA_ROOT "/ext/apps_data"
 #define ZF_APP_DATA_DIR ZF_APP_DATA_ROOT "/" ZF_APP_ID
 
+/*
+ * BLE transport is only built into the "full" profile (it needs both the
+ * Bluetooth service and the shared CTAP dispatch path). ZF_BLE_ENABLED is
+ * defined by application.fam; ZF_BLE_ACTIVE is the single switch code tests.
+ */
+#if defined(ZF_BLE_ENABLED) && ZF_BLE_ENABLED && !defined(ZF_USB_ONLY) && !defined(ZF_NFC_ONLY) && \
+    !defined(ZF_HOST_TEST)
+#define ZF_BLE_ACTIVE 1
+#else
+#define ZF_BLE_ACTIVE 0
+#endif
+
 #ifndef ZF_RELEASE_DIAGNOSTICS
 #define ZF_RELEASE_DIAGNOSTICS 0
 #endif

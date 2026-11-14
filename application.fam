@@ -70,6 +70,7 @@ if profile == "usb":
     sources.extend(
         [
             "!nfc_*.c",
+            "!ble_*.c",
         ]
     )
 elif profile == "nfc":
@@ -77,12 +78,15 @@ elif profile == "nfc":
     sources.extend(
         [
             "!usb_hid_*.c",
+            "!ble_*.c",
         ]
     )
     requires.append("nfc")
     description = "FIDO2 for Flipper Zero"
 else:
+    cdefines.append("ZF_BLE_ENABLED=1")
     requires.append("nfc")
+    requires.append("bt")
     description = "FIDO2 for Flipper Zero"
 
 if not release_diagnostics:

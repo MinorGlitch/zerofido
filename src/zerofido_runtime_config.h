@@ -28,6 +28,7 @@ typedef struct ZerofidoApp ZerofidoApp;
 typedef enum {
     ZfTransportModeUsbHid = 0,
     ZfTransportModeNfc = 1,
+    ZfTransportModeBle = 2,
 } ZfTransportMode;
 
 typedef enum {
@@ -53,6 +54,7 @@ typedef struct {
 typedef struct {
     bool usb_hid_enabled;
     bool nfc_enabled;
+    bool ble_enabled;
     bool fido2_enabled;
     bool u2f_enabled;
     bool client_pin_enabled;
@@ -70,6 +72,7 @@ typedef struct {
     bool make_cred_uv_not_required;
     bool advertise_usb_transport;
     bool advertise_nfc_transport;
+    bool advertise_ble_transport;
     bool auto_accept_requests;
     ZfAttestationMode attestation_mode;
 } ZfResolvedCapabilities;

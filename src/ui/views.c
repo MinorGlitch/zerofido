@@ -438,7 +438,7 @@ static void zerofido_refresh_settings_menu(ZerofidoApp *app) {
 #if ZF_HAS_TRANSPORT_SETTING
     char transport_label[24];
     snprintf(transport_label, sizeof(transport_label), "Transport: %s",
-             runtime_config.transport_mode == ZfTransportModeNfc ? "NFC" : "USB HID");
+             zf_transport_mode_name(runtime_config.transport_mode));
     submenu_add_item(app->settings_menu, transport_label, ZfSettingsItemTransport,
                      zerofido_settings_menu_callback, app);
 #endif
@@ -796,12 +796,17 @@ static void zerofido_settings_menu_callback(void *context, uint32_t index) {
     switch (index) {
 #if ZF_HAS_TRANSPORT_SETTING
     case ZfSettingsItemTransport: {
-        ZfTransportMode mode = runtime_config.transport_mode == ZfTransportModeUsbHid
-                                   ? ZfTransportModeNfc
-                                   : ZfTransportModeUsbHid;
+        /* Cycle USB HID -> NFC -> BLE (when built) -> USB HID. */
+        ZfTransportMode mode = ZfTransportModeUsbHid;
+        if (runtime_config.transport_mode == ZfTransportModeUsbHid) {
+            mode = ZfTransportModeNfc;
+        } else if (runtime_config.transport_mode == ZfTransportModeNfc && ZF_BLE_ACTIVE) {
+            mode = ZfTransportModeBle;
+        }
         if (zf_app_lifecycle_set_transport_mode(app, app->storage, mode)) {
-            zerofido_ui_set_status(app, mode == ZfTransportModeNfc ? "Transport: NFC"
-                                                                   : "Transport: USB HID");
+            zerofido_ui_set_status(app, mode == ZfTransportModeNfc   ? "Transport: NFC"
+                                        : mode == ZfTransportModeBle ? "Transport: BLE"
+                                                                     : "Transport: USB HID");
         } else {
             zerofido_notify_error(app);
             zerofido_ui_set_status(app, "Transport switch failed");

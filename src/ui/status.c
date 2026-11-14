@@ -83,7 +83,7 @@ static const char *zf_home_status_label(ZfHomeStatus status) {
 }
 
 static const char *zf_home_transport_title_label(ZfTransportMode mode) {
-    return mode == ZfTransportModeNfc ? "NFC" : "USB";
+    return mode == ZfTransportModeNfc ? "NFC" : mode == ZfTransportModeBle ? "BLE" : "USB";
 }
 
 static bool zf_status_format_record_item(ZfCredentialRecord *record, char *title, size_t title_size,

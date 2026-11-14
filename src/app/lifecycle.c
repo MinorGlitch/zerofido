@@ -166,6 +166,10 @@ static const ZfTransportAdapterOps *zf_app_lifecycle_adapter_for_mode(ZfTranspor
     switch (mode) {
     case ZfTransportModeNfc:
         return &zf_transport_nfc_adapter;
+#if ZF_BLE_ACTIVE
+    case ZfTransportModeBle:
+        return &zf_transport_ble_adapter;
+#endif
     case ZfTransportModeUsbHid:
     default:
         return &zf_transport_usb_hid_adapter;
@@ -473,7 +477,8 @@ bool zf_app_lifecycle_set_transport_mode(ZerofidoApp *app, Storage *storage, ZfT
     ZfRuntimeConfig previous_config;
     ZfRuntimeConfig next_config;
 
-    if (!app || (mode != ZfTransportModeUsbHid && mode != ZfTransportModeNfc)) {
+    if (!app || (mode != ZfTransportModeUsbHid && mode != ZfTransportModeNfc &&
+                 !(ZF_BLE_ACTIVE && mode == ZfTransportModeBle))) {
         return false;
     }
 #if defined(ZF_USB_ONLY)

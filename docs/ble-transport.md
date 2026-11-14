@@ -3,47 +3,35 @@
 Goal: let ZeroFIDO act as a FIDO2/U2F authenticator over Bluetooth Low Energy,
 as a third transport next to USB HID and NFC.
 
-## Done
+## Status
 
-- `src/transport/ble_framing.{h,c}`: FIDO-over-BLE message framing, free of
-  Flipper and GATT dependencies.
-  - Reassembly of fidoControlPoint writes (init + continuation fragments,
-    sequence checking with 0..127 wrap, CANCEL handling, length and sequence
-    errors mapped to the BLE error codes).
-  - Fragmentation of responses for fidoStatus notifications at any
-    control-point length from 20 to 512 bytes.
-  - `zf_ble_classify_msg`: routes an MSG payload to the existing U2F handler
-    (first byte 0x00, an APDU CLA) or CTAP2 handler (first byte is a command).
-  - ERROR and KEEPALIVE builders.
-- `tests/native/ble_framing/runner.c`: host tests, run in CI with
-  AddressSanitizer and UBSan.
-- `.github/workflows/build-fork.yml`: runs the framing tests, then builds the
-  usb, nfc and full profiles with ufbt and uploads the FAPs.
+Implemented, **compile-checked only by CI, never run on a Flipper**:
 
-## Not done
+- `src/transport/ble_framing.{h,c}`: message framing (host-tested, ASan/UBSan).
+- `src/transport/ble_profile.{h,c}`: app-defined Flipper BLE profile. Registers
+  the FIDO GATT service (0xFFFD) with fidoControlPoint, fidoStatus,
+  fidoControlPointLength and fidoServiceRevisionBitfield through the firmware's
+  exported `ble_gatt_*` helpers, so no firmware change is needed. Requires an
+  authenticated, bonded link (passkey shown on the Flipper). Bonds are stored
+  in `/ext/apps_data/zerofido/ble_keys.bin`.
+- `src/transport/ble_worker.{h,c}`: transport adapter. Claims the radio,
+  advertises, reassembles control point writes, dispatches U2F / CTAP2 into the
+  existing handlers, sends KEEPALIVE while waiting for approval, handles CANCEL
+  and fragment timeouts, restores the default Bluetooth profile on exit.
+- Wiring: `ZfTransportModeBle`, getInfo `transports` includes `ble`, Settings
+  transport toggle cycles USB HID -> NFC -> BLE, `ZF_BLE_ENABLED` and the `bt`
+  requirement in the **full** build profile only (usb/nfc profiles exclude
+  `ble_*.c`).
 
-These parts need the Flipper SDK and real hardware to write and verify.
+## Known limits / to verify on hardware
 
-1. **GATT service.** The FIDO service (UUID 0xFFFD) needs four characteristics:
-   fidoControlPoint (write), fidoStatus (notify), fidoControlPointLength (read)
-   and fidoServiceRevisionBitfield (read/write). Open question: whether a FAP
-   can register a custom GATT service through the exported firmware API, or
-   whether a small firmware-side profile is required (as for the HID and
-   serial profiles). Check `api_symbols.csv` of the target firmware first.
-2. **Pairing.** The spec requires an encrypted, bonded link before the
-   control point is writable. The Flipper needs a numeric-comparison or
-   passkey flow plus bond storage.
-3. **Adapter.** `ZfTransportAdapterOps` for BLE (`src/transport/ble_worker.c`):
-   worker loop, `send_dispatch_result` using `zf_ble_tx_*`,
-   `wait_for_interaction`, `poll_cbor_control` (CANCEL), and KEEPALIVE while
-   waiting for user presence.
-4. **Wiring.** Add `ZfTransportModeBle` to `src/zerofido_runtime_config.h`,
-   the persisted record, `zf_app_lifecycle_adapter_for_mode`, the transport
-   toggle in `src/ui/views.c`, a `ble` profile in `application.fam`, and
-   `advertise_ble_transport` in getInfo's transports list.
-5. **Dispatch.** `src/transport/dispatch.c` is compiled for every profile
-   except NFC-only and keys off `ZfTransportState`; the BLE adapter should
-   reuse `zf_transport_dispatch_complete_message`.
+- Notifications use 20-byte fragments (works at the default ATT MTU, slower
+  than a negotiated MTU would allow).
+- The firmware's `ble_gatt_characteristic_update` result is not trusted
+  (inverted in some versions), so notify failures are silent.
+- ACI event layout is parsed by hand (attribute-modified event); verify against
+  the target firmware if writes never arrive.
+- Not yet FIDO-certified; keep a backup sign-in method on any account you test.
 
 ## Running the tests locally
 
